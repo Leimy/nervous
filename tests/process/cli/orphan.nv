@@ -1,0 +1,14 @@
+// The root faults while a child is blocked in receive waiting for a message
+// only the root would have sent. The scheduler then goes idle with one
+// orphaned process. The diagnostic must lead with the root fault (the
+// cause) and mention the orphan second, not report only "deadlock".
+fn worker(_) {
+	receive {
+		'go => 'done;
+	}
+}
+
+fn main() {
+	spawn worker('start);
+	'ok = 'bad
+}

@@ -1,0 +1,5 @@
+module
+const atom ok
+func main 1
+0: loadk 0 0
+end

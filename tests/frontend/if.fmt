@@ -1,0 +1,16 @@
+fn classify(n) {
+	if n > 0 {
+		'positive
+	} else if n == 0 {
+		'zero
+	} else {
+		'negative
+	}
+}
+
+fn maybe(flag) {
+	if flag {
+		print('yes)
+	}
+	'done
+}

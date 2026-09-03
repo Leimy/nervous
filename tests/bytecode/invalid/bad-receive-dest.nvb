@@ -1,0 +1,5 @@
+module
+func main 2
+0: recvbegin 1 1
+1: return 1
+end

@@ -1,0 +1,17 @@
+module
+const atom true
+const atom take
+func receiver 3
+0: recvbegin 1 2
+1: testatom 2 0 7
+2: testatom 1 1 5
+3: recvtake
+4: return 1
+5: recvnext 1 2
+6: jump 1
+7: recvwait 0
+end
+func exiter 2
+0: loadk 1 1
+1: exit 1
+end

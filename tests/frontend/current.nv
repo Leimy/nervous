@@ -1,0 +1,7 @@
+fn main() {
+ x=1+2*3;
+ pair(x,'ok)
+}
+fn choose(${'ok,x}) {x}
+fn choose(${'error,_}) {0}
+fn choose() {-1}

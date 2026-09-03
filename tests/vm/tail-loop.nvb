@@ -1,0 +1,8 @@
+module
+const func loop
+func main 1
+0: tailcall 0 0
+end
+func loop 1
+0: tailcall 0 0
+end

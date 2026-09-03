@@ -1,0 +1,5 @@
+(program
+  (comment 1 1 " ordinary zero-argument body")
+  (fn main (clause (patterns) (block (bind (var x) (binary + (int 1) (binary * (int 2) (int 3)))) (call pair (var x) (atom ok)))))
+  (fn choose (clause (patterns (tuple (atom ok) (var x))) (block (var x))) (clause (patterns (tuple (atom error) wild)) (block (int 0))))
+)

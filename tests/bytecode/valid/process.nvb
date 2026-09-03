@@ -1,0 +1,12 @@
+module
+const func child
+func main 5
+0: self 1
+1: makeref 2
+2: spawn 3 0 0
+3: send 4 3 2
+4: return 1
+end
+func child 1
+0: return 0
+end

@@ -1,0 +1,5 @@
+module
+func main 2
+0: print 5 1
+1: return 0
+end

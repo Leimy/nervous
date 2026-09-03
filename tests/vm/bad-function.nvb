@@ -1,0 +1,6 @@
+module
+const func missing
+func main 2
+0: call 1 0 0
+1: return 1
+end

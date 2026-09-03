@@ -1,0 +1,12 @@
+module
+const int 7
+const atom no
+const atom yes
+func main 4
+0: getelem 1 0 0
+1: testint 1 0 4
+2: loadk 2 2
+3: return 2
+4: loadk 3 1
+5: return 3
+end

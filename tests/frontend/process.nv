@@ -1,0 +1,12 @@
+fn worker(parent) {
+parent ! ${'ready, self};
+receive {
+${'stop, reason} => exit reason;
+_ => 'ignored;
+}
+}
+fn main() {
+pid=spawn worker(self);
+ref=mkref;
+(pid ! pid) ! pid ! ${'request, ref}
+}

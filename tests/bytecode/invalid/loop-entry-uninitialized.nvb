@@ -1,0 +1,7 @@
+module
+const atom ok
+func main 2
+0: testatom 1 0 1
+1: loadk 1 0
+2: jump 0
+end

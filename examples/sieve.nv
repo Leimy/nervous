@@ -1,0 +1,57 @@
+// Concurrent sieve of Eratosthenes.
+//
+// generate/3 feeds candidate numbers 2..limit into a chain of filter
+// processes. The chain starts empty (next == 'nil). Whenever a number
+// reaches the end of the chain undivided by any earlier prime, it is
+// itself prime: print it and spawn one more filter process to hold it.
+// A 'done message drains down the whole chain and each filter exits.
+//
+// No lists exist yet in this language, so the "sieve" is built entirely out
+// of processes and messages rather than out of data.
+//
+// generate recurses once per candidate and each filter once per message it
+// receives; both calls are in tail position, so they run in constant frame
+// depth and the limit is bounded by the mailbox budget, not by maxframe.
+
+fn generate(n, limit, next) {
+	if n > limit {
+		if next != 'nil {
+			next ! ${'done}
+		}
+		'ok
+	} else if next == 'nil {
+		nf = spawn filter(n, 'nil);
+		print(n);
+		generate(n + 1, limit, nf)
+	} else {
+		next ! ${'num, n};
+		generate(n + 1, limit, next)
+	}
+}
+
+fn filter(p, next) {
+	receive {
+		${'num, n} => {
+			if n % p == 0 {
+				filter(p, next)
+			} else if next == 'nil {
+				nf = spawn filter(n, 'nil);
+				print(n);
+				filter(p, nf)
+			} else {
+				next ! ${'num, n};
+				filter(p, next)
+			}
+		}
+		${'done} => {
+			if next != 'nil {
+				next ! ${'done}
+			}
+			exit 'ok
+		}
+	}
+}
+
+fn main() {
+	generate(2, 10000, 'nil)
+}

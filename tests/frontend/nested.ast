@@ -1,0 +1,3 @@
+(program
+  (fn nested (clause (patterns) (block (bind (var x) (tuple (int 1) (int 2))) (bind (var y) (block (binary + (var x) (int 1)) (binary + (var x) (int 2)))) (if (binary == (var x) (var y)) (block (int 1)) (block (int 2))) (match (var x) (clause (patterns (tuple (int 1) (var value))) (block (binary + (var value) (int 1)))) (clause (patterns wild) (int 0))))))
+)

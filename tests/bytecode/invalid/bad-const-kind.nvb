@@ -1,0 +1,6 @@
+module
+const int 1
+func main 1
+0: testatom 0 0 1
+1: fail 0
+end

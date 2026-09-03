@@ -1,0 +1,510 @@
+#include <u.h>
+#include <libc.h>
+#include <bio.h>
+#include "../include/nvbc.h"
+#include "../include/nvvm.h"
+#include "../include/nvexec.h"
+#include "../include/nvpat.h"
+#include "../include/nvproc.h"
+
+static int
+valuesize(NvValue *v, ulong depth, ulong maxdepth, uvlong *size)
+{
+	uvlong n, x;
+	int i;
+
+	if(v == nil || !v->valid || depth > maxdepth)
+		return -1;
+	n = sizeof *v;
+	switch(v->kind){
+	case Vatom:
+		if(v->atom == nil)
+			return -1;
+		x = strlen(v->atom)+1;
+		if(n > ~0ULL-x) return -1;
+		n += x;
+		break;
+	case Vtuple:
+		if(v->tuple == nil || v->tuple->n < 0 || v->tuple->n != 0 && v->tuple->elem == nil)
+			return -1;
+		x = sizeof *v->tuple;
+		if(n > ~0ULL-x) return -1;
+		n += x;
+		for(i = 0; i < v->tuple->n; i++){
+			if(valuesize(&v->tuple->elem[i], depth+1, maxdepth, &x) < 0 || n > ~0ULL-x)
+				return -1;
+			n += x;
+		}
+		break;
+	case Vint: case Vpid: case Vref:
+		break;
+	default:
+		return -1;
+	}
+	*size = n;
+	return 0;
+}
+
+static NvProcess *
+lookup(NvRuntime *r, NvValue *pid)
+{
+	NvProcess *p;
+
+	if(pid == nil || !pid->valid || pid->kind != Vpid || pid->pid.slot >= r->nslot)
+		return nil;
+	p = &r->process[pid->pid.slot];
+	if(p->generation != pid->pid.generation ||
+	   p->state != Prrunnable && p->state != Prrunning && p->state != Prwaiting)
+		return nil;
+	return p;
+}
+
+int
+nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int nerr)
+{
+	memset(r, 0, sizeof *r);
+	if(limits == nil || limits->maxprocess == 0 || limits->maxmailbox == 0 || limits->maxmessage == 0 ||
+	   limits->maxframe == 0 || limits->maxtermdepth == 0 || limits->maxtermdepth > NvMaxtermdepth){
+		snprint(err, nerr, "bad process limits");
+		return -1;
+	}
+	r->limits = *limits;
+	r->incarnation = incarnation;
+	r->nextref = 1;
+	return 0;
+}
+
+static void
+execfree(NvProcess *p)
+{
+	if(p->exec == nil)
+		return;
+	nvexecfree(p->exec);
+	free(p->exec);
+	p->exec = nil;
+}
+
+static void
+mailboxfree(NvProcess *p)
+{
+	NvMessage *m, *next;
+
+	for(m = p->head; m != nil; m = next){
+		next = m->next;
+		nvvaluefree(&m->value);
+		free(m);
+	}
+	p->head = p->tail = nil;
+	p->scanprev = p->scan = nil;
+	p->scanning = 0;
+	p->mailboxbytes = 0;
+}
+
+void
+nvruntimefree(NvRuntime *r)
+{
+	ulong i;
+
+	if(r == nil)
+		return;
+	for(i = 0; i < r->nslot; i++){
+		execfree(&r->process[i]);
+		mailboxfree(&r->process[i]);
+	}
+	free(r->process);
+	memset(r, 0, sizeof *r);
+}
+
+int
+nvprocspawn(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p, *q;
+	ulong slot;
+
+	if(r->nlive >= r->limits.maxprocess){
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	for(slot = 0; slot < r->nslot; slot++){
+		p = &r->process[slot];
+		if(p->state == Prexited && p->generation == ~0UL){
+			p->state = Prretired;
+			continue;
+		}
+		if(p->state == Prfree || p->state == Prexited)
+			break;
+	}
+	if(slot == r->nslot){
+		if(r->nslot == ~0UL || r->nslot+1 > ~0UL/sizeof *q){
+			snprint(err, nerr, "system_limit");
+			return -1;
+		}
+		q = realloc(r->process, (r->nslot+1)*sizeof *q);
+		if(q == nil){ snprint(err,nerr,"system_limit"); return -1; }
+		r->process = q;
+		p = &r->process[r->nslot++];
+		memset(p, 0, sizeof *p);
+	}else{
+		p = &r->process[slot];
+		execfree(p);
+		mailboxfree(p);
+		/*
+		 * R2-F15: belt-and-suspenders alongside nvprocexit's own clear.
+		 * nvprocexit already zeroes hasdeadline/deadline on every path
+		 * that can make a slot Prexited, so this is redundant today, but
+		 * it makes the invariant true by local inspection at the point
+		 * of reuse rather than depending on every future exit path having
+		 * remembered to clear it there instead.
+		 */
+		p->hasdeadline = 0;
+		p->deadline = 0;
+	}
+	p->generation++;
+	if(p->generation == 0)
+		p->generation++;
+	p->state = Prrunnable;
+	r->nlive++;
+	nvvaluepid(pid, slot, p->generation);
+	return 0;
+}
+
+int
+nvprocdispatch(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
+	if(p->state != Prrunnable){ snprint(err, nerr, "bad_state"); return -1; }
+	p->state = Prrunning;
+	return 0;
+}
+
+int
+nvprocyield(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
+	if(p->state != Prrunning){ snprint(err, nerr, "bad_state"); return -1; }
+	p->state = Prrunnable;
+	return 0;
+}
+
+int
+nvprocwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
+	if(p->state != Prrunning){ snprint(err, nerr, "bad_state"); return -1; }
+	p->state = Prwaiting;
+	return 0;
+}
+
+int
+nvprocexit(NvRuntime *r, NvValue *pid)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil)
+		return 0;
+	execfree(p);
+	mailboxfree(p);
+	/*
+	 * R2-F15: a deadline belongs to the process slot (D050), so exit must
+	 * clear it here as well as mailboxfree/execfree clearing everything
+	 * else. Without this, hasdeadline/deadline survive on an exited slot
+	 * and, before this fix, on a slot nvprocspawn later reuses. The idle
+	 * deadline scan in nvschedstep guards on state==Prwaiting, so a dead
+	 * or freshly reused (Prrunnable) slot was never actually observed by
+	 * it -- but that guard, not this clear, was doing the work D050
+	 * describes. Clearing it here and in nvprocspawn's reuse branch below
+	 * makes D050's "cannot outlive its slot" literally true of the field,
+	 * not just true of the field's only reader.
+	 */
+	p->hasdeadline = 0;
+	p->deadline = 0;
+	p->state = Prexited;
+	if(r->nlive > 0)
+		r->nlive--;
+	return 1;
+}
+
+int
+nvprocalive(NvRuntime *r, NvValue *pid)
+{
+	return lookup(r, pid) != nil;
+}
+
+int
+nvprocref(NvRuntime *r, NvValue *ref, char *err, int nerr)
+{
+	uvlong n;
+
+	n = r->nextref;
+	if(n == 0 || n == ~0ULL){
+		r->nextref = ~0ULL;
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	r->nextref++;
+	return nvvalueref(ref, r->incarnation, n);
+}
+
+int
+nvprocsend(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+{
+	NvProcess *p;
+	NvMessage *m;
+	uvlong bytes;
+
+	p = lookup(r, pid);
+	if(p == nil)
+		return 0;
+	if(valuesize(value, 1, r->limits.maxtermdepth, &bytes) < 0 || bytes > r->limits.maxmessage ||
+	   bytes > r->limits.maxmailbox || p->mailboxbytes > r->limits.maxmailbox-bytes){
+		snprint(err, nerr, "mailbox_full");
+		return -1;
+	}
+	m = mallocz(sizeof *m, 1);
+	if(m == nil || nvvaluecopy(&m->value, value) < 0){
+		free(m);
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	m->bytes = bytes;
+	if(p->tail != nil)
+		p->tail->next = m;
+	else
+		p->head = m;
+	p->tail = m;
+	p->mailboxbytes += bytes;
+	if(p->state == Prwaiting)
+		p->state = Prrunnable;
+	return 1;
+}
+
+int
+nvprocpop(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+{
+	NvProcess *p;
+	NvMessage *m;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
+	m = p->head;
+	if(m == nil)
+		return 0;
+	p->head = m->next;
+	if(p->head == nil)
+		p->tail = nil;
+	p->mailboxbytes -= m->bytes;
+	*value = m->value;
+	memset(&m->value, 0, sizeof m->value);
+	free(m);
+	return 1;
+}
+
+/* Bytecode receive scanning is an explicit host-owned phase. */
+int
+nvprocrecvbegin(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning){ snprint(err,nerr,"bad_state"); return -1; }
+	if(p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
+	p->scanning = 1;
+	p->scanprev = nil;
+	p->scan = p->head;
+	if(p->scan == nil)
+		return 0;
+	if(nvvaluecopy(value, &p->scan->value) < 0){ snprint(err,nerr,"system_limit"); return -1; }
+	return 1;
+}
+
+int
+nvprocrecvnext(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || !p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
+	if(p->scan == nil)
+		return 0;
+	p->scanprev = p->scan;
+	p->scan = p->scan->next;
+	if(p->scan == nil)
+		return 0;
+	if(nvvaluecopy(value, &p->scan->value) < 0){ snprint(err,nerr,"system_limit"); return -1; }
+	return 1;
+}
+
+int
+nvprocrecvtake(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p;
+	NvMessage *m;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || !p->scanning || p->scan == nil){ snprint(err,nerr,"bad_state"); return -1; }
+	m = p->scan;
+	if(p->scanprev != nil)
+		p->scanprev->next = m->next;
+	else
+		p->head = m->next;
+	if(p->tail == m)
+		p->tail = p->scanprev;
+	p->mailboxbytes -= m->bytes;
+	p->scanprev = p->scan = nil;
+	p->scanning = 0;
+	nvvaluefree(&m->value);
+	free(m);
+	return 0;
+}
+
+int
+nvprocrecvwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || !p->scanning || p->scan != nil){ snprint(err,nerr,"bad_state"); return -1; }
+	/*
+	 * A receive with no `after` clause never has an active deadline.
+	 * Clearing it here means a deadline armed by an earlier receive in
+	 * this same process, and left unconsumed because that receive
+	 * matched a message instead of timing out, can never leak into an
+	 * unrelated later plain receive and wake it early.
+	 */
+	p->hasdeadline = 0;
+	/* A send may append after this scan exhausted but before recvwait runs. */
+	if(p->scanprev == nil ? p->head != nil : p->scanprev->next != nil){
+		p->scanprev = nil;
+		p->scanning = 0;
+		return 0;
+	}
+	p->scanprev = nil;
+	p->scanning = 0;
+	p->state = Prwaiting;
+	return 0;
+}
+
+/*
+ * D049/D050: validate and arm one absolute deadline for a receive's
+ * `after` clause. An `'infinity` duration arms nothing, matching an
+ * ordinary unbounded receive. Any other non-integer term, or an integer
+ * outside 0..NvMaxduration, faults `bad_timeout`. The checked add keeps
+ * deadline arithmetic total; NvMaxduration is chosen so this can only
+ * fail if `now` itself is already corrupt.
+ */
+int
+nvprocarmdeadline(NvRuntime *r, NvValue *pid, NvValue *duration, uvlong now, char *err, int nerr)
+{
+	NvProcess *p;
+	uvlong deadline;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(duration == nil || !duration->valid){ snprint(err,nerr,"bad_timeout"); return -1; }
+	if(duration->kind == Vatom){
+		if(duration->atom == nil || strcmp(duration->atom, "infinity") != 0){
+			snprint(err,nerr,"bad_timeout");
+			return -1;
+		}
+		p->hasdeadline = 0;
+		p->deadline = 0;
+		return 0;
+	}
+	if(duration->kind != Vint || duration->i < 0 || duration->i > NvMaxduration){
+		snprint(err,nerr,"bad_timeout");
+		return -1;
+	}
+	deadline = now + (uvlong)duration->i;
+	if(deadline < now){
+		snprint(err,nerr,"system_limit");
+		return -1;
+	}
+	p->hasdeadline = 1;
+	p->deadline = deadline;
+	return 0;
+}
+
+/*
+ * D048/D050/D051: resume an exhausted receive scan. A message that
+ * raced the scan (queued after it exhausted, before this call) always
+ * takes priority over an expired deadline, exactly like nvprocrecvwait:
+ * the process stays runnable and the caller retries the scan from the
+ * oldest retained message. Otherwise, an expired armed deadline is
+ * consumed (cleared so it cannot fire twice) and reported to the caller
+ * so it can fall through to the timeout body instead of blocking.
+ */
+int
+nvprocrecvwaitdeadline(NvRuntime *r, NvValue *pid, uvlong now, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || !p->scanning || p->scan != nil){ snprint(err,nerr,"bad_state"); return -1; }
+	if(p->scanprev == nil ? p->head != nil : p->scanprev->next != nil){
+		p->scanprev = nil;
+		p->scanning = 0;
+		return 0;
+	}
+	p->scanprev = nil;
+	p->scanning = 0;
+	if(p->hasdeadline && now >= p->deadline){
+		p->hasdeadline = 0;
+		p->deadline = 0;
+		return 1;
+	}
+	p->state = Prwaiting;
+	return 0;
+}
+
+int
+nvprocreceive(NvRuntime *r, NvValue *pid, NvPatClause *clause, int nclause, NvBindings *bindings, int *which, NvValue *value, char *err, int nerr)
+{
+	NvProcess *p;
+	NvMessage *m, *prev;
+	int selected, rc;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
+	prev = nil;
+	for(m = p->head; m != nil; prev = m, m = m->next){
+		rc = nvclauseselect(clause, nclause, &m->value, bindings, &selected, err, nerr);
+		if(rc < 0)
+			return -1;
+		if(rc == 0)
+			continue;
+		if(prev != nil)
+			prev->next = m->next;
+		else
+			p->head = m->next;
+		if(p->tail == m)
+			p->tail = prev;
+		p->mailboxbytes -= m->bytes;
+		*value = m->value;
+		memset(&m->value, 0, sizeof m->value);
+		free(m);
+		if(which != nil)
+			*which = selected;
+		return 1;
+	}
+	p->state = Prwaiting;
+	if(which != nil)
+		*which = -1;
+	return 0;
+}

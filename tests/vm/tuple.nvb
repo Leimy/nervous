@@ -1,0 +1,10 @@
+module
+const int 7
+const atom ok
+func main 5
+0: loadk 1 0
+1: loadk 2 1
+2: tuple 3 1 2
+3: getelem 4 3 1
+4: return 4
+end

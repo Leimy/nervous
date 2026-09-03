@@ -1,0 +1,15 @@
+fn pong(parent) {
+	receive {
+		${'ping, value} => parent ! ${'pong, value};
+		_ => exit 'unexpected_message;
+	}
+}
+
+fn main() {
+	me = self;
+	peer = spawn pong(me);
+	peer ! ${'ping, 42};
+	receive {
+		${'pong, value} => value;
+	}
+}

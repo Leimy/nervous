@@ -1,0 +1,5 @@
+module
+func main 3
+0: tuple 1 4 0
+1: return 1
+end

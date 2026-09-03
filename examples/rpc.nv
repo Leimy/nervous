@@ -1,0 +1,17 @@
+fn server(parent) {
+	receive {
+		${'request, ref, value} => parent ! ${'reply, ref, value + 1};
+	}
+}
+
+fn main() {
+	me = self;
+	ref = mkref;
+	other = mkref;
+	me ! ${'reply, other, 0};
+	peer = spawn server(me);
+	peer ! ${'request, ref, 41};
+	receive {
+		${'reply, ref, value} => value;
+	}
+}

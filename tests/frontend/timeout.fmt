@@ -1,0 +1,11 @@
+fn worker(parent) {
+	receive {
+		'ping => parent ! 'pong;
+		after 1000000 => exit 'timeout;
+	}
+}
+
+fn main() {
+	pid = spawn worker(self);
+	pid ! 'ping
+}

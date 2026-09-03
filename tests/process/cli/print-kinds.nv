@@ -1,0 +1,9 @@
+fn main() {
+	me = self;
+	ref = mkref;
+	print(42);
+	print('atom_val);
+	print(${1, 'two, 3});
+	print(me);
+	print(ref)
+}

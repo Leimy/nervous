@@ -1,0 +1,117 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+root=`{basename -d `{basename -d $testdir}}
+if(~ $#* 0)
+	bin=$root/nervous
+if not if(~ $#* 1)
+	bin=$1
+if not {
+	echo usage: $0 '[nervous-binary]' >[1=2]
+	exit usage
+}
+if(! test -x $bin){
+	echo $0: executable not found: $bin >[1=2]
+	exit no-binary
+}
+
+tmp=/tmp/nervous-vmtest-$pid
+mkdir $tmp || exit mkdir
+fn cleanup { rm -rf $tmp }
+fn fail {
+	echo FAIL: $* >[1=2]
+	cleanup
+	exit test
+}
+fn value {
+	name=$1
+	expect=$2
+	shift; shift
+	$bin -x $testdir/$name.nvb main $* >$tmp/out >[2]$tmp/err
+	if(! ~ $status '')
+		fail $name: expected success
+	echo $expect >$tmp/expect
+	if(! cmp -s $tmp/out $tmp/expect){
+		echo expected: >[1=2]
+		cat $tmp/expect >[1=2]
+		echo actual stdout: >[1=2]
+		cat $tmp/out >[1=2]
+		echo actual stderr: >[1=2]
+		cat $tmp/err >[1=2]
+		fail $name: output differs
+	}
+	if(test -s $tmp/err)
+		fail $name: unexpected diagnostic
+	echo ok - $name
+}
+fn fault {
+	name=$1
+	expect=$2
+	shift; shift
+	$bin -x $testdir/$name.nvb main $* >$tmp/out >[2]$tmp/err
+	if(~ $status '')
+		fail $name: expected fault
+	if(test -s $tmp/out)
+		fail $name: unexpected output
+	echo $expect >$tmp/expect
+	if(! cmp -s $tmp/err $tmp/expect)
+		fail $name: expected $expect
+	echo ok - $name fault
+}
+
+value return 42
+value call 42
+value tuple '''ok'
+value test '''yes' 7
+value test '''no' 8
+fault fail 'fault deliberate'
+fault bad-function 'fault bad_function'
+fault tail-loop 'fault reduction_limit'
+fault print-hostless 'fault bad_process_context'
+fault eprint-hostless 'fault bad_process_context'
+
+value add 42 19 23
+value sub -4 19 23
+value mul -42 -6 7
+value div -3 -7 2
+value rem -1 -7 2
+value lt '''true' 1 2
+value le '''true' 2 2
+value gt '''true' 3 2
+value ge '''false' 1 2
+fault add-overflow 'fault overflow'
+fault sub-overflow 'fault overflow'
+fault mul-overflow 'fault overflow'
+fault div-overflow 'fault overflow'
+fault div-zero 'fault divide_by_zero'
+fault badarith 'fault badarith' '''atom' 1
+
+$bin -x $testdir/uninitialized.nvb main >$tmp/out >[2]$tmp/err
+if(~ $status '')
+	fail uninitialized: expected verification failure
+if(test -s $tmp/out)
+	fail uninitialized: unexpected output
+if(! grep -s 'register 1 may be uninitialized' $tmp/err)
+	fail uninitialized: missing verifier diagnostic
+echo ok - invalid bytecode rejected before execution
+
+$bin -t $testdir/return.nvb main >$tmp/out >[2]$tmp/err
+if(! ~ $status '')
+	fail trace: expected success
+if(! cmp -s $tmp/out $testdir/return.trace)
+	fail trace: output differs
+if(test -s $tmp/err)
+	fail trace: unexpected diagnostic
+echo ok - stable trace
+
+cleanup
+echo all vm tests passed
+exit ''

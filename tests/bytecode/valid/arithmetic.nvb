@@ -1,0 +1,15 @@
+module
+func main 12
+0: getelem 1 0 0
+1: getelem 2 0 1
+2: add 3 1 2
+3: sub 4 1 2
+4: mul 5 1 2
+5: div 6 1 2
+6: rem 7 1 2
+7: lt 8 1 2
+8: le 9 1 2
+9: gt 10 1 2
+10: ge 11 1 2
+11: return 3
+end

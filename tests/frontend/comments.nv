@@ -1,0 +1,8 @@
+// file documentation
+fn main() {
+	// before binding
+	x = 1; // trailing binding documentation
+	// before result
+	x
+}
+// eof documentation

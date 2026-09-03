@@ -1,0 +1,45 @@
+// Fault isolation: a faulting process takes down nothing but itself.
+//
+// main spawns three workers and asks each to divide 100 by a number. The
+// second is asked to divide by zero and faults with divide_by_zero. That
+// fault is confined to the worker: its siblings answer normally and main
+// keeps running. Nothing is printed for the fault itself -- the runtime
+// reports only the root's outcome (D046) -- and there are no links or
+// monitors yet, so the only way main can learn that a worker died is that
+// its reply never arrives. The `after` clause turns that silence into a
+// value instead of a hang. (The silence is also the whole argument for
+// adding monitors later.)
+//
+// Expected output:
+//   ${'ok, 25}
+//   'lost
+//   ${'ok, 20}
+//   ${${'ok, 25}, 'lost, ${'ok, 20}}
+
+fn worker(parent, ref, n) {
+	parent ! ${'reply, ref, 100 / n}
+}
+
+fn collect(ref) {
+	receive {
+		${'reply, ref, value} => ${'ok, value};
+		after 100000000 => 'lost;
+	}
+}
+
+fn main() {
+	me = self;
+	a = mkref;
+	b = mkref;
+	c = mkref;
+	spawn worker(me, a, 4);
+	spawn worker(me, b, 0);
+	spawn worker(me, c, 5);
+	ra = collect(a);
+	rb = collect(b);
+	rc = collect(c);
+	print(ra);
+	print(rb);
+	print(rc);
+	${ra, rb, rc}
+}

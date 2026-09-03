@@ -1,0 +1,8 @@
+fn square(x) {
+	x * x
+}
+
+fn main() {
+	x = 7;
+	square(x) + 2
+}

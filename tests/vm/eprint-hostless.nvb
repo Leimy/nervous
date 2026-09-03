@@ -1,0 +1,7 @@
+module
+const atom hi
+func main 3
+0: loadk 1 0
+1: eprint 2 1
+2: return 2
+end

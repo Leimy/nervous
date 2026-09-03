@@ -1,0 +1,11 @@
+fn childprint(n) {
+	print(n);
+	print(n);
+	n
+}
+
+fn main() {
+	spawn childprint('a);
+	spawn childprint('b);
+	print('root)
+}

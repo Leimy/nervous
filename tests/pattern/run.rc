@@ -1,0 +1,36 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+if(~ $#* 0){
+	matcher=$testdir/ptest
+	parser=$testdir/parsetest
+	bytecode=$testdir/bctest
+	compiler=$testdir/compiletest
+}
+if not if(~ $#* 4){
+	matcher=$1
+	parser=$2
+	bytecode=$3
+	compiler=$4
+}
+if not {
+	echo usage: $0 '[matcher-test parsed-pattern-test pattern-bytecode-test pattern-compiler-test]' >[1=2]
+	exit usage
+}
+if(! test -x $matcher || ! test -x $parser || ! test -x $bytecode || ! test -x $compiler){
+	echo $0: test executable missing >[1=2]
+	echo $0: build with '''mk patterntest parsepatterntest patternbctest patterncompiletest''' >[1=2]
+	exit no-binary
+}
+$matcher || exit test
+$parser || exit test
+$bytecode || exit test
+$compiler || exit test

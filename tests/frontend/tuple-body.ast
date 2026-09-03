@@ -1,0 +1,3 @@
+(program
+  (fn main (clause (patterns) (block (tuple (int 1) (int 2)))))
+)

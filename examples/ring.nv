@@ -1,0 +1,53 @@
+// Message passing: a token circulates a ring of processes.
+//
+// build/2 spawns n node processes, each holding the pid of the next, with
+// main closing the ring. main injects a token carrying a hop count, every
+// node increments it and forwards it, and main counts laps as the token
+// comes back around. When the laps are done main sends 'stop, which drains
+// around the ring once and lets every node return.
+//
+// Each node handles thousands of messages through node/1's self-call in
+// its receive clause. That call is in tail position, so the node runs in
+// one frame no matter how many messages it forwards (D047).
+//
+// 10 nodes, 2000 laps: the root value is 20000 hops.
+
+fn node(next) {
+	receive {
+		${'token, hops} => {
+			next ! ${'token, hops + 1};
+			node(next)
+		}
+		'stop => {
+			next ! 'stop;
+			'ok
+		}
+	}
+}
+
+fn build(0, next) {
+	next
+}
+
+fn build(n, next) {
+	build(n - 1, spawn node(next))
+}
+
+fn laps(head, 0, hops) {
+	head ! 'stop;
+	receive {
+		'stop => hops;
+	}
+}
+
+fn laps(head, n, hops) {
+	head ! ${'token, hops};
+	receive {
+		${'token, h} => laps(head, n - 1, h);
+	}
+}
+
+fn main() {
+	head = build(65535, self);
+	laps(head, 2000, 0)
+}

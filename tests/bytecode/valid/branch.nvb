@@ -1,0 +1,10 @@
+module
+const atom ok
+func choose 3
+0: loadk 0 0
+1: testatom 0 0 4
+2: loadk 1 0
+3: jump 5
+4: loadk 1 0
+5: return 1
+end

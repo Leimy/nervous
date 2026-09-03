@@ -1,0 +1,52 @@
+// I/O as messages: the shape a future io module could take, built today
+// from nothing but print, send, receive, and refs.
+//
+// Clients never call print themselves. They send a request to a device
+// pid and receive a Ref-correlated completion, exactly the way a 9P client
+// sends Twrite and receives Rwrite without knowing whether the server is a
+// kernel driver, a user process, or a machine across the network. Here the
+// device is a local process wrapping the host print callback; nothing in
+// write/2 or close/1 would change if it were on another scheduler or
+// another node. The `after` clause in write/2 is the client's timeout,
+// which the language already had -- no I/O-specific timeout mechanism is
+// needed.
+//
+// Expected output:
+//   'hello
+//   ${'answer, 42}
+//   'closed
+
+fn printer() {
+	receive {
+		${'write, from, ref, value} => {
+			print(value);
+			from ! ${ref, 'ok};
+			printer()
+		}
+		${'close, from, ref} => from ! ${ref, 'closed};
+	}
+}
+
+fn write(dev, value) {
+	ref = mkref;
+	dev ! ${'write, self, ref, value};
+	receive {
+		${ref, status} => status;
+		after 1000000000 => 'timeout;
+	}
+}
+
+fn close(dev) {
+	ref = mkref;
+	dev ! ${'close, self, ref};
+	receive {
+		${ref, status} => status;
+	}
+}
+
+fn main() {
+	dev = spawn printer();
+	write(dev, 'hello);
+	write(dev, ${'answer, 42});
+	close(dev)
+}

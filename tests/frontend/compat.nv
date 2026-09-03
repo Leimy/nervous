@@ -1,0 +1,28 @@
+// worker documentation
+fn worker {
+	${parent} => {
+		send(parent, ${'ready, self()});
+		receive {
+			${'stop, reason} =>
+				exit(reason);
+			_ =>
+				'ignored;
+		}
+	};
+}
+
+fn square {
+	${x} => x * x;
+	${x, y} => x * y;
+}
+
+fn main {
+	// a body-only function
+	pid = spawn(worker, self());
+	ref = make_ref();
+	send(pid, ${'request, ref});
+	match square(2) {
+		4 => 'ok;
+		_ => exit('bad);
+	}
+}

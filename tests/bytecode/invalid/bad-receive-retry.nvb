@@ -1,0 +1,4 @@
+module
+func main 1
+0: recvwait 1
+end

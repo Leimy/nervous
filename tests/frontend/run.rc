@@ -1,0 +1,92 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+root=`{basename -d `{basename -d $testdir}}
+if(~ $#* 0)
+	bin=$root/nervous
+if not if(~ $#* 1)
+	bin=$1
+if not {
+	echo usage: $0 '[nervous-binary]' >[1=2]
+	exit usage
+}
+if(! test -x $bin){
+	echo $0: executable not found: $bin >[1=2]
+	exit no-binary
+}
+
+tmp=/tmp/nervous-fronttest-$pid
+mkdir $tmp || exit mkdir
+fn cleanup { rm -rf $tmp }
+fn fail {
+	echo FAIL: $* >[1=2]
+	echo preserved diagnostics in $tmp >[1=2]
+	exit test
+}
+fn golden {
+	name=$1
+	mode=$2
+	input=$3
+	expect=$4
+	$bin $mode $testdir/$input >$tmp/out >[2]$tmp/err
+	if(! ~ $status ''){
+		cat $tmp/err >[1=2]
+		fail $name: expected success
+	}
+	if(! cmp -s $tmp/out $testdir/$expect){
+		echo expected: $testdir/$expect >[1=2]
+		echo actual: >[1=2]
+		cat $tmp/out >[1=2]
+		fail $name: output differs
+	}
+	if(test -s $tmp/err)
+		fail $name: unexpected diagnostic
+	if(~ $mode -f -F){
+		$bin -f $tmp/out >$tmp/out2 >[2]$tmp/err2
+		if(! ~ $status '' || test -s $tmp/err2 || ! cmp -s $tmp/out $tmp/out2)
+			fail $name: formatter is not idempotent
+	}
+	echo ok - $name
+}
+fn rejected {
+	name=$1
+	mode=$2
+	input=$3
+	expect=$4
+	$bin $mode $testdir/$input >$tmp/out >[2]$tmp/err
+	if(~ $status '')
+		fail $name: expected rejection
+	if(test -s $tmp/out)
+		fail $name: unexpected output
+	sed 's@'^$testdir^'/@tests/frontend/@' $tmp/err >$tmp/norm
+	if(! cmp -s $tmp/norm $testdir/$expect)
+		fail $name: diagnostic differs
+	echo ok - $name rejected
+}
+
+golden basic-ast -a basic.nv basic.ast
+golden nested-ast -a nested.nv nested.ast
+golden tuple-leading-body -a tuple-body.nv tuple-body.ast
+rejected bad-token -a bad-token.nv bad-token.err
+rejected bad-pattern -a bad-pattern.nv bad-pattern.err
+rejected bad-head -a bad-head.nv bad-head.err
+golden current-format -f current.nv current.fmt
+golden match-format -f current-match.nv current-match.fmt
+golden if-format -f if.nv if.fmt
+golden process-format -f process.nv process.fmt
+golden timeout-format -f timeout.nv timeout.fmt
+golden comments -f comments.nv comments.fmt
+# -F reads the previous (v2) syntax and writes canonical current syntax.
+golden compat-format -F compat.nv compat.fmt
+
+cleanup
+echo all frontend tests passed
+exit ''

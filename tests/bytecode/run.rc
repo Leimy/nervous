@@ -1,0 +1,72 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+root=`{basename -d `{basename -d $testdir}}
+if(~ $#* 0)
+	bin=$root/nervous
+if not if(~ $#* 1)
+	bin=$1
+if not {
+	echo usage: $0 '[nervous-binary]' >[1=2]
+	exit usage
+}
+
+if(! test -x $bin){
+	echo $0: executable not found: $bin >[1=2]
+	echo $0: build it with '''mk all''' or pass its path >[1=2]
+	exit no-binary
+}
+
+tmp=/tmp/nervous-bctest-$pid
+mkdir $tmp || exit mkdir
+fn cleanup { rm -rf $tmp }
+fn fail {
+	echo FAIL: $* >[1=2]
+	cleanup
+	exit test
+}
+
+for(f in $testdir/valid/*.nvb){
+	base=`{basename $f}
+	out=$tmp/$base.out
+	err=$tmp/$base.err
+	$bin -b $f >$out >[2]$err
+	if(! ~ $status '')
+		fail $base: expected success
+	if(! cmp -s $f $out)
+		fail $base: disassembly differs from canonical input
+	if(test -s $err){
+		echo diagnostic: >[1=2]
+		cat $err >[1=2]
+		fail $base: unexpected diagnostic
+	}
+	echo ok - $base round trip
+}
+
+for(f in $testdir/invalid/*.nvb){
+	base=`{basename $f .nvb}
+	out=$tmp/$base.out
+	err=$tmp/$base.err
+	norm=$tmp/$base.norm
+	$bin -b $f >$out >[2]$err
+	if(~ $status '')
+		fail $base: expected failure
+	if(test -s $out)
+		fail $base: unexpected standard output
+	sed 's@'^$testdir^'/invalid/@@' $err >$norm
+	if(! cmp -s $testdir/invalid/$base.err $norm)
+		fail $base: diagnostic differs from golden file
+	echo ok - $base rejected
+}
+
+cleanup
+echo all bytecode tests passed
+exit ''

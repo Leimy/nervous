@@ -1,0 +1,9 @@
+module
+const int 1
+const int 0
+func main 4
+0: loadk 1 0
+1: loadk 2 1
+2: div 3 1 2
+3: return 3
+end

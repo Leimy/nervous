@@ -1,0 +1,6 @@
+module
+const int 42
+func main 2
+0: loadk 1 0
+1: return 1
+end

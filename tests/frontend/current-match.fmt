@@ -1,0 +1,8 @@
+fn inspect(x) {
+	match x {
+		${'ok, value} => {
+			value + 1
+		}
+		_ => 0;
+	}
+}

@@ -1,0 +1,39 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+if(~ $#* 0){
+	core=$testdir/ptest
+	exec=$testdir/exectest
+	sched=$testdir/schedtest
+	io=$testdir/iotest
+	r2=$testdir/r2test
+}
+if not if(~ $#* 5){
+	core=$1
+	exec=$2
+	sched=$3
+	io=$4
+	r2=$5
+}
+if not {
+	echo usage: $0 '[process-test resumable-exec-test scheduler-test io-test r2-test]' >[1=2]
+	exit usage
+}
+if(! test -x $core || ! test -x $exec || ! test -x $sched || ! test -x $io || ! test -x $r2){
+	echo $0: test executable missing >[1=2]
+	echo $0: build with '''mk processtest exectest schedtest iotest r2test''' >[1=2]
+	exit no-binary
+}
+$core || exit test
+$exec || exit test
+$sched || exit test
+$io || exit test
+$r2 || exit test
