@@ -10,7 +10,11 @@
 // its receive clause. That call is in tail position, so the node runs in
 // one frame no matter how many messages it forwards (D047).
 //
-// 10 nodes, 2000 laps: the root value is 20000 hops.
+// `nervous -r ring.nv main` runs 10 nodes for 2000 laps (root value 20000
+// hops); `main nodes laps` sets both. Note the ring is built so the token
+// travels downward through process slots: the scheduler's per-hop cost must
+// not depend on that (D059), and 65535 nodes x 2000 laps is the benchmark
+// that showed it once did.
 
 fn node(next) {
 	receive {
@@ -48,6 +52,11 @@ fn laps(head, n, hops) {
 }
 
 fn main() {
-	head = build(65535, self);
+	head = build(10, self);
 	laps(head, 2000, 0)
+}
+
+fn main(nodes, n) {
+	head = build(nodes, self);
+	laps(head, n, 0)
 }

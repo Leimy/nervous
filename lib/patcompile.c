@@ -68,6 +68,15 @@ convert(NvPattern *p, Expr *e, char *err, int nerr)
 		p->kind = Pint;
 		p->ival = e->ival;
 		return 0;
+	case Eunary:
+		/* D060: a negative integer literal pattern is the constant it denotes. */
+		if(strcmp(e->text, "-") == 0 && e->left != nil && e->left->kind == Eint){
+			p->kind = Pint;
+			p->ival = -e->left->ival;
+			return 0;
+		}
+		snprint(err, nerr, "expression at %d:%d is not a supported pattern", e->span.line, e->span.col);
+		return -1;
 	case Eatom:
 		p->kind = Patom;
 		p->name = strdup(e->text);

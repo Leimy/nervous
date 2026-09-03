@@ -127,6 +127,7 @@ clausefree(Clause *c)
 	if(c == nil)
 		return;
 	exprsfree(c->patterns);
+	exprfree(c->guard);
 	exprfree(c->body);
 	free(c);
 }
@@ -168,6 +169,16 @@ clausenew(Span sp)
 static Expr *parseexpr(Parser *, int);
 static Expr *parseexpr1(Parser *, int);
 static int patternok(Parser *, Expr *);
+
+/* D060: an optional `when guard` after a clause head; nil when absent. */
+static int
+parseguard(Parser *p, Clause *c)
+{
+	if(!take(p, Twhen))
+		return 0;
+	c->guard = parseexpr(p, 0);
+	return c->guard == nil ? -1 : 0;
+}
 
 /*
  * A block-like expression ends in its own closing brace, so a `;`
@@ -264,7 +275,7 @@ parseclause(Parser *p, int stop)
 		return nil;
 	}
 	exprappend(&c->patterns, x);
-	if(!expect(p, Tarrow)){ clausefree(c); return nil; }
+	if(parseguard(p, c) < 0 || !expect(p, Tarrow)){ clausefree(c); return nil; }
 	c->body = parseexpr(p, 0);
 	if(c->body == nil || !clauseend(p, c->body, stop)){ clausefree(c); return nil; }
 	return c;
@@ -601,15 +612,19 @@ patternok(Parser *p, Expr *e)
 	case Evar:
 	case Ewild:
 		return 1;
+	case Eunary:
+		/* D060: a negative integer literal is a pattern. */
+		if(strcmp(e->text, "-") == 0 && e->left->kind == Eint)
+			return 1;
+		break;
 	case Etuple:
 		for(x = e->list; x != nil; x = x->next)
 			if(!patternok(p, x->expr))
 				return 0;
 		return 1;
-	default:
-		error(p, e->span, "expression is not a pattern");
-		return 0;
 	}
+	error(p, e->span, "expression is not a pattern");
+	return 0;
 }
 
 /* `fn name(patterns) { ... }`: one clause with a block body. */
@@ -619,7 +634,13 @@ parsefnclause(Parser *p, Span sp)
 	Clause *c;
 
 	c = clausenew(sp);
-	if(!expect(p, Tlparen) || parseitems(p, &c->patterns, Trparen, 1) < 0 || !expect(p, Trparen)){
+	if(!expect(p, Tlparen) || parseitems(p, &c->patterns, Trparen, 1) < 0 || !expect(p, Trparen) ||
+	   parseguard(p, c) < 0){
+		clausefree(c);
+		return nil;
+	}
+	if(p->tok.kind != Tlbrace){
+		error(p, p->tok.span, "expected { after function head, found %s", tokname(p->tok.kind));
 		clausefree(c);
 		return nil;
 	}

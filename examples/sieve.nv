@@ -12,6 +12,11 @@
 // generate recurses once per candidate and each filter once per message it
 // receives; both calls are in tail position, so they run in constant frame
 // depth and the limit is bounded by the mailbox budget, not by maxframe.
+//
+// filter's three cases for a candidate -- divisible, end of chain, forward
+// -- are receive clauses with `when` guards (D060) rather than an if chain
+// inside one clause; the guards run on the tentative bindings before the
+// message is taken.
 
 fn generate(n, limit, next) {
 	if n > limit {
@@ -31,17 +36,15 @@ fn generate(n, limit, next) {
 
 fn filter(p, next) {
 	receive {
+		${'num, n} when n % p == 0 => filter(p, next);
+		${'num, n} when next == 'nil => {
+			nf = spawn filter(n, 'nil);
+			print(n);
+			filter(p, nf)
+		}
 		${'num, n} => {
-			if n % p == 0 {
-				filter(p, next)
-			} else if next == 'nil {
-				nf = spawn filter(n, 'nil);
-				print(n);
-				filter(p, nf)
-			} else {
-				next ! ${'num, n};
-				filter(p, next)
-			}
+			next ! ${'num, n};
+			filter(p, next)
 		}
 		${'done} => {
 			if next != 'nil {
@@ -52,6 +55,12 @@ fn filter(p, next) {
 	}
 }
 
+// `nervous -r sieve.nv main` sieves to 10000 (1229 primes); `main 1023`
+// or any other integer argument sets the limit instead.
 fn main() {
 	generate(2, 10000, 'nil)
+}
+
+fn main(limit) {
+	generate(2, limit, 'nil)
 }

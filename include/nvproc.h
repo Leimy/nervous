@@ -42,6 +42,9 @@ enum {
 	Prretired,
 };
 
+/* Run-queue link value meaning "no slot" (D059). */
+#define NvNoslot (~0UL)
+
 struct NvProcess {
 	ulong generation;
 	int state;
@@ -59,6 +62,13 @@ struct NvProcess {
 	 */
 	uvlong deadline;
 	int hasdeadline;
+	/*
+	 * D059: intrusive FIFO run-queue links, as slot indices so they
+	 * survive process-table realloc. Meaningful only while state is
+	 * Prrunnable; a slot is in the queue exactly when it is Prrunnable.
+	 */
+	ulong runnext;
+	ulong runprev;
 	NvExec *exec;
 };
 
@@ -67,6 +77,15 @@ struct NvRuntime {
 	NvProcess *process;
 	ulong nslot;
 	ulong nlive;
+	/* D059: FIFO of Prrunnable slots; NvNoslot when empty. */
+	ulong runhead;
+	ulong runtail;
+	ulong nrunnable;
+	/* Lifetime counters for `nervous -s`; never read by the runtime itself. */
+	uvlong nspawned;
+	ulong maxlive;
+	uvlong nsent;
+	uvlong ndropped;
 	uvlong incarnation;
 	uvlong nextref;
 };
@@ -78,6 +97,15 @@ int nvprocdispatch(NvRuntime *, NvValue *, char *, int);
 int nvprocyield(NvRuntime *, NvValue *, char *, int);
 int nvprocwait(NvRuntime *, NvValue *, char *, int);
 int nvprocexit(NvRuntime *, NvValue *);
+/*
+ * D059: run-queue access for the scheduler. nvprocrunhead reports the
+ * slot that has been runnable longest without removing it (dispatch
+ * removes it); nvprocwake moves one Prwaiting slot to Prrunnable at the
+ * queue tail, the only way a non-message event (a deadline) may make a
+ * process runnable. Message arrival wakes through nvprocsend.
+ */
+int nvprocrunhead(NvRuntime *, ulong *);
+int nvprocwake(NvRuntime *, ulong);
 int nvprocalive(NvRuntime *, NvValue *);
 int nvprocref(NvRuntime *, NvValue *, char *, int);
 int nvprocsend(NvRuntime *, NvValue *, NvValue *, char *, int);

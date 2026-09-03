@@ -14,8 +14,42 @@ static char *version = "nervous frontend 4";
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-s] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...]]\n");
 	exits("usage");
+}
+
+/*
+ * -s: scheduler statistics on stderr after a -r run, whatever its outcome.
+ * Wall time is measured from just before scheduler creation to the report;
+ * the heap figure is the break's growth over the same interval, which is a
+ * high-water mark because Plan 9 malloc never lowers the break. Bytes per
+ * peak live process is a rough per-process footprint under this load, not
+ * an exact accounting (that is milestone 08's job); it includes mailbox
+ * traffic in flight at the peak.
+ */
+static void
+printstats(NvScheduler *s, vlong start, uintptr brk0)
+{
+	vlong ns;
+	uintptr heap;
+	uvlong hops;
+
+	ns = nsec() - start;
+	heap = (uintptr)sbrk(0) - brk0;
+	hops = s->runtime.nsent;
+	fprint(2, "stats: wall %lld.%03llds\n", ns/1000000000LL, (ns%1000000000LL)/1000000LL);
+	fprint(2, "stats: processes %llud spawned, %lud peak live, %llud completed, %llud faulted, %llud exited\n",
+		s->runtime.nspawned, s->runtime.maxlive, s->completed, s->faulted, s->exited);
+	fprint(2, "stats: dispatches %llud, reductions %llud (%llud per dispatch), timer wakes %llud\n",
+		s->dispatches, s->reductions, s->dispatches ? s->reductions/s->dispatches : 0, s->timerwakes);
+	fprint(2, "stats: messages %llud sent, %llud dropped to dead pids", hops, s->runtime.ndropped);
+	if(hops != 0 && ns > 0)
+		fprint(2, ", %llud ns per message", (uvlong)ns/hops);
+	fprint(2, "\n");
+	fprint(2, "stats: heap %llud bytes peak", (uvlong)heap);
+	if(s->runtime.maxlive != 0)
+		fprint(2, ", %llud per peak live process", (uvlong)heap/s->runtime.maxlive);
+	fprint(2, "\n");
 }
 
 static char *
@@ -87,11 +121,17 @@ main(int argc, char **argv)
 	NvScheduler sched;
 	NvIO io;
 	char err[256], *entry;
-	int fd, i, state;
+	int fd, i, state, stats;
+	vlong start;
+	uintptr brk0;
 
 	file = nil;
 	mode = 0;
+	stats = 0;
+	start = 0;
+	brk0 = 0;
 	ARGBEGIN{
+	case 's': stats = 1; break;
 	case 'a': mode = 'a'; file = EARGF(usage()); break;
 	case 'A': mode = 'A'; file = EARGF(usage()); break;
 	case 'b': mode = 'b'; file = EARGF(usage()); break;
@@ -223,6 +263,10 @@ main(int argc, char **argv)
 			limits.maxframe = 1024;
 			limits.maxtermdepth = NvMaxtermdepth;
 			limits.maxduration = NvMaxduration;
+			if(stats){
+				start = nsec();
+				brk0 = (uintptr)sbrk(0);
+			}
 			if(nvschedinit(&sched, m, &limits, 1, 1000, err, sizeof err) < 0){
 				Bterm(&bout);
 				fprint(2, "%s\n", err);
@@ -257,6 +301,11 @@ main(int argc, char **argv)
 				state = nvschedstep(&sched, err, sizeof err);
 				if(state != NvSchedProgress)
 					break;
+			}
+			if(stats){
+				Bflush(&bout);
+				Bflush(&berr);
+				printstats(&sched, start, brk0);
 			}
 			/*
 			 * A root fault or exit is reported before an idle scheduler

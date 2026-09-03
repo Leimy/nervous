@@ -28,6 +28,8 @@ Tuple and list patterns match exact shapes. A list tail pattern explicitly accep
 
 Clauses are ordered. Exact arity makes clauses of different tuple arities disjoint, but patterns of the same arity may overlap and retain source-order behavior.
 
+A function, `match`, or `receive` clause may carry a guard: `fn f(x) when x > 0 { ... }`, `pattern when guard => body`. The guard is evaluated after the pattern has matched and bound its variables and before the clause is selected; the clause is selected only if the guard yields exactly `'true`. A guard that yields `'false` or any non-boolean, or that faults for any reason (`badarith` on a non-integer, `divide_by_zero`, `overflow`, ...), makes the clause fail like a pattern mismatch: the next clause is tried, and in a `receive` the candidate stays in the mailbox. A guard can never terminate the process. Guard expressions are restricted to literals, variables, tuple construction, the operators, and the type tests `is_int`, `is_atom`, `is_tuple`, `is_pid`, `is_ref`; calls, bindings, blocks, `match`, `receive`, `if`, and every process or I/O form are compile errors in a guard (D060). The type tests are also ordinary expressions usable anywhere. A negative integer literal is a pattern.
+
 A direct failed match exits the current process abnormally.
 
 ## Functions
@@ -46,7 +48,9 @@ Blocks are expression-valued. Semicolons separate expressions; a trailing semico
 
 There is no general truthiness. The ordinary atoms `'true` and `'false` are boolean results. `if cond { a } else { b }` requires `cond` to be exactly `'true` or `'false` and faults `match_fail` otherwise; `else if` chains, and an `if` with no `else` yields `'ok`. Branch bindings are local to the branch. `==` and `!=` are D028 structural equality.
 
-Calls, aggregate elements, and operator operands evaluate left to right; `and` and `or` short-circuit. Binding `=` and send `!` are the two lowest-precedence operators and associate to the right; everything else associates to the left.
+`and`, `or`, and `not` are the boolean operators and follow the same rule as `if`: every operand must be exactly `'true` or `'false`, and anything else faults `match_fail`. `and` and `or` short-circuit -- the right operand is evaluated only when the left one does not decide the result -- so a binding made inside a right operand exists on only one path and is local to that operand, as an `if` branch's bindings are. Unary `-` is checked subtraction from zero (negating the minimum integer faults `overflow`), and a negative integer literal is a compile-time constant; unary `+` is the identity on an integer and faults `badarith` on anything else. Negative literals are expressions, not yet patterns.
+
+Calls, aggregate elements, and operator operands evaluate left to right. Binding `=` and send `!` are the two lowest-precedence operators and associate to the right; everything else associates to the left.
 
 ## Processes and messages
 

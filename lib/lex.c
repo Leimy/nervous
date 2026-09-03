@@ -114,6 +114,7 @@ static struct {
 	{ "and", Tand, 0 },
 	{ "or", Tor, 0 },
 	{ "not", Tnot, 0 },
+	{ "when", Twhen, 1 },
 	{ "if", Tif, 1 },
 	{ "else", Telse, 1 },
 	{ "spawn", Tspawn, 1 },
@@ -233,7 +234,7 @@ tokname(int k)
 	static char *n[] = {
 		"end of file", "identifier", "atom", "integer",
 		"fn", "match", "receive", "after", "if", "else", "spawn", "self", "mkref", "exit",
-		"and", "or", "not",
+		"and", "or", "not", "when",
 		"{", "}", "(", ")", ",", ";", "=>", "=", "!", "==", "!=", "<", "<=", ">", ">=",
 		"+", "-", "*", "/", "%", "${", "#{", "comment",
 	};

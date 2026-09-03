@@ -52,6 +52,8 @@ enum {
 };
 
 static int compileexpr(Fcomp *, Expr *, int);
+static int compileguard(Fcomp *, Expr *, int *, int *);
+static void patchguard(Fcomp *, int, int, int);
 
 static int
 seterr(Fcomp *f, Expr *e, char *s)
@@ -330,15 +332,188 @@ compileequality(Fcomp *f, Expr *e, int l, int r, int d)
 	return d;
 }
 
+/*
+ * Emit "d = a boolean derived from the boolean in r, or fault match_fail
+ * if r is not a boolean":
+ *
+ *	testatom r 'true  -> L1
+ *	loadk d <iftrue>; jump END
+ *	L1: testatom r 'false -> FAIL
+ *	loadk d <iffalse>; jump END
+ *
+ * iftrue/iffalse are the constants to load when r is 'true/'false: pass
+ * ('true, 'false) to copy and ('false, 'true) to negate. FAIL and END are
+ * the caller's labels: *failtest receives the second testatom (patch its
+ * .c to FAIL) and the return value is the first jump; the second jump is
+ * always the last instruction emitted. Both jumps must be patched to END.
+ */
+static int
+boolcopy(Fcomp *f, int r, int d, int ktrue, int kfalse, int iftrue, int iffalse, int *failtest)
+{
+	int t1, j1, t2, j2;
+
+	t1 = emit(f, Otestatom, r, ktrue, 0);
+	if(t1 < 0 || emit(f, Oloadk, d, iftrue, 0) < 0)
+		return -1;
+	j1 = emit(f, Ojump, 0, 0, 0);
+	if(j1 < 0)
+		return -1;
+	f->func->insn[t1].c = f->func->ninsn;
+	t2 = emit(f, Otestatom, r, kfalse, 0);
+	if(t2 < 0 || emit(f, Oloadk, d, iffalse, 0) < 0)
+		return -1;
+	j2 = emit(f, Ojump, 0, 0, 0);
+	if(j2 < 0)
+		return -1;
+	*failtest = t2;
+	return j1;
+}
+
+/*
+ * D014/D016/D058: `and` and `or` short-circuit, and like `if` they accept
+ * exactly 'true and 'false, faulting match_fail on anything else -- there
+ * is no truthiness. The right operand is evaluated only when the left one
+ * does not decide the result, so a binding made inside it exists on only
+ * one path; as with an `if` branch (D013), such bindings are local to the
+ * operand and do not escape.
+ *
+ *	a and b:  testatom a 'true -> L1 ; <b> ; boolcopy(b) ; L1: testatom a 'false -> FAIL ; d='false
+ *	a or  b:  testatom a 'true -> L1 ; d='true ; L1: testatom a 'false -> FAIL ; <b> ; boolcopy(b)
+ */
+static int
+compilelogical(Fcomp *f, Expr *e, int l, int d)
+{
+	int isand, ktrue, kfalse, reason, env, r, t1, t2, j1, j2, j3, failtest, fail, end;
+
+	isand = strcmp(e->text, "and") == 0;
+	ktrue = constant(f->compiler, Katom, 0, "true");
+	kfalse = constant(f->compiler, Katom, 0, "false");
+	reason = constant(f->compiler, Katom, 0, "match_fail");
+	if(ktrue < 0 || kfalse < 0 || reason < 0)
+		return -1;
+	j2 = -1;	/* set on the and-path above or the or-path below; never both */
+	t1 = emit(f, Otestatom, l, ktrue, 0);
+	if(t1 < 0)
+		return -1;
+	if(isand){
+		env = f->nbind;
+		r = compileexpr(f, e->right, 0);
+		if(r < 0)
+			return -1;
+		j1 = boolcopy(f, r, d, ktrue, kfalse, ktrue, kfalse, &failtest);
+		if(j1 < 0)
+			return -1;
+		j2 = f->func->ninsn-1;
+		trimenv(f, env);
+	}else{
+		if(emit(f, Oloadk, d, ktrue, 0) < 0)
+			return -1;
+		j1 = emit(f, Ojump, 0, 0, 0);
+		if(j1 < 0)
+			return -1;
+	}
+	f->func->insn[t1].c = f->func->ninsn;
+	t2 = emit(f, Otestatom, l, kfalse, 0);
+	if(t2 < 0)
+		return -1;
+	if(isand){
+		if(emit(f, Oloadk, d, kfalse, 0) < 0)
+			return -1;
+		j3 = emit(f, Ojump, 0, 0, 0);
+		if(j3 < 0)
+			return -1;
+	}else{
+		env = f->nbind;
+		r = compileexpr(f, e->right, 0);
+		if(r < 0)
+			return -1;
+		j2 = boolcopy(f, r, d, ktrue, kfalse, ktrue, kfalse, &failtest);
+		if(j2 < 0)
+			return -1;
+		j3 = f->func->ninsn-1;
+		trimenv(f, env);
+	}
+	fail = f->func->ninsn;
+	if(emit(f, Ofail, reason, 0, 0) < 0)
+		return -1;
+	end = f->func->ninsn;
+	f->func->insn[t2].c = fail;
+	f->func->insn[failtest].c = fail;
+	f->func->insn[j1].a = end;
+	f->func->insn[j2].a = end;
+	f->func->insn[j3].a = end;
+	return d;
+}
+
+/*
+ * D016: `not` requires a boolean like `and`/`or`; unary `-` is checked
+ * subtraction from zero (so negating the minimum integer faults overflow,
+ * D007) and a negative literal folds to a constant; unary `+` is the
+ * identity on an integer and faults badarith on anything else, exactly as
+ * `x + 0` would.
+ */
+static int
+compileunary(Fcomp *f, Expr *e)
+{
+	int r, d, zero, ktrue, kfalse, reason, j1, failtest, fail, end;
+
+	if(strcmp(e->text, "-") == 0 && e->left->kind == Eint)
+		return loadliteral(f, e, Kint, -e->left->ival, nil);
+	r = compileexpr(f, e->left, 0);
+	if(r < 0)
+		return -1;
+	if(strcmp(e->text, "not") == 0){
+		d = newreg(f, e);
+		ktrue = constant(f->compiler, Katom, 0, "true");
+		kfalse = constant(f->compiler, Katom, 0, "false");
+		reason = constant(f->compiler, Katom, 0, "match_fail");
+		if(d < 0 || ktrue < 0 || kfalse < 0 || reason < 0)
+			return -1;
+		/* Load 'false where r is 'true and vice versa: the negation. */
+		j1 = boolcopy(f, r, d, ktrue, kfalse, kfalse, ktrue, &failtest);
+		if(j1 < 0)
+			return -1;
+		fail = f->func->ninsn;
+		if(emit(f, Ofail, reason, 0, 0) < 0)
+			return -1;
+		end = f->func->ninsn;
+		f->func->insn[failtest].c = fail;
+		f->func->insn[j1].a = end;
+		f->func->insn[fail-1].a = end;
+		return d;
+	}
+	zero = loadliteral(f, e, Kint, 0, nil);
+	d = newreg(f, e);
+	if(zero < 0 || d < 0)
+		return -1;
+	if(strcmp(e->text, "-") == 0){
+		if(emit(f, Osub, d, zero, r) < 0)
+			return -1;
+	}else if(strcmp(e->text, "+") == 0){
+		if(emit(f, Oadd, d, r, zero) < 0)
+			return -1;
+	}else
+		return seterr(f, e, "unary operator not yet supported by compiler");
+	return d;
+}
+
 static int
 compilebinary(Fcomp *f, Expr *e)
 {
 	int l, r, d, op;
 
 	l = compileexpr(f, e->left, 0);
+	if(l < 0)
+		return -1;
+	if(strcmp(e->text, "and") == 0 || strcmp(e->text, "or") == 0){
+		d = newreg(f, e);
+		if(d < 0)
+			return -1;
+		return compilelogical(f, e, l, d);
+	}
 	r = compileexpr(f, e->right, 0);
 	d = newreg(f, e);
-	if(l < 0 || r < 0 || d < 0)
+	if(r < 0 || d < 0)
 		return -1;
 	if(strcmp(e->text, "==") == 0 || strcmp(e->text, "!=") == 0)
 		return compileequality(f, e, l, r, d);
@@ -392,7 +567,7 @@ compilematch(Fcomp *f, Expr *e, int tail)
 {
 	Clause *cl;
 	NvInsn *i;
-	int src, dst, env, start, patend, body, next, move, jump, reason, nclause;
+	int src, dst, env, start, patend, body, next, move, jump, reason, nclause, guardpc, testpc;
 	int *done, ndone, *p, j;
 
 	src = compileexpr(f, e->left, 0);
@@ -412,6 +587,8 @@ compilematch(Fcomp *f, Expr *e, int tail)
 		}
 		if(compilepattern(f, cl->patterns->expr, src, 0) < 0){ free(done); return -1; }
 		patend = f->func->ninsn;
+		guardpc = testpc = -1;
+		if(cl->guard != nil && compileguard(f, cl->guard, &guardpc, &testpc) < 0){ free(done); return -1; }
 		body = compileexpr(f, cl->body, tail);
 		if(body < 0 && body != Rnone){ free(done); return -1; }
 		if(body != Rnone){
@@ -425,6 +602,7 @@ compilematch(Fcomp *f, Expr *e, int tail)
 		}
 		next = f->func->ninsn;
 		patchtests(f->func, start, patend, next);
+		patchguard(f, guardpc, testpc, next);
 		trimenv(f, env);
 	}
 	reason = constant(f->compiler, Katom, 0, "match_fail");
@@ -453,11 +631,35 @@ exprcount(Exprs *x)
  * after D058 gave the process forms their own syntax. They stay calls
  * because they belong in a future io module, not in the language core.
  */
+/*
+ * D060: the type-test intrinsics. Ordinary expressions anywhere, and the
+ * only calls a guard may contain. Returns the term kind for a name, or -1.
+ */
+static int
+typetest(char *name)
+{
+	if(strcmp(name, "is_int") == 0) return Vint;
+	if(strcmp(name, "is_atom") == 0) return Vatom;
+	if(strcmp(name, "is_tuple") == 0) return Vtuple;
+	if(strcmp(name, "is_pid") == 0) return Vpid;
+	if(strcmp(name, "is_ref") == 0) return Vref;
+	return -1;
+}
+
 static int
 compileintrinsic(Fcomp *f, Expr *e)
 {
-	int n, a, d;
+	int n, a, d, kind;
 
+	kind = typetest(e->text);
+	if(kind >= 0){
+		n = exprcount(e->list);
+		if(n != 1) return seterr(f,e,"type test expects one value");
+		a = compileexpr(f,e->list->expr,0);
+		d = newreg(f,e);
+		if(a < 0 || d < 0 || emit(f, Oistype, d, a, kind) < 0) return -1;
+		return d;
+	}
 	if(strcmp(e->text, "print") != 0 && strcmp(e->text, "eprint") != 0)
 		return -2;
 	n = exprcount(e->list);
@@ -466,6 +668,87 @@ compileintrinsic(Fcomp *f, Expr *e)
 	d = newreg(f,e);
 	if(a < 0 || d < 0 || emit(f, strcmp(e->text,"print") == 0 ? Oprint : Oeprint, d, a, 0) < 0) return -1;
 	return d;
+}
+
+/*
+ * D060: a guard may contain only forms that cannot do anything but
+ * compute a value or fault: literals, variables, tuple construction,
+ * operators, and the type tests. Everything else is rejected here with a
+ * position, before any code is emitted.
+ */
+static int
+guardok(Fcomp *f, Expr *e)
+{
+	Exprs *x;
+
+	switch(e->kind){
+	case Eint: case Eatom: case Evar:
+		return 0;
+	case Etuple:
+		for(x = e->list; x != nil; x = x->next)
+			if(guardok(f, x->expr) < 0)
+				return -1;
+		return 0;
+	case Eunary:
+		return guardok(f, e->left);
+	case Ebinary:
+		if(guardok(f, e->left) < 0)
+			return -1;
+		return guardok(f, e->right);
+	case Ecall:
+		if(typetest(e->text) < 0)
+			return seterr(f, e, "only type tests may be called in a guard");
+		for(x = e->list; x != nil; x = x->next)
+			if(guardok(f, x->expr) < 0)
+				return -1;
+		return 0;
+	}
+	return seterr(f, e, "expression not allowed in a guard");
+}
+
+/*
+ * Emit a clause guard after its pattern:
+ *
+ *	guard FAIL
+ *	<guard expression> -> r
+ *	guardend
+ *	testatom r 'true -> FAIL
+ *
+ * FAIL is the clause's failure target, unknown until the body has been
+ * compiled; *guardpc and *testpc receive the two instructions whose
+ * target (.a and .c respectively) the caller patches once it is known.
+ * Any fault in the expression transfers to FAIL with guard mode off
+ * (exec.c fault()); the not-'true path passes guardend first, so guard
+ * mode is off on every path out. Bindings cannot occur in a guard, so
+ * there is no environment to trim.
+ */
+static int
+compileguard(Fcomp *f, Expr *g, int *guardpc, int *testpc)
+{
+	int r, ktrue;
+
+	if(guardok(f, g) < 0)
+		return -1;
+	ktrue = constant(f->compiler, Katom, 0, "true");
+	if(ktrue < 0)
+		return -1;
+	*guardpc = emit(f, Oguard, 0, 0, 0);
+	if(*guardpc < 0)
+		return -1;
+	r = compileexpr(f, g, 0);
+	if(r < 0 || emit(f, Oguardend, 0, 0, 0) < 0)
+		return -1;
+	*testpc = emit(f, Otestatom, r, ktrue, 0);
+	return *testpc < 0 ? -1 : 0;
+}
+
+static void
+patchguard(Fcomp *f, int guardpc, int testpc, int target)
+{
+	if(guardpc >= 0)
+		f->func->insn[guardpc].a = target;
+	if(testpc >= 0)
+		f->func->insn[testpc].c = target;
 }
 
 static int
@@ -602,8 +885,8 @@ compilereceive(Fcomp *f, Expr *e, int tail)
 {
 	Clause *cl;
 	NvInsn *i;
-	int candidate, found, dst, truth, begin, check, env, start, take, body, move, jump, next, advance, wait, end;
-	int *done, ndone, *p, j, nvalue;
+	int candidate, found, dst, truth, begin, check, env, start, patend, take, body, move, jump, next, advance, wait, end;
+	int *done, ndone, *p, j, nvalue, guardpc, testpc;
 	int dur, timeout;
 
 	if(e->left != nil && checkdurationliteral(f, e->left) < 0)
@@ -631,6 +914,14 @@ compilereceive(Fcomp *f, Expr *e, int tail)
 		start = f->func->ninsn;
 		if(cl->patterns == nil || cl->patterns->next != nil){ free(done); return seterr(f,e,"receive clause must have one pattern"); }
 		if(compilepattern(f,cl->patterns->expr,candidate,0) < 0){ free(done); return -1; }
+		patend = f->func->ninsn;
+		/*
+		 * D060: the guard runs on the tentative bindings before the
+		 * candidate is taken, so a failing guard leaves the message in
+		 * the mailbox for the next clause or the next candidate.
+		 */
+		guardpc = testpc = -1;
+		if(cl->guard != nil && compileguard(f, cl->guard, &guardpc, &testpc) < 0){ free(done); return -1; }
 		take = emit(f,Orecvtake,0,0,0);
 		if(take < 0){ free(done); return -1; }
 		body = compileexpr(f,cl->body,tail);
@@ -646,7 +937,9 @@ compilereceive(Fcomp *f, Expr *e, int tail)
 			done[ndone++] = jump;
 		}
 		next = f->func->ninsn;
-		patchtests(f->func,start,take,next);
+		/* Pattern tests only: a guard's own tests carry their own targets and must not be repatched. */
+		patchtests(f->func,start,patend,next);
+		patchguard(f, guardpc, testpc, next);
 		trimenv(f,env);
 	}
 	advance = emit(f,Orecvnext,candidate,found,0);
@@ -754,7 +1047,7 @@ compileexpr(Fcomp *f, Expr *e, int tail)
 		if(r < 0 || emit(f, Oexit, r, 0, 0) < 0) return -1;
 		return r;
 	case Eunary:
-		return seterr(f, e, "unary operator not yet supported by compiler");
+		return compileunary(f, e);
 	case Ewild:
 		return seterr(f, e, "wildcard is not an expression");
 	}
@@ -790,7 +1083,7 @@ compilefunction(Compiler *c, Fn *source, NvFunc *out)
 	Fcomp f;
 	Clause *cl;
 	Expr *p;
-	int r, env, start, patend, end, reason;
+	int r, env, start, patend, end, reason, guardpc, testpc;
 
 	memset(&f, 0, sizeof f);
 	f.compiler = c;
@@ -807,12 +1100,15 @@ compilefunction(Compiler *c, Fn *source, NvFunc *out)
 		p->list = nil;
 		exprfree(p);
 		patend = f.func->ninsn;
+		guardpc = testpc = -1;
+		if(cl->guard != nil && compileguard(&f, cl->guard, &guardpc, &testpc) < 0){ fcompfree(&f); return -1; }
 		/* A clause body is in tail position; Rnone means it ended in a tail call and needs no return. */
 		r = compileexpr(&f, cl->body, 1);
 		if(r < 0 && r != Rnone){ fcompfree(&f); return -1; }
 		if(r != Rnone && emit(&f, Oreturn, r, 0, 0) < 0){ fcompfree(&f); return -1; }
 		end = f.func->ninsn;
 		patchtests(f.func, start, patend, end);
+		patchguard(&f, guardpc, testpc, end);
 		trimenv(&f, env);
 	}
 	reason = constant(c, Katom, 0, "function_clause");
@@ -830,7 +1126,7 @@ compilefunction(Compiler *c, Fn *source, NvFunc *out)
 static int
 reserved(char *s)
 {
-	return strcmp(s,"print") == 0 || strcmp(s,"eprint") == 0;
+	return strcmp(s,"print") == 0 || strcmp(s,"eprint") == 0 || typetest(s) >= 0;
 }
 
 static int

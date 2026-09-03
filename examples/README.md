@@ -8,8 +8,8 @@ Current examples, roughly in reading order:
 - `pingpong.nv` - `self`, `spawn`, `!`, selective receive, `exit`; root value 42.
 - `rpc.nv` - Ref-correlated request/reply that skips an earlier unmatched message; root value 42.
 - `hello.nv` - host output with `print`.
-- `sieve.nv` - processes as data: a prime sieve built from a chain of filter processes, each a tail-recursive receive loop.
-- `ring.nv` - message passing: a token circulates a ring of ten processes for 2000 laps; root value 20000. Every node handles 2000 messages in one frame.
+- `sieve.nv` - processes as data: a prime sieve built from a chain of filter processes, each a tail-recursive receive loop whose three candidate cases are guarded receive clauses (`when`, D060). Sieves to 10000 by default (1229 primes); `main 1023` or any integer argument sets the limit.
+- `ring.nv` - message passing: a token circulates a ring of ten processes for 2000 laps; root value 20000. Every node handles 2000 messages in one frame. `main nodes laps` sets the size; `main 65535 2000` is the benchmark that motivated D059's run queue.
 - `isolation.nv` - fault isolation: one of three workers faults (`divide_by_zero`); its siblings and the root are unaffected, and the root detects the missing reply with `after`. Also shows why monitors will be wanted: the fault is otherwise silent.
 - `ioserver.nv` - I/O as messages: clients send Ref-correlated requests to a device process and receive completions, never calling `print` themselves. The client code would not change if the device lived on another scheduler or another node.
 

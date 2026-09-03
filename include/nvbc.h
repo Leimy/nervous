@@ -57,6 +57,9 @@ enum {
 	Orecvwaitdeadline,
 	Oprint,
 	Oeprint,
+	Oguard,
+	Oguardend,
+	Oistype,
 	Nopcode,
 };
 

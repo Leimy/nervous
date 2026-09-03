@@ -51,11 +51,12 @@ struct NvScheduler {
 	NvClock clock;
 	NvIO io;
 	uvlong quantum;
-	ulong cursor;
 	ulong currentslot;
 	ulong currentgeneration;
 	int currentvalid;
 	uvlong dispatches;
+	uvlong reductions;
+	uvlong timerwakes;
 	uvlong completed;
 	uvlong faulted;
 	uvlong exited;

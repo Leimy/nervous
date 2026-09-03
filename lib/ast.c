@@ -74,6 +74,7 @@ clausesfree(Clause *c)
 	while(c != nil){
 		n = c->next;
 		exprsfree(c->patterns);
+		exprfree(c->guard);
 		exprfree(c->body);
 		free(c);
 		c = n;
@@ -156,7 +157,14 @@ printclauses(Biobuf *b, Clause *c)
 	for(; c != nil; c = c->next){
 		Bprint(b, " (clause (patterns");
 		printlist(b, c->patterns);
-		Bprint(b, ") ");
+		Bprint(b, ")");
+		/* D060: printed only when present, so guard-free goldens are unchanged. */
+		if(c->guard != nil){
+			Bprint(b, " (guard ");
+			printexpr(b, c->guard);
+			Bprint(b, ")");
+		}
+		Bprint(b, " ");
 		printexpr(b, c->body);
 		Bprint(b, ")");
 	}

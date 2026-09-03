@@ -309,6 +309,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	NvExec *e;
 	NvValue pid;
 	ulong i, slot;
+	uvlong before;
 	int state, isroot;
 
 	r = &s->runtime;
@@ -318,16 +319,13 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		snprint(err, nerr, "scheduler has live processes but no slots");
 		return NvSchedError;
 	}
-	slot = s->cursor < r->nslot ? s->cursor : 0;
-	for(i = 0; i < r->nslot; i++){
-		p = &r->process[slot];
-		if(p->state == Prrunnable)
-			break;
-		slot++;
-		if(slot == r->nslot)
-			slot = 0;
-	}
-	if(i == r->nslot){
+	/*
+	 * D059: dispatch is the head of the runtime's FIFO run queue, O(1) no
+	 * matter how many processes are waiting. Order is "runnable longest
+	 * first": spawn, quantum yield, and every wakeup append at the tail.
+	 * The slot scans below run only when nothing is runnable at all.
+	 */
+	if(!nvprocrunhead(r, &slot)){
 		uvlong earliest;
 		ulong nwake;
 		int havedeadline;
@@ -341,9 +339,8 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		 * D050: idle with an armed deadline is progress, not deadlock.
 		 * Ties (equal deadlines) wake together, matching "advances to
 		 * the earliest deadline, makes those processes runnable"; the
-		 * ascending-slot-index tie order in D050 falls out for free
-		 * because this loop only needs the earliest value, not which
-		 * slot produced it.
+		 * ascending-slot-index tie order in D050 is preserved because the
+		 * wake loop below enqueues in ascending slot order (D059).
 		 */
 		havedeadline = 0;
 		earliest = 0;
@@ -367,7 +364,10 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		for(i = 0; i < r->nslot; i++){
 			p = &r->process[i];
 			if(p->state == Prwaiting && p->hasdeadline && p->deadline <= earliest){
-				p->state = Prrunnable;
+				if(nvprocwake(r, i) < 0){
+					snprint(err, nerr, "deadline wake of a non-waiting process");
+					return NvSchedError;
+				}
 				nwake++;
 			}
 		}
@@ -375,6 +375,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 			snprint(err, nerr, "clock did not advance past the earliest deadline");
 			return NvSchedError;
 		}
+		s->timerwakes += nwake;
 		return NvSchedProgress;
 	}
 	p = &r->process[slot];
@@ -390,11 +391,12 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	s->currentslot = slot;
 	s->currentgeneration = p->generation;
 	s->currentvalid = 1;
+	before = e->reductions;
 	state = nvexecrun(e, s->quantum);
+	s->reductions += e->reductions - before;
 	s->currentvalid = 0;
 	/* Process operations may grow the slot table; never retain its old address. */
 	p = &r->process[slot];
-	s->cursor = slot+1 < r->nslot ? slot+1 : 0;
 	if(state == NvYield){
 		if(p->state == Prrunning){
 			if(nvprocyield(r, &pid, err, nerr) < 0)

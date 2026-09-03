@@ -114,9 +114,26 @@ mulok(vlong a, vlong b, vlong *r)
 	*r = a*b; return 0;
 }
 
+/*
+ * D060: while a guard executes (guardfail >= 0), a fault is clause failure,
+ * not process failure: control transfers to the guard's fail target and
+ * guard mode ends. e->frame is always the executing frame at a fault site
+ * (every frame change stores it), and guards cannot call, so the target is
+ * in this frame. NvGuardfault is private to this file; run() returns it
+ * and nvexecrun resumes the loop instead of reporting it.
+ */
+enum {
+	NvGuardfault = 100,
+};
+
 static int
 fault(NvExec *e, char *s)
 {
+	if(e->guardfail >= 0){
+		e->frame->pc = e->guardfail;
+		e->guardfail = -1;
+		return NvGuardfault;
+	}
 	snprint(e->fault, sizeof e->fault, "%s", s);
 	e->state = NvFault;
 	return NvFault;
@@ -137,6 +154,7 @@ nvexecinit(NvExec *e, NvModule *m, char *entry, NvValue *arg, Biobuf *trace, int
 	e->nframe = 1;
 	e->maxframe = 1024;
 	e->state = NvYield;
+	e->guardfail = -1;
 	return 0;
 }
 
@@ -159,8 +177,8 @@ nvexecsethost(NvExec *e, NvExecHost *host)
 		e->host = *host;
 }
 
-int
-nvexecrun(NvExec *e, uvlong quantum)
+static int
+run(NvExec *e, uvlong quantum)
 {
 	NvExecFrame *f, *n, *caller;
 	NvInsn *i;
@@ -310,10 +328,47 @@ nvexecrun(NvExec *e, uvlong quantum)
 			if(nvvalueatom(&v,"ok")<0) return fault(e,"out_of_memory");
 			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
 		case Onop: f->pc++; break;
+		case Oguard: e->guardfail = i->a; f->pc++; break;
+		case Oguardend: e->guardfail = -1; f->pc++; break;
+		case Oistype:
+			if(atomresult(&f->reg[i->a], f->reg[i->b].valid && f->reg[i->b].kind == i->c) < 0) return fault(e,"out_of_memory");
+			f->pc++; break;
+		default:
+			/*
+			 * Unreachable for a verified module (nvverify rejects unknown
+			 * opcodes), so this only fires if an opcode is added to nvbc.h
+			 * without a case here. Faulting makes that a visible test
+			 * failure instead of a silent spin on an unadvanced pc.
+			 */
+			return fault(e,"bad_opcode");
 		}
 	}
 	e->frame = f;
 	return NvYield;
+}
+
+/*
+ * D060: run() returns NvGuardfault when a fault inside a guard has already
+ * redirected the frame to the guard's fail target; resume with whatever
+ * quantum remains rather than reporting it. The reduction that faulted was
+ * charged (run() counts before dispatch), so a guard that faults every
+ * time still consumes its quantum.
+ */
+int
+nvexecrun(NvExec *e, uvlong quantum)
+{
+	uvlong start, used;
+	int state;
+
+	start = e->reductions;
+	for(;;){
+		used = e->reductions - start;
+		if(used >= quantum)
+			return e->state;
+		state = run(e, quantum - used);
+		if(state != NvGuardfault)
+			return state;
+	}
 }
 
 void

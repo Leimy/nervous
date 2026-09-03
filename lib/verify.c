@@ -2,10 +2,18 @@
 #include <libc.h>
 #include <bio.h>
 #include "../include/nvbc.h"
+#include "../include/nvvm.h"
 
 enum {
 	Nword = (NvMaxreg+31)/32,
 };
+
+/* D060: istype's immediate kind operand must name a real term kind. */
+static int
+kindok(int k)
+{
+	return k == Vint || k == Vatom || k == Vtuple || k == Vpid || k == Vref;
+}
 
 static int
 bad(char *err, int nerr, NvFunc *f, int pc, char *s)
@@ -114,6 +122,14 @@ verifyinsn(NvModule *m, NvFunc *f, int pc, NvInsn *i, char *err, int nerr)
 		if(!regok(f,i->a) || !regok(f,i->b))
 			return bad(err,nerr,f,pc,i->op==Oprint?"bad print register":"bad eprint register");
 		break;
+	case Oguard:
+		if(!targetok(f,i->a)) return bad(err,nerr,f,pc,"bad guard fail target");
+		break;
+	case Oguardend:
+		break;
+	case Oistype:
+		if(!regok(f,i->a) || !regok(f,i->b) || !kindok(i->c)) return bad(err,nerr,f,pc,"bad istype operand");
+		break;
 	case Onop:
 		break;
 	}
@@ -166,7 +182,7 @@ checkreads(NvFunc *f, int pc, NvInsn *i, ulong *s, char *err, int nerr)
 		if(readreg(f, pc, s, i->a, err, nerr) < 0)
 			return -1;
 		return readreg(f, pc, s, i->b, err, nerr);
-	case Ogetelem:
+	case Ogetelem: case Oistype:
 		return readreg(f, pc, s, i->b, err, nerr);
 	case Oadd: case Osub: case Omul: case Odiv: case Orem:
 	case Olt: case Ole: case Ogt: case Oge:
@@ -192,6 +208,7 @@ transfer(NvInsn *i, ulong *s)
 	case Oadd: case Osub: case Omul: case Odiv: case Orem:
 	case Olt: case Ole: case Ogt: case Oge:
 	case Oself: case Omakeref: case Osend: case Ospawn: case Oprint: case Oeprint:
+	case Oistype:
 		setreg(s, i->a);
 		break;
 	case Orecvbegin: case Orecvnext:
@@ -276,6 +293,17 @@ verifyflow(NvFunc *f, char *err, int nerr)
 			break;
 		case Otestatom: case Otestint: case Otesteq: case Otestarity:
 			edge(f, i->c, out, in, seen, queued, queue, &qt, &nq);
+			break;
+		case Oguard:
+			/*
+			 * D060: any instruction up to the matching guardend may
+			 * transfer to the fail target on a fault. One edge from here
+			 * suffices for definite initialization: registers are only
+			 * ever set, so the set live at this guard is a subset of the
+			 * set live at every instruction the fault could come from,
+			 * and the merge at the target is an intersection.
+			 */
+			edge(f, i->a, out, in, seen, queued, queue, &qt, &nq);
 			break;
 		case Orecvwait:
 			edge(f, i->a, out, in, seen, queued, queue, &qt, &nq);

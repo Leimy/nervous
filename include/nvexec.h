@@ -65,6 +65,12 @@ struct NvExec {
 	NvExecHost host;
 	int traceon;
 	int state;
+	/*
+	 * D060: guard mode. -1 normally; while a guard executes, the pc a
+	 * fault transfers to instead of faulting the process. Not a stack:
+	 * guards cannot call, so they cannot nest.
+	 */
+	int guardfail;
 	char fault[128];
 };
 

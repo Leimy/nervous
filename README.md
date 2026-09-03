@@ -4,7 +4,19 @@ Nervous is an experimental concurrent language and portable 64-bit virtual machi
 
 ## How to read this repository
 
-Do not begin by loading the full design document for routine implementation work.
+Minimum context for making progress, in order -- about 60 KB total, most of it `decisions.md`:
+
+1. `README.md` (this file).
+2. `STATUS.md` -- current state only, short by design.
+3. `docs/decisions.md` -- normative; the settled design. Skim the headings, read the decisions the current milestone touches.
+4. `docs/semantics.md` -- the compact language contract.
+5. `docs/questions.md` -- only the section for the milestone being worked.
+6. The active milestone file under `milestones/`.
+7. `docs/bytecode.md` if touching the compiler, verifier, or VM; `docs/format.md` if touching the parser or formatter.
+
+Read `COORDINATION.md` only when more than one agent is working. Do not read `STATUS-archive.md`, `docs/review-findings-archive.md`, `docs/review-05.md`, or `nervous_design.md` for forward work; they are historical records, kept for audit and for the rare regression investigation into closed work. `docs/review-findings.md` is short and worth a glance only if a review gate is open.
+
+Full map:
 
 - `README.md`: project map and milestone order.
 - `COORDINATION.md`: multi-agent roles, ownership, handoff, and integration protocol.
@@ -43,18 +55,17 @@ Distribution, maps, floats, links, monitors, general FFI, code replacement, and 
 
 ## Current position
 
-Milestones 00 through 07 and reviews R1 and R2 are all complete; `rc tests/run.rc` passes completely, including milestone 07's `print`/`eprint` I/O fixtures, `examples/hello.nv`, and R2's concurrency/lifecycle regressions in `tests/process/r2test.c`. No review gate is currently active. Milestone 08 (Memory) is the next available forward-feature track. Two post-R2 defect fixes (R2-F21 tail calls, R2-F22 root-fault reporting; see `docs/review-findings.md`) are built but await `rc tests/run.rc` confirmation. Operational state is recorded in `STATUS.md`, which is authoritative if this summary becomes stale.
+Milestones 00 through 07 and reviews R1 and R2 are all complete; `rc tests/run.rc` passes completely, including milestone 07's `print`/`eprint` I/O fixtures, `examples/hello.nv`, and R2's concurrency/lifecycle regressions in `tests/process/r2test.c`. No review gate is currently active. Milestone 08 (Memory) is the next available forward-feature track. Three post-R2 defect fixes are closed (R2-F21 tail calls, R2-F22 root-fault reporting, R2-F23 the D059 FIFO run queue replacing the O(n) dispatch scan; see `docs/review-findings.md`): message passing costs about 2 us per hop on a single scheduler independent of how many processes exist, measured up to 32768. Operational state is recorded in `STATUS.md`, which is authoritative if this summary becomes stale.
 
 ## New-coordinator handoff
 
-1. Read `STATUS.md` first for the exact current state.
-2. Milestone 08 (Memory) is next: read `milestones/08-memory.md` and `docs/questions.md`'s "Milestone 08 - Memory" section, and settle its open interface questions as decisions before implementing, the same way milestones 06/07 and review R2 settled theirs first.
-
-No review finding or write ownership is currently open (one item, R2-F16, is deferred to milestone 10 with a named owner; see `docs/review-findings.md`).
+Read `STATUS.md`; it names the current milestone, the design proposal awaiting recording as decisions, and the next actions. No review finding or write ownership is open (R2-F16 is deferred to milestone 10 with a named owner).
 
 ## Try it
 
 Build the command and test programs with `mk tests`. Format a source example with `./nervous -f examples/arithmetic.nv`, compile it to verified symbolic bytecode with `./nervous -c examples/arithmetic.nv`, or execute it with `./nervous -r examples/arithmetic.nv main`. The process example `examples/pingpong.nv` demonstrates `self`, `spawn`, `!` (copied send), selective receive, and `exit` at source level; run it through the cooperative scheduler with `./nervous -r examples/pingpong.nv main`. `./nervous -r examples/rpc.nv main` adds Ref-correlated request/reply and preservation of an earlier unmatched response. `./nervous -r examples/hello.nv main` demonstrates milestone 07's host output: it prints `'hello_world` during execution, then `'ok` as the final root value. `examples/sieve.nv` uses `if`, processes-as-data, and tail-recursive message loops; calls in tail position replace their frame (D047, `docs/semantics.md`), which is what lets a receive loop run indefinitely under the frame limit. `examples/ring.nv` (message passing around a ring), `examples/isolation.nv` (a child faults; siblings and root continue, and `after` detects the lost reply), and `examples/ioserver.nv` (I/O as a Ref-correlated message exchange with a device process) each demonstrate one runtime goal; see `examples/README.md`.
+
+`nervous -s -r file main` adds scheduler statistics on stderr after the run (wall time, processes, dispatches, reductions, messages and nanoseconds per message, heap high-water mark); `bench/run.rc` uses it to time the ring, idle-waiter, and sieve shapes, and `bench/README.md` records the baseline numbers.
 
 Source written in the previous syntax (`fn name { ${..} => body; }`, `send(...)`, `spawn(...)`) is converted with `./nervous -F old.nv > new.nv`; see D058 in `docs/decisions.md`.
 

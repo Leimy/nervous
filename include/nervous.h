@@ -72,9 +72,11 @@ struct Expr {
 	Clause *clauses;
 };
 
+/* D060: guard is nil when the clause has no `when`. */
 struct Clause {
 	Span span;
 	Exprs *patterns;
+	Expr *guard;
 	Expr *body;
 	Clause *next;
 };
@@ -122,6 +124,7 @@ enum {
 	Tand,
 	Tor,
 	Tnot,
+	Twhen,
 	Tlbrace,
 	Trbrace,
 	Tlparen,

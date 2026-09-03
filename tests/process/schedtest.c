@@ -284,6 +284,7 @@ main(void)
 	NvClock clock;
 	char err[128];
 	int i, state;
+	ulong slot;
 
 	makemodule(&module, func, insn, konst);
 	check(nvvaluetuple(&arg, nil, 0) == 0, "argument tuple");
@@ -305,7 +306,9 @@ main(void)
 	check(e1->frame->reg[2].kind == Vref && e1->frame->reg[3].kind == Vpid, "make_ref and spawn return opaque values");
 	check(nvvalueequal(&e1->frame->reg[2], &e1->frame->reg[4]), "send returns sent value");
 	child = &sched.runtime.process[e1->frame->reg[3].pid.slot];
-	check(sched.cursor == e1->frame->reg[3].pid.slot, "spawned child is next in round-robin order");
+	/* D059: the child was enqueued at spawn, the parent re-enqueued behind it when its quantum ended. */
+	check(nvprocrunhead(&sched.runtime, &slot) && slot == e1->frame->reg[3].pid.slot, "spawned child is next in dispatch order");
+	check(sched.runtime.nrunnable == 2 && sched.runtime.runtail == p1.pid.slot, "yielded parent is queued behind its child");
 	check(child->head != nil && child->head->value.kind == Vref && nvvalueequal(&child->head->value, &e1->frame->reg[2]), "send copies value to spawned child mailbox");
 	nvschedfree(&sched);
 	nvvaluefree(&p1);

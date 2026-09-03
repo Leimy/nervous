@@ -127,6 +127,10 @@ fmtclauses(Biobuf *b, Clause *c, int ind)
 		indent(b, ind);
 		if(c->patterns != nil)
 			fmtexpr(b, c->patterns->expr, ind, 0);
+		if(c->guard != nil){
+			Bprint(b, " when ");
+			fmtexpr(b, c->guard, ind, 0);
+		}
 		fmtclausebody(b, c->body, ind);
 	}
 }
@@ -261,7 +265,12 @@ fmtfn(Biobuf *b, Fn *f)
 		commentsbefore(b, c->span.line, 0);
 		Bprint(b, "fn %s(", f->name);
 		fmtitems(b, c->patterns, 0);
-		Bprint(b, ") ");
+		Bprint(b, ")");
+		if(c->guard != nil){
+			Bprint(b, " when ");
+			fmtexpr(b, c->guard, 0, 0);
+		}
+		Bputc(b, ' ');
 		body = c->body;
 		if(body->kind == Eblock)
 			fmtblock(b, body, 0);

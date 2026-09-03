@@ -71,6 +71,77 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
 	r->limits = *limits;
 	r->incarnation = incarnation;
 	r->nextref = 1;
+	r->runhead = NvNoslot;
+	r->runtail = NvNoslot;
+	r->nrunnable = 0;
+	return 0;
+}
+
+/*
+ * D059: the run queue is an intrusive doubly linked FIFO threaded through
+ * the process slots by index. Every transition into Prrunnable appends
+ * (spawn, quantum yield, message wake, deadline wake) and every transition
+ * out removes (dispatch, or exit of a not-yet-dispatched process), so the
+ * queue holds exactly the Prrunnable slots and dispatch is O(1) regardless
+ * of how many processes are waiting. Links are indices, not pointers,
+ * because nvprocspawn may realloc the table.
+ */
+static void
+runenq(NvRuntime *r, ulong slot)
+{
+	NvProcess *p;
+
+	p = &r->process[slot];
+	p->runnext = NvNoslot;
+	p->runprev = r->runtail;
+	if(r->runtail == NvNoslot)
+		r->runhead = slot;
+	else
+		r->process[r->runtail].runnext = slot;
+	r->runtail = slot;
+	r->nrunnable++;
+}
+
+static void
+runrm(NvRuntime *r, ulong slot)
+{
+	NvProcess *p;
+
+	p = &r->process[slot];
+	if(p->runprev == NvNoslot)
+		r->runhead = p->runnext;
+	else
+		r->process[p->runprev].runnext = p->runnext;
+	if(p->runnext == NvNoslot)
+		r->runtail = p->runprev;
+	else
+		r->process[p->runnext].runprev = p->runprev;
+	p->runnext = NvNoslot;
+	p->runprev = NvNoslot;
+	r->nrunnable--;
+}
+
+int
+nvprocrunhead(NvRuntime *r, ulong *slot)
+{
+	if(r->runhead == NvNoslot)
+		return 0;
+	*slot = r->runhead;
+	return 1;
+}
+
+int
+nvprocwake(NvRuntime *r, ulong slot)
+{
+	NvProcess *p;
+
+	if(slot >= r->nslot)
+		return -1;
+	p = &r->process[slot];
+	if(p->state != Prwaiting)
+		return -1;
+	p->state = Prrunnable;
+	runenq(r, slot);
 	return 0;
 }
 
@@ -163,7 +234,11 @@ nvprocspawn(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	if(p->generation == 0)
 		p->generation++;
 	p->state = Prrunnable;
+	runenq(r, slot);
 	r->nlive++;
+	r->nspawned++;
+	if(r->nlive > r->maxlive)
+		r->maxlive = r->nlive;
 	nvvaluepid(pid, slot, p->generation);
 	return 0;
 }
@@ -176,6 +251,7 @@ nvprocdispatch(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
 	if(p->state != Prrunnable){ snprint(err, nerr, "bad_state"); return -1; }
+	runrm(r, pid->pid.slot);
 	p->state = Prrunning;
 	return 0;
 }
@@ -189,6 +265,7 @@ nvprocyield(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
 	if(p->state != Prrunning){ snprint(err, nerr, "bad_state"); return -1; }
 	p->state = Prrunnable;
+	runenq(r, pid->pid.slot);
 	return 0;
 }
 
@@ -212,6 +289,9 @@ nvprocexit(NvRuntime *r, NvValue *pid)
 	p = lookup(r, pid);
 	if(p == nil)
 		return 0;
+	/* D059: a process that dies before its first (or next) dispatch is still queued. */
+	if(p->state == Prrunnable)
+		runrm(r, pid->pid.slot);
 	execfree(p);
 	mailboxfree(p);
 	/*
@@ -263,8 +343,10 @@ nvprocsend(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
 	uvlong bytes;
 
 	p = lookup(r, pid);
-	if(p == nil)
+	if(p == nil){
+		r->ndropped++;
 		return 0;
+	}
 	if(valuesize(value, 1, r->limits.maxtermdepth, &bytes) < 0 || bytes > r->limits.maxmessage ||
 	   bytes > r->limits.maxmailbox || p->mailboxbytes > r->limits.maxmailbox-bytes){
 		snprint(err, nerr, "mailbox_full");
@@ -283,8 +365,9 @@ nvprocsend(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
 		p->head = m;
 	p->tail = m;
 	p->mailboxbytes += bytes;
+	r->nsent++;
 	if(p->state == Prwaiting)
-		p->state = Prrunnable;
+		nvprocwake(r, pid->pid.slot);
 	return 1;
 }
 

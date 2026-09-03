@@ -390,13 +390,15 @@ sendthenexit(void)
 }
 
 /*
- * Fairness lens: a process spawned into a slot BELOW the scheduler's
- * current cursor (because an earlier, lower-slotted process already
- * exited) must still be dispatched within one full sweep, and that
- * earlier exit must not disturb the rotation for processes already in
- * the table. This is the general case the existing schedtest.c "spawned
- * child is next in round-robin order" assertion happens not to exercise
- * (there, the child always lands exactly at parent_slot+1).
+ * Fairness lens: a process spawned into a slot BELOW every other live
+ * process (because an earlier, lower-slotted process already exited and
+ * freed that slot) must still be dispatched within one full round, and
+ * that earlier exit must not disturb the order of processes already
+ * queued. Under the original rotating slot scan this was the "spawned
+ * below the cursor" case; under the D059 FIFO run queue the property is
+ * that slot number never matters at all -- D joins at the tail behind B
+ * and C, whatever slot it reuses -- so the same fixture now checks queue
+ * order directly instead of a cursor.
  */
 static void
 belowcursorfairness(void)
@@ -416,6 +418,7 @@ belowcursorfairness(void)
 	NvValue arg, pidA, pidB, pidC, pidD;
 	char err[256];
 	int i;
+	ulong slot;
 
 	m = compilesrc("belowcursorfairness", src);
 
@@ -433,21 +436,24 @@ belowcursorfairness(void)
 	check(nvschedspawn(&sched, "idle", &arg, &pidB, err, sizeof err) == 0, "belowcursor: spawn B (idle)");
 	check(nvschedspawn(&sched, "idle", &arg, &pidC, err, sizeof err) == 0, "belowcursor: spawn C (idle)");
 
-	/* Dispatch A (slot 0): it returns immediately and is reaped, freeing slot 0. Cursor advances to 1. */
+	/* Dispatch A (slot 0, queue head): it returns immediately and is reaped, freeing slot 0. */
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1,
 		"belowcursor: A completes and frees slot 0");
-	check(sched.cursor == 1, "belowcursor: cursor has advanced past A's freed slot");
+	check(nvprocrunhead(&sched.runtime, &slot) && slot == pidB.pid.slot && sched.runtime.nrunnable == 2,
+		"belowcursor: B is now at the head with C behind it; A's exit left the queue intact");
 
 	/*
-	 * Spawning D now reuses slot 0 -- the lowest free slot -- which is
-	 * BELOW the current cursor (1).
+	 * Spawning D now reuses slot 0 -- the lowest free slot, below every
+	 * other live process. Slot number must not buy it a place in line.
 	 */
 	check(nvschedspawn(&sched, "idle", &arg, &pidD, err, sizeof err) == 0, "belowcursor: spawn D (idle)");
-	check(pidD.pid.slot == 0 && pidD.pid.slot < sched.cursor, "belowcursor: D reused slot 0, below the cursor");
+	check(pidD.pid.slot == 0 && pidD.pid.slot < pidB.pid.slot, "belowcursor: D reused slot 0, below B and C");
+	check(sched.runtime.runtail == pidD.pid.slot && sched.runtime.nrunnable == 3,
+		"belowcursor: D joined the tail of the run queue, behind B and C");
 
 	/*
-	 * One full sweep (nslot steps) must dispatch every one of B, C, D at
-	 * least once, regardless of D landing behind the cursor.
+	 * One full round (nslot steps) must dispatch every one of B, C, D at
+	 * least once, in FIFO order, regardless of D's low slot number.
 	 */
 	for(i = 0; i < (int)sched.runtime.nslot; i++)
 		check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "belowcursor: sweep step");
@@ -470,7 +476,7 @@ belowcursorfairness(void)
 	nvvaluefree(&pidD);
 	nvvaluefree(&arg);
 	nvmodulefree(m);
-	print("ok - R2: a process spawned below the scheduler cursor is dispatched within one sweep; an earlier exit does not disturb the rotation\n");
+	print("ok - R2: a process spawned into the lowest free slot joins the run queue tail and is dispatched within one round; an earlier exit does not disturb queue order\n");
 }
 
 /*
@@ -603,9 +609,88 @@ tinylimits(void)
 	print("ok - tiny: send-time term-depth ceiling (limits.maxtermdepth) is exact and distinct from the construction ceiling\n");
 }
 
+/*
+ * D060: a receive clause guard runs on the tentative bindings before the
+ * candidate is taken. A candidate whose guard fails stays in the mailbox
+ * in its original position; the scan moves on to the next candidate, and
+ * a later message can be selected ahead of it. A guard that faults (the
+ * 'a candidate under `x > 3`) is false, not a process fault.
+ */
+static void
+receiveguard(void)
+{
+	char *src =
+		"fn pick() {\n"
+		"	first = receive {\n"
+		"		${'n, x} when x > 3 => x;\n"
+		"	};\n"
+		"	receive {\n"
+		"		${'n, y} => ${first, y};\n"
+		"	}\n"
+		"}\n";
+	NvModule *m;
+	NvLimits limits;
+	NvScheduler sched;
+	NvValue arg, pid, msg, elem[2];
+	char err[256];
+	int state;
+
+	m = compilesrc("receiveguard", src);
+
+	limits.maxprocess = 2;
+	limits.maxmailbox = 4096;
+	limits.maxmessage = 1024;
+	limits.maxframe = 64;
+	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxduration = NvMaxduration;
+
+	check(nvvaluetuple(&arg, nil, 0) == 0, "recvguard: argument tuple");
+	check(nvschedinit(&sched, m, &limits, 60, 1000, err, sizeof err) == 0, err);
+	check(nvschedspawnroot(&sched, "pick", &arg, &pid, err, sizeof err) == 0, "recvguard: spawn root");
+
+	/* Queue ${'n, 1}, ${'n, 'a}, ${'n, 5} before the first dispatch. */
+	check(nvvalueatom(&elem[0], "n") == 0 && nvvalueint(&elem[1], "1") == 0, "recvguard: message 1 parts");
+	check(nvvaluetuple(&msg, elem, 2) == 0, "recvguard: message 1");
+	nvvaluefree(&elem[1]);
+	check(nvprocsend(&sched.runtime, &pid, &msg, err, sizeof err) == 1, "recvguard: queue ${'n, 1}");
+	nvvaluefree(&msg);
+	check(nvvalueatom(&elem[1], "a") == 0, "recvguard: message 2 parts");
+	check(nvvaluetuple(&msg, elem, 2) == 0, "recvguard: message 2");
+	nvvaluefree(&elem[1]);
+	check(nvprocsend(&sched.runtime, &pid, &msg, err, sizeof err) == 1, "recvguard: queue ${'n, 'a}");
+	nvvaluefree(&msg);
+	check(nvvalueint(&elem[1], "5") == 0, "recvguard: message 3 parts");
+	check(nvvaluetuple(&msg, elem, 2) == 0, "recvguard: message 3");
+	nvvaluefree(&elem[1]);
+	nvvaluefree(&elem[0]);
+	check(nvprocsend(&sched.runtime, &pid, &msg, err, sizeof err) == 1, "recvguard: queue ${'n, 5}");
+	nvvaluefree(&msg);
+
+	/*
+	 * One quantum: the guarded receive scans 1 (guard false), 'a (guard
+	 * faults badarith -> false), 5 (selected); the plain receive then
+	 * takes the oldest remaining candidate, which must still be 1.
+	 */
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone &&
+		sched.rootvalue.kind == Vtuple && sched.rootvalue.tuple->n == 2 &&
+		sched.rootvalue.tuple->elem[0].kind == Vint && sched.rootvalue.tuple->elem[0].i == 5 &&
+		sched.rootvalue.tuple->elem[1].kind == Vint && sched.rootvalue.tuple->elem[1].i == 1,
+		"recvguard: guard skips 1 and the faulting 'a, selects 5; 1 is still first in the mailbox afterwards");
+	check(sched.completed == 1 && sched.faulted == 0, "recvguard: the faulting guard did not fault the process");
+	state = nvschedstep(&sched, err, sizeof err);
+	check(state == NvSchedDone, "recvguard: scheduler done");
+
+	nvschedfree(&sched);
+	nvvaluefree(&pid);
+	nvvaluefree(&arg);
+	nvmodulefree(m);
+	print("ok - D060: a receive guard skips non-selecting and faulting candidates, leaving them queued, and selects a later one\n");
+}
+
 void
 main(void)
 {
+	receiveguard();
 	h1regression();
 	crossreceiveleak();
 	midscanappend();

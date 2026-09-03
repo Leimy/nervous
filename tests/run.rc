@@ -43,9 +43,10 @@ echo ok - scheduler-backed source execution and Ref-correlated RPC
 
 # sieve.nv recurses once per candidate in generate and once per message in
 # each filter; both are tail calls, so it must run in constant frame depth
-# rather than faulting system_limit at maxframe. 172 primes below 1024, plus
-# the root's final 'ok, is 173 lines.
-out=`{$bin -r $root/examples/sieve.nv main | wc -l} || exit source-run
+# rather than faulting system_limit at maxframe. The limit is passed as the
+# root argument so the example's own default can change freely: 172 primes
+# below 1024, plus the root's final 'ok, is 173 lines.
+out=`{$bin -r $root/examples/sieve.nv main 1023 | wc -l} || exit source-run
 if(! ~ $out 173){
 	echo FAIL: source sieve printed $out lines, expected 173 >[1=2]
 	exit source-run

@@ -83,6 +83,8 @@ golden match-format -f current-match.nv current-match.fmt
 golden if-format -f if.nv if.fmt
 golden process-format -f process.nv process.fmt
 golden timeout-format -f timeout.nv timeout.fmt
+# D060: `when` guards on function and match clauses, negative literal patterns.
+golden guard-format -f guard.nv guard.fmt
 golden comments -f comments.nv comments.fmt
 # -F reads the previous (v2) syntax and writes canonical current syntax.
 golden compat-format -F compat.nv compat.fmt

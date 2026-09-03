@@ -99,7 +99,9 @@ allocationfailures(void)
 	      /* Exercises the Orecvdeadline/Orecvwaitdeadline emit() paths under the same fault-injection sweep. */
 	      "fn timedworker(p) { receive { 'go => p; after 5 => 'late; } }\n"
 	      /* And the if lowering, including the else-less 'ok path. */
-	      "fn cond(x) { if x > 1 { 'big } else if x > 0 { 'one } else { 'none } }\nfn cond2(x) { if x { 1 } }\n";
+	      "fn cond(x) { if x > 1 { 'big } else if x > 0 { 'one } else { 'none } }\nfn cond2(x) { if x { 1 } }\n"
+	      /* And the unary/logical lowerings (compileunary, compilelogical, boolcopy). */
+	      "fn logic(a, b) { ${not a and b or a, -b, +b, -1} }\n";
 	p = parseprogram(&parser, "allocation-failure-test", src, strlen(src));
 	if(p == nil)
 		fail(parser.err);
@@ -287,8 +289,141 @@ main(void)
 	print("ok - duplicate function rejected\n");
 	compilefails("fn main() { missing() }\n", "undefined function missing");
 	print("ok - unresolved call rejected\n");
-	compilefails("fn main() { -1 }\n", "unary operator not yet supported by compiler");
-	print("ok - unsupported construct rejected\n");
+	/*
+	 * D016/D014: unary -, +, not; and/or short-circuit; all boolean forms
+	 * require 'true/'false. The shared argument tuple was freed by the
+	 * clause-failure test above; every run() here needs a live empty tuple.
+	 */
+	emptytuple(&arg);
+	r = run("fn main() { -1 }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vint || result.i != -1)
+		fail(r < 0 ? err : "negative literal folds to a constant");
+	nvvaluefree(&result);
+	r = run("fn main() { x = 5; ${-x, +x, - -x, 3 - -x} }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 4 ||
+	   result.tuple->elem[0].i != -5 || result.tuple->elem[1].i != 5 ||
+	   result.tuple->elem[2].i != 5 || result.tuple->elem[3].i != 8)
+		fail(r < 0 ? err : "unary minus and plus on variables");
+	nvvaluefree(&result);
+	r = run("fn main() { -'a }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "badarith") != 0)
+		fail(r == -2 ? err : "unary minus on a non-integer must fault badarith");
+	r = run("fn main() { ${'true and 'false, 'true and 'true, 'false or 'false, 'false or 'true, not 'true, not 'false} }\n",
+		"main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 6 ||
+	   strcmp(result.tuple->elem[0].atom, "false") != 0 || strcmp(result.tuple->elem[1].atom, "true") != 0 ||
+	   strcmp(result.tuple->elem[2].atom, "false") != 0 || strcmp(result.tuple->elem[3].atom, "true") != 0 ||
+	   strcmp(result.tuple->elem[4].atom, "false") != 0 || strcmp(result.tuple->elem[5].atom, "true") != 0)
+		fail(r < 0 ? err : "and/or/not truth table");
+	nvvaluefree(&result);
+	/* The right operand is not evaluated when the left decides: boom() would fault divide_by_zero. */
+	r = run("fn boom() { 1 / 0 }\nfn main() { ${'false and boom() == 1, 'true or boom() == 1} }\n",
+		"main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 2 ||
+	   strcmp(result.tuple->elem[0].atom, "false") != 0 || strcmp(result.tuple->elem[1].atom, "true") != 0)
+		fail(r < 0 ? err : "and/or short-circuit");
+	nvvaluefree(&result);
+	r = run("fn main() { 1 < 2 and 2 < 3 or 'false }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "true") != 0)
+		fail(r < 0 ? err : "comparison binds tighter than and, and tighter than or");
+	nvvaluefree(&result);
+	r = run("fn main() { 1 and 'true }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "match_fail") != 0)
+		fail(r == -2 ? err : "non-boolean left operand of and must fault match_fail");
+	r = run("fn main() { 'true and 1 }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "match_fail") != 0)
+		fail(r == -2 ? err : "non-boolean right operand of and must fault match_fail");
+	r = run("fn main() { 'false or 'maybe }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "match_fail") != 0)
+		fail(r == -2 ? err : "non-boolean right operand of or must fault match_fail");
+	r = run("fn main() { not 0 }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "match_fail") != 0)
+		fail(r == -2 ? err : "not on a non-boolean must fault match_fail");
+	r = run("fn main() { 'true and { y = 'true; y }; y }\n", "main", &arg, &result, err, sizeof err);
+	if(r != -2 || strstr(err, "unbound variable") == nil)
+		fail("a binding inside a short-circuit operand must not escape it");
+	nvvaluefree(&arg);
+	print("ok - unary operators, short-circuit and/or, and boolean strictness\n");
+
+	/* D060: guards on function and match clauses; fault or non-boolean means the clause fails. */
+	emptytuple(&arg);
+	r = run("fn sign(x) when x > 0 { 1 }\nfn sign(x) when x < 0 { -1 }\nfn sign(_) { 0 }\n"
+	        "fn main() { ${sign(5), sign(-3), sign(0)} }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
+	   result.tuple->elem[0].i != 1 || result.tuple->elem[1].i != -1 || result.tuple->elem[2].i != 0)
+		fail(r < 0 ? err : "function clause guards select in source order");
+	nvvaluefree(&result);
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 'other }\nfn main() { f('a) }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "other") != 0)
+		fail(r < 0 ? err : "a guard that faults badarith is false, not a process fault");
+	nvvaluefree(&result);
+	r = run("fn d(x) when 10 / x > 1 { 'big }\nfn d(_) { 'small }\nfn main() { d(0) }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "small") != 0)
+		fail(r < 0 ? err : "a guard that faults divide_by_zero is false");
+	nvvaluefree(&result);
+	r = run("fn g(x) when x { 'yes }\nfn g(_) { 'no }\nfn main() { ${g('true), g(5), g('false)} }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
+	   strcmp(result.tuple->elem[0].atom, "yes") != 0 || strcmp(result.tuple->elem[1].atom, "no") != 0 ||
+	   strcmp(result.tuple->elem[2].atom, "no") != 0)
+		fail(r < 0 ? err : "a non-boolean guard value is false");
+	nvvaluefree(&result);
+	r = run("fn h(x) when is_int(x) and x > 0 { 'pos }\nfn h(_) { 'neg }\nfn main() { ${h(3), h('a), h(-1)} }\n",
+		"main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
+	   strcmp(result.tuple->elem[0].atom, "pos") != 0 || strcmp(result.tuple->elem[1].atom, "neg") != 0 ||
+	   strcmp(result.tuple->elem[2].atom, "neg") != 0)
+		fail(r < 0 ? err : "type test guarding a comparison");
+	nvvaluefree(&result);
+	r = run("fn kind(x) when is_int(x) { 'int }\nfn kind(x) when is_atom(x) { 'atom }\nfn kind(x) when is_tuple(x) { 'tuple }\n"
+	        "fn main() { ${kind(1), kind('a), kind(${}), is_pid(1), is_ref('a), is_tuple(${1})} }\n",
+		"main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 6 ||
+	   strcmp(result.tuple->elem[0].atom, "int") != 0 || strcmp(result.tuple->elem[1].atom, "atom") != 0 ||
+	   strcmp(result.tuple->elem[2].atom, "tuple") != 0 || strcmp(result.tuple->elem[3].atom, "false") != 0 ||
+	   strcmp(result.tuple->elem[4].atom, "false") != 0 || strcmp(result.tuple->elem[5].atom, "true") != 0)
+		fail(r < 0 ? err : "type tests as guards and as ordinary expressions");
+	nvvaluefree(&result);
+	r = run("fn main() { match 7 { n when n % 2 == 0 => 'even; n when n % 2 == 1 => 'odd; } }\n", "main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "odd") != 0)
+		fail(r < 0 ? err : "match clause guards");
+	nvvaluefree(&result);
+	r = run("fn e(x) when x > 100 { 'big }\nfn main() { e(1) }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "function_clause") != 0)
+		fail(r == -2 ? err : "guards failing every clause is function_clause");
+	r = run("fn main() { match 1 { n when n > 5 => 'big; } }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "match_fail") != 0)
+		fail(r == -2 ? err : "guards failing every match clause is match_fail");
+	/* Guard mode must be off again after a failed guard: a fault in the next clause's body is a real fault. */
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(x) { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
+		fail(r == -2 ? err : "a fault after a failed guard is an ordinary process fault");
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 1 / 0 }\nfn main() { f('a) }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
+		fail(r == -2 ? err : "a fault after a guard that itself faulted is an ordinary process fault");
+	r = run("fn f(x) when x > 0 { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "function_clause") != 0)
+		fail(r == -2 ? err : "guard failure on 0 > 0 reaches function_clause, not the body");
+	r = run("fn f(x) when x == 0 { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
+		fail(r == -2 ? err : "a fault in the body of a clause whose guard passed is a real fault");
+	/* Negative literal patterns. */
+	r = run("fn n(-1) { 'minus }\nfn n(_) { 'other }\nfn main() { ${n(-1), n(1), match -5 { -5 => 'five; _ => 'no; }} }\n",
+		"main", &arg, &result, err, sizeof err);
+	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
+	   strcmp(result.tuple->elem[0].atom, "minus") != 0 || strcmp(result.tuple->elem[1].atom, "other") != 0 ||
+	   strcmp(result.tuple->elem[2].atom, "five") != 0)
+		fail(r < 0 ? err : "negative integer literal patterns");
+	nvvaluefree(&result);
+	nvvaluefree(&arg);
+	/* Guard expression restrictions and reserved type-test names. */
+	compilefails("fn g(_) { 'true }\nfn f(x) when g(x) { 1 }\n", "only type tests may be called in a guard");
+	compilefails("fn f(x) when { x } { 1 }\n", "expression not allowed in a guard");
+	compilefails("fn f(x) when y = x { 1 }\n", "expression not allowed in a guard");
+	compilefails("fn f(x) when self == x { 1 }\n", "expression not allowed in a guard");
+	compilefails("fn f(x) when print(x) { 1 }\n", "only type tests may be called in a guard");
+	compilefails("fn f(x) when is_int(x, x) { 1 }\n", "type test expects one value");
+	compilefails("fn is_int(_) { 1 }\n", "reserved intrinsic is_int");
+	print("ok - guards: selection, fault-means-false, type tests, restrictions, negative literal patterns\n");
 	registerpressure();
 	print("ok - register pressure rejected\n");
 

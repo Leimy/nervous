@@ -183,9 +183,9 @@ static int
 noperand(int op)
 {
 	switch(op){
-	case Onop: case Orecvtake: return 0;
+	case Onop: case Orecvtake: case Oguardend: return 0;
 	case Ojump: case Oreturn: case Ofail: case Oself: case Omakeref:
-	case Orecvwait: case Oexit:
+	case Orecvwait: case Oexit: case Oguard:
 	case Orecvdeadline: case Orecvwaitdeadline: return 1;
 	case Oloadk: case Omove: case Otailcall: case Orecvbegin: case Orecvnext:
 	case Oprint: case Oeprint: return 2;
@@ -193,7 +193,7 @@ noperand(int op)
 	case Otesteq: case Otestarity: case Ogetelem:
 	case Oadd: case Osub: case Omul: case Odiv: case Orem:
 	case Olt: case Ole: case Ogt: case Oge:
-	case Osend: case Ospawn: return 3;
+	case Osend: case Ospawn: case Oistype: return 3;
 	}
 	return -1;
 }

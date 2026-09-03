@@ -12,6 +12,7 @@ static char *opnames[] = {
 	"recvbegin", "recvnext", "recvtake", "recvwait", "exit",
 	"recvdeadline", "recvwaitdeadline",
 	"print", "eprint",
+	"guard", "guardend", "istype",
 };
 
 char *
@@ -47,13 +48,13 @@ putinsn(Biobuf *b, int pc, NvInsn *i)
 	switch(i->op){
 	case Oloadk: case Omove: case Ojump: case Oreturn: case Ofail:
 	case Oself: case Omakeref: case Orecvwait: case Oexit:
-	case Orecvdeadline: case Orecvwaitdeadline:
+	case Orecvdeadline: case Orecvwaitdeadline: case Oguard:
 		Bprint(b, " %d", i->a);
 		if(i->op == Oloadk || i->op == Omove)
 			Bprint(b, " %d", i->b);
 		break;
 	case Otuple: case Ocall: case Otestatom: case Otestint:
-	case Osend: case Ospawn:
+	case Osend: case Ospawn: case Oistype:
 		Bprint(b, " %d %d %d", i->a, i->b, i->c);
 		break;
 	case Otailcall: case Orecvbegin: case Orecvnext: case Oprint: case Oeprint:
@@ -64,7 +65,7 @@ putinsn(Biobuf *b, int pc, NvInsn *i)
 	case Olt: case Ole: case Ogt: case Oge:
 		Bprint(b, " %d %d %d", i->a, i->b, i->c);
 		break;
-	case Onop: case Orecvtake:
+	case Onop: case Orecvtake: case Oguardend:
 		break;
 	}
 	Bputc(b, '\n');
