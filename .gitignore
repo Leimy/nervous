@@ -1,0 +1,13 @@
+# Plan 9 object files: the suffix is the architecture character (8=386, 6=amd64, 5=arm, 7=arm64, ...).
+*.[0125678vqtk]
+# Built command and test binaries; rebuild with mk / mk tests.
+/nervous
+/tests/pattern/ptest
+/tests/pattern/parsetest
+/tests/pattern/bctest
+/tests/pattern/compiletest
+/tests/process/ptest
+/tests/process/exectest
+/tests/process/schedtest
+/tests/process/iotest
+/tests/process/r2test

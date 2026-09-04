@@ -1,16 +1,22 @@
-typedef struct NvValue NvValue;
 typedef struct NvPatClause NvPatClause;
 typedef struct NvBindings NvBindings;
 typedef struct NvLimits NvLimits;
-typedef struct NvMessage NvMessage;
 typedef struct NvProcess NvProcess;
 typedef struct NvRuntime NvRuntime;
 typedef struct NvExec NvExec;
 
+/*
+ * D066: maxmailbox and maxmessage are word counts of fragments including
+ * their root word (nvfragwords), checked all-or-nothing during the D064
+ * copy. maxheap is the per-process word budget (heap in use plus adopted
+ * fragments plus, in stage 3, the frame stack); 0 means unlimited until
+ * stage 3 makes it exact.
+ */
 struct NvLimits {
-	ulong maxprocess;
+	ulong maxprocess;	/* may not exceed NvMaxslot+1 (D061) */
 	uvlong maxmailbox;
 	uvlong maxmessage;
+	uvlong maxheap;
 	ulong maxframe;
 	ulong maxtermdepth;
 	/*
@@ -25,12 +31,12 @@ struct NvLimits {
 	 * drive-by fix inside the R2 review.
 	 */
 	vlong maxduration;
-};
-
-struct NvMessage {
-	NvValue value;
-	uvlong bytes;
-	NvMessage *next;
+	/*
+	 * D062: the interned atom table's maximum size, installed into the
+	 * process-wide table by nvruntimeinit via nvatomlimit. Validated
+	 * non-zero like the other limits above.
+	 */
+	ulong maxatom;
 };
 
 enum {
@@ -45,15 +51,20 @@ enum {
 /* Run-queue link value meaning "no slot" (D059). */
 #define NvNoslot (~0UL)
 
+/*
+ * D064: the mailbox is a chain of fragments; the fragment is the message.
+ * scan/scanprev point at fragments, which never move, so a receive scan
+ * may span quanta.
+ */
 struct NvProcess {
 	ulong generation;
 	int state;
-	NvMessage *head;
-	NvMessage *tail;
-	NvMessage *scanprev;
-	NvMessage *scan;
+	NvFrag *head;
+	NvFrag *tail;
+	NvFrag *scanprev;
+	NvFrag *scan;
 	int scanning;
-	uvlong mailboxbytes;
+	uvlong mailboxwords;
 	/*
 	 * D050: a waiting process owns its own deadline. There is no timer
 	 * object, queue, or token, so a deadline cannot outlive its slot,
@@ -92,11 +103,11 @@ struct NvRuntime {
 
 int nvruntimeinit(NvRuntime *, NvLimits *, uvlong, char *, int);
 void nvruntimefree(NvRuntime *);
-int nvprocspawn(NvRuntime *, NvValue *, char *, int);
-int nvprocdispatch(NvRuntime *, NvValue *, char *, int);
-int nvprocyield(NvRuntime *, NvValue *, char *, int);
-int nvprocwait(NvRuntime *, NvValue *, char *, int);
-int nvprocexit(NvRuntime *, NvValue *);
+int nvprocspawn(NvRuntime *, NvTerm *pid, char *, int);
+int nvprocdispatch(NvRuntime *, NvTerm pid, char *, int);
+int nvprocyield(NvRuntime *, NvTerm pid, char *, int);
+int nvprocwait(NvRuntime *, NvTerm pid, char *, int);
+int nvprocexit(NvRuntime *, NvTerm pid);
 /*
  * D059: run-queue access for the scheduler. nvprocrunhead reports the
  * slot that has been runnable longest without removing it (dispatch
@@ -106,14 +117,26 @@ int nvprocexit(NvRuntime *, NvValue *);
  */
 int nvprocrunhead(NvRuntime *, ulong *);
 int nvprocwake(NvRuntime *, ulong);
-int nvprocalive(NvRuntime *, NvValue *);
-int nvprocref(NvRuntime *, NvValue *, char *, int);
-int nvprocsend(NvRuntime *, NvValue *, NvValue *, char *, int);
-int nvprocpop(NvRuntime *, NvValue *, NvValue *, char *, int);
-int nvprocrecvbegin(NvRuntime *, NvValue *, NvValue *, char *, int);
-int nvprocrecvnext(NvRuntime *, NvValue *, NvValue *, char *, int);
-int nvprocrecvtake(NvRuntime *, NvValue *, char *, int);
-int nvprocrecvwait(NvRuntime *, NvValue *, char *, int);
+int nvprocalive(NvRuntime *, NvTerm pid);
+/* nvprocref allocates the new ref in the given heap (the calling process's). */
+int nvprocref(NvRuntime *, NvHeap *, NvTerm *ref, char *, int);
+/*
+ * D064 message boundary. nvprocsend copies value once into a fragment
+ * owned by the destination mailbox: 1 enqueued, 0 dropped (dead PID,
+ * nothing copied), -1 with mailbox_full (word or depth limits, or an
+ * NvNil value) or system_limit (allocation failure). nvprocpop and
+ * nvprocreceive hand the removed fragment to the caller, who owns it.
+ * nvprocrecvbegin/nvprocrecvnext set *value to a term pointing into the
+ * candidate fragment, which stays valid while the fragment is queued or
+ * adopted. nvprocrecvtake unlinks the selected fragment and returns it
+ * through *taken for the caller to adopt (nvheapadopt) or free.
+ */
+int nvprocsend(NvRuntime *, NvTerm pid, NvTerm value, char *, int);
+int nvprocpop(NvRuntime *, NvTerm pid, NvFrag **msg, char *, int);
+int nvprocrecvbegin(NvRuntime *, NvTerm pid, NvTerm *value, char *, int);
+int nvprocrecvnext(NvRuntime *, NvTerm pid, NvTerm *value, char *, int);
+int nvprocrecvtake(NvRuntime *, NvTerm pid, NvFrag **taken, char *, int);
+int nvprocrecvwait(NvRuntime *, NvTerm pid, char *, int);
 /*
  * D050/D051: nvprocarmdeadline validates and arms one absolute deadline
  * from a duration term at the given clock reading, or leaves no deadline
@@ -125,6 +148,6 @@ int nvprocrecvwait(NvRuntime *, NvValue *, char *, int);
  * function takes a clock pointer; "now" is supplied by the caller, which
  * owns the installed NvClock (see nvsched.h).
  */
-int nvprocarmdeadline(NvRuntime *, NvValue *, NvValue *, uvlong, char *, int);
-int nvprocrecvwaitdeadline(NvRuntime *, NvValue *, uvlong, char *, int);
-int nvprocreceive(NvRuntime *, NvValue *, NvPatClause *, int, NvBindings *, int *, NvValue *, char *, int);
+int nvprocarmdeadline(NvRuntime *, NvTerm pid, NvTerm duration, uvlong, char *, int);
+int nvprocrecvwaitdeadline(NvRuntime *, NvTerm pid, uvlong, char *, int);
+int nvprocreceive(NvRuntime *, NvTerm pid, NvPatClause *, int, NvBindings *, int *, NvFrag **msg, char *, int);

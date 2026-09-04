@@ -21,6 +21,9 @@ check(int ok, char *s)
 		fail(s);
 }
 
+/* D065: register n of the executing frame, read directly from the frame stack. */
+#define REG(e, n) ((e)->stack[(e)->fp + NvFramehdr + (n)])
+
 static void
 makemodule(NvModule *m, NvFunc *f, NvInsn *insn, NvConst *k)
 {
@@ -277,7 +280,8 @@ main(void)
 	NvConst konst[11];
 	NvLimits limits;
 	NvScheduler sched;
-	NvValue arg, p1, p2, msg, pid[8];
+	static NvHeap hostheap;
+	NvTerm arg, p1, p2, msg, pid[8];
 	NvExec *e1, *e2;
 	NvProcess *parent, *child;
 	Testclock tc;
@@ -286,154 +290,142 @@ main(void)
 	int i, state;
 	ulong slot;
 
+	nvheapinit(&hostheap, 0);
 	makemodule(&module, func, insn, konst);
-	check(nvvaluetuple(&arg, nil, 0) == 0, "argument tuple");
+	arg = nvtuple(&hostheap, nil, 0);
+	check(nvtermkind(arg) == Vtuple, "argument tuple");
 	limits.maxprocess = 16;
 	limits.maxmailbox = 4096;
 	limits.maxmessage = 1024;
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxheap = 0;
+	limits.maxatom = 65536;
 
 	insn[0].a = 99;
 	check(nvschedinit(&sched, &module, &limits, 1, 1, err, sizeof err) < 0, "scheduler rejects invalid module");
 	insn[0].a = 0;
 	check(nvschedinit(&sched, &module, &limits, 1, 4, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "process", &arg, &p1, err, sizeof err) == 0, "spawn process-op parent");
+	check(nvschedspawn(&sched, "process", arg, &p1, err, sizeof err) == 0, "spawn process-op parent");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "run process operations");
-	parent = &sched.runtime.process[p1.pid.slot];
+	parent = &sched.runtime.process[nvpidslot(p1)];
 	e1 = parent->exec;
-	check(e1->frame->reg[1].kind == Vpid && nvvalueequal(&e1->frame->reg[1], &p1), "self returns current pid");
-	check(e1->frame->reg[2].kind == Vref && e1->frame->reg[3].kind == Vpid, "make_ref and spawn return opaque values");
-	check(nvvalueequal(&e1->frame->reg[2], &e1->frame->reg[4]), "send returns sent value");
-	child = &sched.runtime.process[e1->frame->reg[3].pid.slot];
+	check(nvtermkind(REG(e1, 1)) == Vpid && nvtermequal(REG(e1, 1), p1) == 1, "self returns current pid");
+	check(nvtermkind(REG(e1, 2)) == Vref && nvtermkind(REG(e1, 3)) == Vpid, "make_ref and spawn return opaque values");
+	check(nvtermequal(REG(e1, 2), REG(e1, 4)) == 1, "send returns sent value");
+	child = &sched.runtime.process[nvpidslot(REG(e1, 3))];
 	/* D059: the child was enqueued at spawn, the parent re-enqueued behind it when its quantum ended. */
-	check(nvprocrunhead(&sched.runtime, &slot) && slot == e1->frame->reg[3].pid.slot, "spawned child is next in dispatch order");
-	check(sched.runtime.nrunnable == 2 && sched.runtime.runtail == p1.pid.slot, "yielded parent is queued behind its child");
-	check(child->head != nil && child->head->value.kind == Vref && nvvalueequal(&child->head->value, &e1->frame->reg[2]), "send copies value to spawned child mailbox");
+	check(nvprocrunhead(&sched.runtime, &slot) && slot == nvpidslot(REG(e1, 3)), "spawned child is next in dispatch order");
+	check(sched.runtime.nrunnable == 2 && sched.runtime.runtail == nvpidslot(p1), "yielded parent is queued behind its child");
+	check(child->head != nil && nvtermkind(child->head->root) == Vref && nvtermequal(child->head->root, REG(e1, 2)) == 1, "send copies value to spawned child mailbox");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - process opcodes use scheduler host context\n");
 
 	check(nvschedinit(&sched, &module, &limits, 4, 20, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "receiver", &arg, &p1, err, sizeof err) == 0, "spawn receiver");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting, "empty receive blocks");
+	check(nvschedspawn(&sched, "receiver", arg, &p1, err, sizeof err) == 0, "spawn receiver");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting, "empty receive blocks");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedIdle, "waiting receiver makes scheduler idle");
-	memset(&msg, 0, sizeof msg);
-	msg.valid = 1;
-	msg.kind = Vint;
-	msg.i = 7;
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "wake with unmatched message");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting, "unmatched message rescans then blocks");
-	check(sched.runtime.process[p1.pid.slot].head != nil && sched.runtime.process[p1.pid.slot].head->value.kind == Vint, "unmatched message remains queued");
-	check(nvvalueatom(&msg, "take") == 0, "matching message");
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "wake with matching message");
-	nvvaluefree(&msg);
+	msg = nvint(nil, 7);
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "wake with unmatched message");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting, "unmatched message rescans then blocks");
+	check(sched.runtime.process[nvpidslot(p1)].head != nil && nvtermkind(sched.runtime.process[nvpidslot(p1)].head->root) == Vint, "unmatched message remains queued");
+	msg = nvatom("take");
+	check(nvtermkind(msg) == Vatom, "matching message");
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "wake with matching message");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1, "matching receive takes message and completes");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "receiver scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - receive bytecode blocks, rescans, preserves, and takes\n");
 
 	for(i = 1; i <= 4; i++){
 		check(nvschedinit(&sched, &module, &limits, 10+i, i, err, sizeof err) == 0, err);
-		check(nvschedspawn(&sched, "receiver", &arg, &p1, err, sizeof err) == 0, "spawn quantum-sweep receiver");
-		check(nvvalueatom(&msg, "take") == 0, "quantum-sweep message");
-		check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "queue quantum-sweep message");
-		nvvaluefree(&msg);
+		check(nvschedspawn(&sched, "receiver", arg, &p1, err, sizeof err) == 0, "spawn quantum-sweep receiver");
+		msg = nvatom("take");
+		check(nvtermkind(msg) == Vatom, "quantum-sweep message");
+		check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "queue quantum-sweep message");
 		state = NvSchedProgress;
 		while(state == NvSchedProgress)
 			state = nvschedstep(&sched, err, sizeof err);
 		check(state == NvSchedDone && sched.completed == 1, "receive result depends on quantum");
 		nvschedfree(&sched);
-		nvvaluefree(&p1);
 	}
 	print("ok - receive outcome is independent of quanta one through four\n");
 
 	check(nvschedinit(&sched, &module, &limits, 9, 1, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "receiver", &arg, &p1, err, sizeof err) == 0, "spawn quantum-one receiver");
+	check(nvschedspawn(&sched, "receiver", arg, &p1, err, sizeof err) == 0, "spawn quantum-one receiver");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "suspend exhausted scan before wait");
-	check(nvvalueatom(&msg, "take") == 0, "quantum-boundary message");
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "send during suspended scan");
-	nvvaluefree(&msg);
+	msg = nvatom("take");
+	check(nvtermkind(msg) == Vatom, "quantum-boundary message");
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "send during suspended scan");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "advance suspended scan to wait");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prrunnable, "message appended after exhaustion prevents sleep");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prrunnable, "message appended after exhaustion prevents sleep");
 	state = NvSchedProgress;
 	for(i = 0; i < 8 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
 	check(state == NvSchedDone && sched.completed == 1, "quantum-one receiver consumes appended message");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - receive wakeup is safe across quantum boundary\n");
 
 	check(nvschedinit(&sched, &module, &limits, 5, 10, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "exiter", &arg, &p1, err, sizeof err) == 0, "spawn explicit exiter");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.exited == 1 && sched.lastexit.kind == Vatom && strcmp(sched.lastexit.atom, "boom") == 0, "explicit exit preserves term reason");
+	check(nvschedspawn(&sched, "exiter", arg, &p1, err, sizeof err) == 0, "spawn explicit exiter");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.exited == 1 && sched.lastexit != nil &&
+		nvtermkind(sched.lastexit->root) == Vatom && strcmp(nvtermatom(sched.lastexit->root), "boom") == 0,
+		"explicit exit preserves term reason");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "explicit exit scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - explicit exit transfers arbitrary term reason\n");
 
 	check(nvschedinit(&sched, &module, &limits, 6, 10, err, sizeof err) == 0, err);
-	check(nvschedspawnroot(&sched, "done", &arg, &p1, err, sizeof err) == 0, "spawn root");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone && sched.rootvalue.kind == Vint && sched.rootvalue.i == 42, "root return value retained after reap");
+	check(nvschedspawnroot(&sched, "done", arg, &p1, err, sizeof err) == 0, "spawn root");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone && sched.rootvalue != nil &&
+		nvtermkind(sched.rootvalue->root) == Vint && nvtermint(sched.rootvalue->root) == 42, "root return value retained after reap");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "root return scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	check(nvschedinit(&sched, &module, &limits, 7, 10, err, sizeof err) == 0, err);
-	check(nvschedspawnroot(&sched, "boom", &arg, &p1, err, sizeof err) == 0, "spawn faulting root");
+	check(nvschedspawnroot(&sched, "boom", arg, &p1, err, sizeof err) == 0, "spawn faulting root");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootFault && strcmp(sched.rootfault, "boom") == 0, "root fault retained after reap");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	check(nvschedinit(&sched, &module, &limits, 8, 10, err, sizeof err) == 0, err);
-	check(nvschedspawnroot(&sched, "exiter", &arg, &p1, err, sizeof err) == 0, "spawn exiting root");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootExit && sched.rootvalue.kind == Vatom && strcmp(sched.rootvalue.atom, "boom") == 0, "root exit reason retained after reap");
+	check(nvschedspawnroot(&sched, "exiter", arg, &p1, err, sizeof err) == 0, "spawn exiting root");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootExit && sched.rootvalue != nil &&
+		nvtermkind(sched.rootvalue->root) == Vatom && strcmp(nvtermatom(sched.rootvalue->root), "boom") == 0,
+		"root exit reason retained after reap");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - root outcomes survive process reaping\n");
 
 	check(nvschedinit(&sched, &module, &limits, 1, 1, err, sizeof err) == 0, err);
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "empty scheduler is done");
-	check(nvschedspawn(&sched, "loop", &arg, &p1, err, sizeof err) == 0, "spawn loop one");
-	check(nvschedspawn(&sched, "loop", &arg, &p2, err, sizeof err) == 0, "spawn loop two");
-	e1 = sched.runtime.process[p1.pid.slot].exec;
-	e2 = sched.runtime.process[p2.pid.slot].exec;
+	check(nvschedspawn(&sched, "loop", arg, &p1, err, sizeof err) == 0, "spawn loop one");
+	check(nvschedspawn(&sched, "loop", arg, &p2, err, sizeof err) == 0, "spawn loop two");
+	e1 = sched.runtime.process[nvpidslot(p1)].exec;
+	e2 = sched.runtime.process[nvpidslot(p2)].exec;
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && e1->reductions == 1 && e2->reductions == 0, "first process receives first quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && e1->reductions == 1 && e2->reductions == 1, "second process receives second quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && e1->reductions == 2 && e2->reductions == 1, "round robin returns to first process");
-	check(sched.runtime.process[p1.pid.slot].state == Prrunnable && sched.runtime.process[p2.pid.slot].state == Prrunnable, "yielded processes remain runnable");
+	check(sched.runtime.process[nvpidslot(p1)].state == Prrunnable && sched.runtime.process[nvpidslot(p2)].state == Prrunnable, "yielded processes remain runnable");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
-	nvvaluefree(&p2);
 	print("ok - deterministic round-robin quanta\n");
 
 	check(nvschedinit(&sched, &module, &limits, 2, 1, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "done", &arg, &p1, err, sizeof err) == 0, "spawn finite process");
-	check(nvschedspawn(&sched, "boom", &arg, &p2, err, sizeof err) == 0, "spawn faulting process");
+	check(nvschedspawn(&sched, "done", arg, &p1, err, sizeof err) == 0, "spawn finite process");
+	check(nvschedspawn(&sched, "boom", arg, &p2, err, sizeof err) == 0, "spawn faulting process");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "finite first quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "fault process quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "finite completion quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "scheduler completes after exits");
 	check(sched.completed == 1 && sched.faulted == 1 && strcmp(sched.lastfault, "boom") == 0 && sched.dispatches == 3, "completion and fault accounting");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
-	nvvaluefree(&p2);
 	print("ok - completion and faults exit processes\n");
 
 	check(nvschedinit(&sched, &module, &limits, 3, 1, err, sizeof err) == 0, err);
 	for(i = 0; i < nelem(pid); i++)
-		check(nvschedspawn(&sched, "done", &arg, &pid[i], err, sizeof err) == 0, "spawn progress process");
+		check(nvschedspawn(&sched, "done", arg, &pid[i], err, sizeof err) == 0, "spawn progress process");
 	state = NvSchedProgress;
 	for(i = 0; i < 32 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
 	check(state == NvSchedDone && sched.completed == nelem(pid) && sched.dispatches == 2*nelem(pid), "many finite processes make progress");
-	for(i = 0; i < nelem(pid); i++)
-		nvvaluefree(&pid[i]);
 	nvschedfree(&sched);
-	nvvaluefree(&arg);
 	print("ok - many scheduled processes make progress\n");
-
-	/* The previous test freed the shared argument tuple; the deadline tests below need it again. */
-	check(nvvaluetuple(&arg, nil, 0) == 0, "re-create argument tuple for deadline tests");
 
 	/* D050: an idle scheduler with an armed deadline advances the clock and wakes; no message ever arrives. */
 	memset(&tc, 0, sizeof tc);
@@ -443,21 +435,20 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 20, 10, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawnroot(&sched, "timedreceiver", &arg, &p1, err, sizeof err) == 0, "spawn timed root");
-	check(nvvalueatom(&msg, "other") == 0, "unrelated unmatched message");
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "queue an unmatched message before any dispatch");
-	nvvaluefree(&msg);
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting, "timed receive arms, rescans past the unmatched message, and blocks");
-	check(sched.runtime.process[p1.pid.slot].hasdeadline && sched.runtime.process[p1.pid.slot].deadline == 1005, "deadline armed from installed clock");
+	check(nvschedspawnroot(&sched, "timedreceiver", arg, &p1, err, sizeof err) == 0, "spawn timed root");
+	msg = nvatom("other");
+	check(nvtermkind(msg) == Vatom, "unrelated unmatched message");
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "queue an unmatched message before any dispatch");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting, "timed receive arms, rescans past the unmatched message, and blocks");
+	check(sched.runtime.process[nvpidslot(p1)].hasdeadline && sched.runtime.process[nvpidslot(p1)].deadline == 1005, "deadline armed from installed clock");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 1005, "idle scheduler advances clock to the earliest deadline instead of polling");
-	check(sched.runtime.process[p1.pid.slot].head != nil && sched.runtime.process[p1.pid.slot].head->value.kind == Vatom &&
-		strcmp(sched.runtime.process[p1.pid.slot].head->value.atom, "other") == 0,
+	check(sched.runtime.process[nvpidslot(p1)].head != nil && nvtermkind(sched.runtime.process[nvpidslot(p1)].head->root) == Vatom &&
+		strcmp(nvtermatom(sched.runtime.process[nvpidslot(p1)].head->root), "other") == 0,
 		"the unmatched message survives the timer wakeup, still queued, right before the timeout body runs");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone &&
-		sched.rootvalue.kind == Vatom && strcmp(sched.rootvalue.atom, "timedout") == 0, "expired deadline runs the timeout body");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone && sched.rootvalue != nil &&
+		nvtermkind(sched.rootvalue->root) == Vatom && strcmp(nvtermatom(sched.rootvalue->root), "timedout") == 0, "expired deadline runs the timeout body");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "timed root scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - idle scheduler waits for an armed deadline, preserves an unmatched message, and runs the timeout body\n");
 
 	/* D048: a message that arrives after a purely timer-driven wakeup, but before the rescan, still wins. */
@@ -468,23 +459,22 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 21, 1, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawnroot(&sched, "timedreceiver", &arg, &p1, err, sizeof err) == 0, "spawn timed root for race test");
+	check(nvschedspawnroot(&sched, "timedreceiver", arg, &p1, err, sizeof err) == 0, "spawn timed root for race test");
 	for(i = 0; i < 5; i++)
 		check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "single-step to blocked timed receive");
-	check(sched.runtime.process[p1.pid.slot].state == Prwaiting && tc.now == 2000, "blocked before any clock advance");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 2005 && sched.runtime.process[p1.pid.slot].state == Prrunnable,
+	check(sched.runtime.process[nvpidslot(p1)].state == Prwaiting && tc.now == 2000, "blocked before any clock advance");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 2005 && sched.runtime.process[nvpidslot(p1)].state == Prrunnable,
 		"idle step wakes the process purely from an expired timer");
-	check(nvvalueatom(&msg, "take") == 0, "race message");
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "message queued after the timer wakeup, before the rescan");
-	nvvaluefree(&msg);
+	msg = nvatom("take");
+	check(nvtermkind(msg) == Vatom, "race message");
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "message queued after the timer wakeup, before the rescan");
 	state = NvSchedProgress;
 	for(i = 0; i < 8 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
-	check(state == NvSchedDone && sched.rootstate == NvRootDone &&
-		sched.rootvalue.kind == Vatom && strcmp(sched.rootvalue.atom, "take") == 0,
+	check(state == NvSchedDone && sched.rootstate == NvRootDone && sched.rootvalue != nil &&
+		nvtermkind(sched.rootvalue->root) == Vatom && strcmp(nvtermatom(sched.rootvalue->root), "take") == 0,
 		"a message beats an already-expired deadline even when the wakeup was purely timer-driven");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - a message queued after a timer wakeup still wins over the timeout body\n");
 
 	/* D050: equal deadlines are woken together by one idle advance, not one at a time. */
@@ -495,21 +485,19 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 22, 10, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawn(&sched, "timedreceiver", &arg, &p1, err, sizeof err) == 0, "spawn tie-break process one");
-	check(nvschedspawn(&sched, "timedreceiver", &arg, &p2, err, sizeof err) == 0, "spawn tie-break process two");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting, "process one blocks");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p2.pid.slot].state == Prwaiting, "process two blocks with the same deadline");
-	check(sched.runtime.process[p1.pid.slot].deadline == sched.runtime.process[p2.pid.slot].deadline, "both armed the same absolute deadline");
+	check(nvschedspawn(&sched, "timedreceiver", arg, &p1, err, sizeof err) == 0, "spawn tie-break process one");
+	check(nvschedspawn(&sched, "timedreceiver", arg, &p2, err, sizeof err) == 0, "spawn tie-break process two");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting, "process one blocks");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p2)].state == Prwaiting, "process two blocks with the same deadline");
+	check(sched.runtime.process[nvpidslot(p1)].deadline == sched.runtime.process[nvpidslot(p2)].deadline, "both armed the same absolute deadline");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress &&
-		sched.runtime.process[p1.pid.slot].state == Prrunnable && sched.runtime.process[p2.pid.slot].state == Prrunnable,
+		sched.runtime.process[nvpidslot(p1)].state == Prrunnable && sched.runtime.process[nvpidslot(p2)].state == Prrunnable,
 		"one idle advance wakes both tied deadlines together");
 	state = NvSchedProgress;
 	for(i = 0; i < 16 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
 	check(state == NvSchedDone && sched.completed == 2, "both tied timed receivers complete");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
-	nvvaluefree(&p2);
 	print("ok - equal deadlines wake together instead of one idle step at a time\n");
 
 	/* D048: `after 0` performs exactly one nonblocking scan; an empty mailbox never blocks at all. */
@@ -520,13 +508,12 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 23, 10, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawnroot(&sched, "zeroreceiver", &arg, &p1, err, sizeof err) == 0, "spawn zero-timeout root");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone &&
-		sched.rootvalue.kind == Vatom && strcmp(sched.rootvalue.atom, "timedout") == 0 && tc.now == 4000,
+	check(nvschedspawnroot(&sched, "zeroreceiver", arg, &p1, err, sizeof err) == 0, "spawn zero-timeout root");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.rootstate == NvRootDone && sched.rootvalue != nil &&
+		nvtermkind(sched.rootvalue->root) == Vatom && strcmp(nvtermatom(sched.rootvalue->root), "timedout") == 0 && tc.now == 4000,
 		"a zero duration times out immediately without ever blocking or advancing the clock");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "zero-timeout scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - a zero duration performs exactly one nonblocking scan\n");
 
 	/* D049/D046: `'infinity` arms nothing, so blocking is ordinary deadlock, not a phantom timer wakeup. */
@@ -537,18 +524,17 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 24, 10, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawn(&sched, "infinityreceiver", &arg, &p1, err, sizeof err) == 0, "spawn infinity receiver");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting &&
-		!sched.runtime.process[p1.pid.slot].hasdeadline, "infinity blocks without arming a deadline");
+	check(nvschedspawn(&sched, "infinityreceiver", arg, &p1, err, sizeof err) == 0, "spawn infinity receiver");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting &&
+		!sched.runtime.process[nvpidslot(p1)].hasdeadline, "infinity blocks without arming a deadline");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedIdle && tc.now == 5000,
 		"an infinitely waiting process is ordinary deadlock, not a phantom timer wakeup");
-	check(nvvalueatom(&msg, "take") == 0, "infinity wake message");
-	check(nvprocsend(&sched.runtime, &p1, &msg, err, sizeof err) == 1, "wake the infinitely waiting receiver");
-	nvvaluefree(&msg);
+	msg = nvatom("take");
+	check(nvtermkind(msg) == Vatom, "infinity wake message");
+	check(nvprocsend(&sched.runtime, p1, msg, err, sizeof err) == 1, "wake the infinitely waiting receiver");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1, "infinity receiver still answers an actual message");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "infinity scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - 'infinity blocks without arming a deadline and is ordinary deadlock, not a timer\n");
 
 	/* D050: differing deadlines wake in order -- the earlier one alone, while the later one keeps waiting. */
@@ -559,36 +545,33 @@ main(void)
 	clock.wait = tcwait;
 	check(nvschedinit(&sched, &module, &limits, 25, 10, err, sizeof err) == 0, err);
 	nvschedsetclock(&sched, &clock);
-	check(nvschedspawn(&sched, "timedreceiver", &arg, &p1, err, sizeof err) == 0, "spawn longer-duration receiver");
-	check(nvschedspawn(&sched, "shortreceiver", &arg, &p2, err, sizeof err) == 0, "spawn shorter-duration receiver");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p1.pid.slot].state == Prwaiting, "longer-duration receiver blocks");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[p2.pid.slot].state == Prwaiting, "shorter-duration receiver blocks");
-	check(sched.runtime.process[p1.pid.slot].deadline == 6005 && sched.runtime.process[p2.pid.slot].deadline == 6002,
+	check(nvschedspawn(&sched, "timedreceiver", arg, &p1, err, sizeof err) == 0, "spawn longer-duration receiver");
+	check(nvschedspawn(&sched, "shortreceiver", arg, &p2, err, sizeof err) == 0, "spawn shorter-duration receiver");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p1)].state == Prwaiting, "longer-duration receiver blocks");
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.runtime.process[nvpidslot(p2)].state == Prwaiting, "shorter-duration receiver blocks");
+	check(sched.runtime.process[nvpidslot(p1)].deadline == 6005 && sched.runtime.process[nvpidslot(p2)].deadline == 6002,
 		"different durations from the same installed now arm different absolute deadlines");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 6002 &&
-		sched.runtime.process[p2.pid.slot].state == Prrunnable && sched.runtime.process[p1.pid.slot].state == Prwaiting,
+		sched.runtime.process[nvpidslot(p2)].state == Prrunnable && sched.runtime.process[nvpidslot(p1)].state == Prwaiting,
 		"idle advance wakes only the earlier deadline, leaving the later one still waiting");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1, "shorter-duration receiver completes first");
-	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 6005 && sched.runtime.process[p1.pid.slot].state == Prrunnable,
+	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && tc.now == 6005 && sched.runtime.process[nvpidslot(p1)].state == Prrunnable,
 		"a second idle advance wakes the remaining later deadline");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 2, "longer-duration receiver completes after its own deadline");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "differing-deadline scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
-	nvvaluefree(&p2);
 	print("ok - differing deadlines wake in earliest-first order rather than together\n");
 
 	/* A duration that resolves to neither an integer nor 'infinity faults bad_timeout through the full execute path. */
 	check(nvschedinit(&sched, &module, &limits, 26, 10, err, sizeof err) == 0, err);
-	check(nvschedspawn(&sched, "badtimeoutreceiver", &arg, &p1, err, sizeof err) == 0, "spawn bad-duration receiver");
+	check(nvschedspawn(&sched, "badtimeoutreceiver", arg, &p1, err, sizeof err) == 0, "spawn bad-duration receiver");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.faulted == 1 && strcmp(sched.lastfault, "bad_timeout") == 0,
 		"a non-'infinity, non-integer duration faults bad_timeout through recvdeadline dispatch");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "bad-duration scheduler done");
 	nvschedfree(&sched);
-	nvvaluefree(&p1);
 	print("ok - a runtime duration outside the accepted domain faults bad_timeout\n");
 
-	nvvaluefree(&arg);
+	nvheapfree(&hostheap);
 	print("all scheduler tests passed\n");
 	exits(nil);
 }

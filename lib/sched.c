@@ -7,154 +7,170 @@
 #include "../include/nvproc.h"
 #include "../include/nvsched.h"
 
-static int
-hostself(void *aux, NvValue *value, char *err, int nerr)
-{
-	NvScheduler *s;
-
-	s = aux;
-	if(!s->currentvalid){ snprint(err,nerr,"bad_process_context"); return -1; }
-	return nvvaluepid(value, s->currentslot, s->currentgeneration);
-}
-
-static int
-hostref(void *aux, NvValue *value, char *err, int nerr)
-{
-	NvScheduler *s;
-
-	s = aux;
-	return nvprocref(&s->runtime, value, err, nerr);
-}
-
-static int
-hostsend(void *aux, NvValue *pid, NvValue *value, char *err, int nerr)
-{
-	NvScheduler *s;
-	int rc;
-
-	s = aux;
-	rc = nvprocsend(&s->runtime, pid, value, err, nerr);
-	return rc < 0 ? -1 : 0;
-}
-
-static int
-hostspawn(void *aux, char *entry, NvValue *arg, NvValue *pid, char *err, int nerr)
-{
-	return nvschedspawn(aux, entry, arg, pid, err, nerr);
-}
-
-static int
-currentpid(NvScheduler *s, NvValue *pid, char *err, int nerr)
-{
-	if(!s->currentvalid){ snprint(err,nerr,"bad_process_context"); return -1; }
-	return nvvaluepid(pid, s->currentslot, s->currentgeneration);
-}
-
-/* Receive callbacks operate only on the currently dispatched process. */
-static int
-hostrecvbegin(void *aux, NvValue *value, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocrecvbegin(&s->runtime, &pid, value, err, nerr);
-}
-
-static int
-hostrecvnext(void *aux, NvValue *value, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocrecvnext(&s->runtime, &pid, value, err, nerr);
-}
-
-static int
-hostrecvtake(void *aux, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocrecvtake(&s->runtime, &pid, err, nerr);
-}
-
-static int
-hostrecvwait(void *aux, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocrecvwait(&s->runtime, &pid, err, nerr);
-}
-
-static int
-hostrecvdeadline(void *aux, NvValue *duration, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocarmdeadline(&s->runtime, &pid, duration, s->clock.now(s->clock.aux), err, nerr);
-}
-
-static int
-hostrecvwaitdeadline(void *aux, char *err, int nerr)
-{
-	NvScheduler *s;
-	NvValue pid;
-
-	s = aux;
-	if(currentpid(s, &pid, err, nerr) < 0)
-		return -1;
-	return nvprocrecvwaitdeadline(&s->runtime, &pid, s->clock.now(s->clock.aux), err, nerr);
-}
-
 /*
- * D054-D057: print/eprint write one value to the installed stream, followed
- * by a newline, then flush. A flush failure (e.g. output redirected to a
- * closed file descriptor) is reported as io_error; nvexecrun turns that
- * into the process fault and otherwise writes 'ok itself, so these
- * callbacks never touch the destination register. nvschedspawn only wires
- * these callbacks when the corresponding Biobuf is installed, so a nil
- * check here would be dead code; if that invariant is ever violated, the
- * only consequence is the write functions faulting on a nil Biobuf, which
- * would show up immediately in testing rather than corrupting anything.
+ * D065: every NvExec refers to this one table by pointer (nvexecsethost),
+ * so a callback recovers its scheduler through e->host->aux rather than
+ * through a per-process copy. The pid a callback acts on is always the
+ * currently dispatched one, built on the fly from currentslot/generation.
  */
 static int
-hostprint(void *aux, NvValue *value, char *err, int nerr)
+currentpid(NvScheduler *s, NvTerm *pid, char *err, int nerr)
 {
-	NvScheduler *s;
-
-	s = aux;
-	nvvalueprint(s->io.out, value);
-	Bputc(s->io.out, '\n');
-	if(Bflush(s->io.out) < 0){ snprint(err,nerr,"io_error"); return -1; }
+	if(!s->currentvalid){ snprint(err,nerr,"bad_process_context"); return -1; }
+	*pid = nvpid(s->currentslot, s->currentgeneration);
 	return 0;
 }
 
 static int
-hosteprint(void *aux, NvValue *value, char *err, int nerr)
+hostself(NvExec *e, NvTerm *value, char *err, int nerr)
 {
 	NvScheduler *s;
 
-	s = aux;
-	nvvalueprint(s->io.err, value);
+	s = e->host->aux;
+	return currentpid(s, value, err, nerr);
+}
+
+static int
+hostref(NvExec *e, NvTerm *value, char *err, int nerr)
+{
+	NvScheduler *s;
+
+	s = e->host->aux;
+	return nvprocref(&s->runtime, &e->heap, value, err, nerr);
+}
+
+static int
+hostsend(NvExec *e, NvTerm pid, NvTerm value, char *err, int nerr)
+{
+	NvScheduler *s;
+
+	s = e->host->aux;
+	return nvprocsend(&s->runtime, pid, value, err, nerr) < 0 ? -1 : 0;
+}
+
+static int
+hostspawn(NvExec *e, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+{
+	NvScheduler *s;
+
+	s = e->host->aux;
+	return nvschedspawn(s, entry, arg, pid, err, nerr);
+}
+
+/* Receive callbacks operate only on the currently dispatched process. */
+static int
+hostrecvbegin(NvExec *e, NvTerm *value, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvbegin(&s->runtime, pid, value, err, nerr);
+}
+
+static int
+hostrecvnext(NvExec *e, NvTerm *value, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvnext(&s->runtime, pid, value, err, nerr);
+}
+
+static int
+hostrecvtake(NvExec *e, NvFrag **taken, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvtake(&s->runtime, pid, taken, err, nerr);
+}
+
+static int
+hostrecvwait(NvExec *e, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvwait(&s->runtime, pid, err, nerr);
+}
+
+static int
+hostrecvdeadline(NvExec *e, NvTerm duration, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocarmdeadline(&s->runtime, pid, duration, s->clock.now(s->clock.aux), err, nerr);
+}
+
+static int
+hostrecvwaitdeadline(NvExec *e, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvwaitdeadline(&s->runtime, pid, s->clock.now(s->clock.aux), err, nerr);
+}
+
+/*
+ * D054-D057/D065: print/eprint write one value to the installed stream,
+ * followed by a newline, then flush. The host table is now shared by every
+ * process (D065), so the "is a stream installed" check that used to be
+ * made once per spawn happens here on every call instead: a nil stream
+ * faults bad_process_context exactly as a nil callback slot would. The
+ * value is printed and the line is flushed before a NvTermlimit result is
+ * turned into an error, so a value too deep to print in full still leaves
+ * well-formed output (nvtermprint itself prints a "<deep>" marker in place
+ * of the subterm it refused to descend into) instead of a truncated line.
+ * A flush failure is reported as io_error and takes priority: it means the
+ * stream itself is broken, which matters more than whether the value was
+ * fully printed.
+ */
+static int
+hostprint(NvExec *e, NvTerm value, char *err, int nerr)
+{
+	NvScheduler *s;
+	int rc;
+
+	s = e->host->aux;
+	if(s->io.out == nil){ snprint(err,nerr,"bad_process_context"); return -1; }
+	rc = nvtermprint(s->io.out, value);
+	Bputc(s->io.out, '\n');
+	if(Bflush(s->io.out) < 0){ snprint(err,nerr,"io_error"); return -1; }
+	if(rc == NvTermlimit){ snprint(err,nerr,"system_limit"); return -1; }
+	return 0;
+}
+
+static int
+hosteprint(NvExec *e, NvTerm value, char *err, int nerr)
+{
+	NvScheduler *s;
+	int rc;
+
+	s = e->host->aux;
+	if(s->io.err == nil){ snprint(err,nerr,"bad_process_context"); return -1; }
+	rc = nvtermprint(s->io.err, value);
 	Bputc(s->io.err, '\n');
 	if(Bflush(s->io.err) < 0){ snprint(err,nerr,"io_error"); return -1; }
+	if(rc == NvTermlimit){ snprint(err,nerr,"system_limit"); return -1; }
 	return 0;
 }
 
@@ -172,8 +188,8 @@ nvschedsetio(NvScheduler *s, NvIO *io)
  * D050: the production clock. `uptime` is monotonic nanoseconds since
  * boot; `nsec` is deliberately not used here because it tracks settable
  * wall-clock time. Waiting blocks the whole host process rather than
- * polling, which is correct for the single scheduler milestone 06 has;
- * milestone 09 replaces it with the D011 semaphore wakeup.
+ * polling, which is correct for the single scheduler this milestone has;
+ * milestone 10 replaces it with the D011 semaphore wakeup.
  */
 static uvlong
 prodnow(void *aux)
@@ -224,6 +240,25 @@ nvschedinit(NvScheduler *s, NvModule *m, NvLimits *limits, uvlong incarnation, u
 		return -1;
 	s->module = m;
 	s->quantum = quantum;
+	/*
+	 * D065: one host table, shared by every process's NvExec. print/eprint
+	 * are always installed; they check s->io.out/s->io.err themselves and
+	 * fault bad_process_context when the corresponding stream is nil, so
+	 * there is nothing left to decide at spawn time.
+	 */
+	s->host.aux = s;
+	s->host.self = hostself;
+	s->host.makeref = hostref;
+	s->host.send = hostsend;
+	s->host.spawn = hostspawn;
+	s->host.recvbegin = hostrecvbegin;
+	s->host.recvnext = hostrecvnext;
+	s->host.recvtake = hostrecvtake;
+	s->host.recvwait = hostrecvwait;
+	s->host.recvdeadline = hostrecvdeadline;
+	s->host.recvwaitdeadline = hostrecvwaitdeadline;
+	s->host.print = hostprint;
+	s->host.eprint = hosteprint;
 	nvschedsetclock(s, nil);
 	return 0;
 }
@@ -234,17 +269,17 @@ nvschedfree(NvScheduler *s)
 	if(s == nil)
 		return;
 	nvruntimefree(&s->runtime);
-	nvvaluefree(&s->lastexit);
-	nvvaluefree(&s->rootvalue);
+	if(s->lastexit != nil)
+		nvfragfree(s->lastexit);
+	if(s->rootvalue != nil)
+		nvfragfree(s->rootvalue);
 	memset(s, 0, sizeof *s);
 }
 
 int
-nvschedspawn(NvScheduler *s, char *entry, NvValue *arg, NvValue *pid, char *err, int nerr)
+nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 {
 	NvExec *e;
-	NvExecHost host;
-	NvProcess *p;
 
 	if(err != nil && nerr > 0)
 		err[0] = 0;
@@ -253,40 +288,31 @@ nvschedspawn(NvScheduler *s, char *entry, NvValue *arg, NvValue *pid, char *err,
 	e = mallocz(sizeof *e, 1);
 	if(e == nil){
 		snprint(err, nerr, "system_limit");
-		nvprocexit(&s->runtime, pid);
+		nvprocexit(&s->runtime, *pid);
 		return -1;
 	}
-	if(nvexecinit(e, s->module, entry, arg, nil, 0, err, nerr) < 0 ||
+	/*
+	 * The argument is a word in the spawning process's own registers
+	 * (D065's host callback contract); nvexecinit copies it into the
+	 * fresh child heap, so nothing here retains it past this call.
+	 */
+	if(nvexecinit(e, s->module, entry, arg, s->runtime.limits.maxheap, nil, 0, err, nerr) < 0 ||
 	   nvexecsetframelimit(e, s->runtime.limits.maxframe) < 0){
 		if(err[0] == 0)
 			snprint(err, nerr, "bad process limits");
 		nvexecfree(e);
 		free(e);
-		nvprocexit(&s->runtime, pid);
+		nvprocexit(&s->runtime, *pid);
 		return -1;
 	}
-	memset(&host, 0, sizeof host);
-	host.aux = s;
-	host.self = hostself;
-	host.makeref = hostref;
-	host.send = hostsend;
-	host.spawn = hostspawn;
-	host.recvbegin = hostrecvbegin;
-	host.recvnext = hostrecvnext;
-	host.recvtake = hostrecvtake;
-	host.recvwait = hostrecvwait;
-	host.recvdeadline = hostrecvdeadline;
-	host.recvwaitdeadline = hostrecvwaitdeadline;
-	host.print = s->io.out != nil ? hostprint : nil;
-	host.eprint = s->io.err != nil ? hosteprint : nil;
-	nvexecsethost(e, &host);
-	p = &s->runtime.process[pid->pid.slot];
-	p->exec = e;
+	nvexecsethost(e, &s->host);
+	/* Re-fetch by slot: nvprocspawn/nvexecinit may have grown the table. */
+	s->runtime.process[nvpidslot(*pid)].exec = e;
 	return 0;
 }
 
 int
-nvschedspawnroot(NvScheduler *s, char *entry, NvValue *arg, NvValue *pid, char *err, int nerr)
+nvschedspawnroot(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 {
 	if(s->rootvalid){
 		snprint(err, nerr, "scheduler root already set");
@@ -294,8 +320,8 @@ nvschedspawnroot(NvScheduler *s, char *entry, NvValue *arg, NvValue *pid, char *
 	}
 	if(nvschedspawn(s, entry, arg, pid, err, nerr) < 0)
 		return -1;
-	s->rootslot = pid->pid.slot;
-	s->rootgeneration = pid->pid.generation;
+	s->rootslot = nvpidslot(*pid);
+	s->rootgeneration = nvpidgeneration(*pid);
 	s->rootvalid = 1;
 	s->rootstate = NvRootRunning;
 	return 0;
@@ -307,7 +333,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	NvRuntime *r;
 	NvProcess *p;
 	NvExec *e;
-	NvValue pid;
+	NvTerm pid;
 	ulong i, slot;
 	uvlong before;
 	int state, isroot;
@@ -384,8 +410,8 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		return NvSchedError;
 	}
 	e = p->exec;
-	nvvaluepid(&pid, slot, p->generation);
-	if(nvprocdispatch(r, &pid, err, nerr) < 0)
+	pid = nvpid(slot, p->generation);
+	if(nvprocdispatch(r, pid, err, nerr) < 0)
 		return NvSchedError;
 	s->dispatches++;
 	s->currentslot = slot;
@@ -399,7 +425,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	p = &r->process[slot];
 	if(state == NvYield){
 		if(p->state == Prrunning){
-			if(nvprocyield(r, &pid, err, nerr) < 0)
+			if(nvprocyield(r, pid, err, nerr) < 0)
 				return NvSchedError;
 		}else if(p->state != Prwaiting){
 			snprint(err, nerr, "yielded process has bad lifecycle state");
@@ -412,9 +438,10 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		s->completed++;
 		if(isroot){
 			s->rootstate = NvRootDone;
-			nvvaluefree(&s->rootvalue);
+			if(s->rootvalue != nil)
+				nvfragfree(s->rootvalue);
 			s->rootvalue = e->result;
-			memset(&e->result, 0, sizeof e->result);
+			e->result = nil;
 		}
 	}else if(state == NvFault){
 		s->faulted++;
@@ -425,22 +452,36 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		}
 	}else if(state == NvExit){
 		s->exited++;
-		nvvaluefree(&s->lastexit);
+		if(s->lastexit != nil)
+			nvfragfree(s->lastexit);
+		s->lastexit = e->exitreason;
+		e->exitreason = nil;
 		if(isroot){
+			NvFrag *copy;
+
+			/*
+			 * The same fragment cannot be owned by both lastexit and
+			 * rootvalue, so rootvalue gets an independent copy of the
+			 * reason lastexit now owns. A copy failure is reported the
+			 * same way the old NvValue-based deep copy reported it:
+			 * rootstate becomes NvRootFault with system_limit rather
+			 * than leaving rootvalue holding stale or absent data.
+			 */
 			s->rootstate = NvRootExit;
-			nvvaluefree(&s->rootvalue);
-			if(nvvaluecopy(&s->rootvalue, &e->exitreason) < 0){
+			if(s->rootvalue != nil)
+				nvfragfree(s->rootvalue);
+			s->rootvalue = nil;
+			if(nvfragcopy(s->lastexit->root, ~0ULL, &copy) < 0){
 				s->rootstate = NvRootFault;
 				snprint(s->rootfault, sizeof s->rootfault, "system_limit");
-			}
+			}else
+				s->rootvalue = copy;
 		}
-		s->lastexit = e->exitreason;
-		memset(&e->exitreason, 0, sizeof e->exitreason);
 	}else{
 		snprint(err, nerr, "bad execution state");
 		return NvSchedError;
 	}
-	if(nvprocexit(r, &pid) != 1){
+	if(nvprocexit(r, pid) != 1){
 		snprint(err, nerr, "failed to exit completed process");
 		return NvSchedError;
 	}

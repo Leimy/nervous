@@ -20,9 +20,14 @@ struct NvPattern {
 	NvPattern *elem;
 };
 
+/*
+ * D061: a binding holds a term word, not storage. It is valid as long
+ * as the term it was matched against is (the fragment or heap the
+ * subject lives in), which is the caller's to guarantee.
+ */
 struct NvBinding {
 	char *name;
-	NvValue value;
+	NvTerm value;
 };
 
 struct NvBindings {
@@ -34,9 +39,9 @@ struct NvPatClause {
 	NvPattern *pattern;
 };
 
-int nvpatternmatch(NvPattern *, NvValue *, NvBindings *, char *, int);
-int nvclauseselect(NvPatClause *, int, NvValue *, NvBindings *, int *, char *, int);
+int nvpatternmatch(NvPattern *, NvTerm, NvBindings *, char *, int);
+int nvclauseselect(NvPatClause *, int, NvTerm, NvBindings *, int *, char *, int);
 NvPattern *nvpatternfromexpr(Expr *, char *, int);
 void nvpatternfree(NvPattern *);
-NvValue *nvbinding(NvBindings *, char *);
+NvTerm *nvbinding(NvBindings *, char *);
 void nvbindingsfree(NvBindings *);

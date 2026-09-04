@@ -14,14 +14,25 @@ fail(char *s)
 	exits("test");
 }
 
+/* D061/D064: one host heap backs every argument this program builds. */
+static NvHeap hostheap;
+
+/*
+ * D064: nvexecute hands back the root return value as a fragment; *frag
+ * is set only on success (r == 0) and the caller frees it with
+ * nvfragfree. On failure (a parse/compile/verify error reported locally
+ * as -2, or a runtime fault/exit reported by nvexecute itself as
+ * negative) *frag is left nil and *result is untouched.
+ */
 static int
-run(char *src, char *entry, NvValue *arg, NvValue *result, char *err, int nerr)
+run(char *src, char *entry, NvTerm arg, NvTerm *result, NvFrag **frag, char *err, int nerr)
 {
 	Parser parser;
 	Program *p;
 	NvModule *m;
 	int r;
 
+	*frag = nil;
 	p = parseprogram(&parser, "compile-pattern-test", src, strlen(src));
 	if(p == nil){
 		snprint(err, nerr, "%s", parser.err);
@@ -35,8 +46,10 @@ run(char *src, char *entry, NvValue *arg, NvValue *result, char *err, int nerr)
 		nvmodulefree(m);
 		return -2;
 	}
-	r = nvexecute(nil, m, entry, arg, 0, 100000, result, err, nerr);
+	r = nvexecute(nil, m, entry, arg, 0, 100000, frag, err, nerr);
 	nvmodulefree(m);
+	if(r == 0)
+		*result = (*frag)->root;
 	return r;
 }
 
@@ -146,81 +159,85 @@ registerpressure(void)
 }
 
 static void
-emptytuple(NvValue *v)
+emptytuple(NvTerm *v)
 {
-	if(nvvaluetuple(v, nil, 0) < 0)
+	*v = nvtuple(&hostheap, nil, 0);
+	if(*v == NvNil)
 		fail("argument allocation");
 }
 
 void
 main(void)
 {
-	NvValue arg, result;
+	NvTerm arg, result, one;
+	NvFrag *frag;
 	NvModule *m;
 	NvFunc *f;
 	NvInsn *in;
 	char err[256];
 	int r, i, j, seen[Nopcode];
 
+	nvheapinit(&hostheap, 0);
+
 	emptytuple(&arg);
-	r = run("fn main() { 0; ${'ok, x} = ${'ok, 7}; x }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 7)
+	r = run("fn main() { 0; ${'ok, x} = ${'ok, 7}; x }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 7)
 		fail(r == -2 ? err : "asserted binding result");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	print("ok - asserted binding success\n");
 
-	r = run("fn main() { 0; ${'ok, x} = ${'error, 7}; x }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { 0; ${'ok, x} = ${'error, 7}; x }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail("asserted binding failure reason");
 	print("ok - asserted binding failure\n");
 
-	r = run("fn main() { x = 7; ${x} = ${7}; x }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 7)
+	r = run("fn main() { x = 7; ${x} = ${7}; x }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 7)
 		fail(r == -2 ? err : "existing binding pattern result");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	print("ok - existing binding pattern tests equality\n");
 
-	r = run("fn main() { match ${${'ok, 5}, 4} { ${${'ok, z}, 3} => z; ${_, y} => y; } }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 4)
+	r = run("fn main() { match ${${'ok, 5}, 4} { ${${'ok, z}, 3} => z; ${_, y} => y; } }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 4)
 		fail(r == -2 ? err : "match fallback result");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	print("ok - match rollback and fallback\n");
 
 	r = run("fn f('a, x) { ${'ok, y} = x; y }\nfn f(_, _) { 'fallback }\n"
-	        "fn main() { f('a, ${'bad, 1}) }\n", "main", &arg, &result, err, sizeof err);
+	        "fn main() { f('a, ${'bad, 1}) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "clause body failure escaped into next function clause");
 	print("ok - function clause patching excludes clause body\n");
 
 	/* D058: if is sugar over 'true/'false; else-if chains nest; no else yields 'ok; non-booleans fault. */
-	r = run("fn main() { x = 3; if x > 5 { 'big } else if x > 2 { 'mid } else { 'small } }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "mid") != 0)
+	r = run("fn main() { x = 3; if x > 5 { 'big } else if x > 2 { 'mid } else { 'small } }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "mid") != 0)
 		fail(r == -2 ? err : "else-if chain result");
-	nvvaluefree(&result);
-	r = run("fn main() { if 1 > 2 { 'yes } }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "ok") != 0)
+	nvfragfree(frag);
+	r = run("fn main() { if 1 > 2 { 'yes } }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "ok") != 0)
 		fail(r == -2 ? err : "else-less if result");
-	nvvaluefree(&result);
-	r = run("fn main() { if 1 > 2 { 'yes } 7 }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 7)
+	nvfragfree(frag);
+	r = run("fn main() { if 1 > 2 { 'yes } 7 }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 7)
 		fail(r == -2 ? err : "block-like expression needs no semicolon");
-	nvvaluefree(&result);
-	r = run("fn main() { if 7 { 1 } else { 2 } }\n", "main", &arg, &result, err, sizeof err);
+	nvfragfree(frag);
+	r = run("fn main() { if 7 { 1 } else { 2 } }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "non-boolean if condition must fault match_fail");
-	r = run("fn main() { if 'true { y = 1; y } else { 2 }; y }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { if 'true { y = 1; y } else { 2 }; y }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r != -2 || strstr(err, "unbound variable") == nil)
 		fail("if branch bindings must not escape the branch");
 	print("ok - if lowering, else-less 'ok, and branch-local bindings\n");
 
 	/* D028 structural equality through the == and != operators (lowered onto testeq). */
-	r = run("fn main() { ${1 == 1, 'a != 'b, ${1, 'x} == ${1, 'x}, 1 == 'a, 2 != 2} }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 5 ||
-	   strcmp(result.tuple->elem[0].atom, "true") != 0 || strcmp(result.tuple->elem[1].atom, "true") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "true") != 0 || strcmp(result.tuple->elem[3].atom, "false") != 0 ||
-	   strcmp(result.tuple->elem[4].atom, "false") != 0)
+	r = run("fn main() { ${1 == 1, 'a != 'b, ${1, 'x} == ${1, 'x}, 1 == 'a, 2 != 2} }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 5 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "true") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "true") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "true") != 0 || strcmp(nvtermatom(nvtupleelem(result, 3)), "false") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 4)), "false") != 0)
 		fail(r == -2 ? err : "equality operator results");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	print("ok - equality operators\n");
 
 	/*
@@ -230,18 +247,18 @@ main(void)
 	 * 1024. The same recursion with the call as an operand is not in tail
 	 * position and must still fault system_limit at the frame ceiling.
 	 */
-	r = run("fn loop(n) { if n == 0 { 'done } else { loop(n - 1) } }\nfn main() { loop(3000) }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "done") != 0)
+	r = run("fn loop(n) { if n == 0 { 'done } else { loop(n - 1) } }\nfn main() { loop(3000) }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "done") != 0)
 		fail(r == -2 ? err : r < 0 ? err : "tail-recursive loop result");
-	nvvaluefree(&result);
-	r = run("fn deep(n) { if n == 0 { 0 } else { 1 + deep(n - 1) } }\nfn main() { deep(3000) }\n", "main", &arg, &result, err, sizeof err);
+	nvfragfree(frag);
+	r = run("fn deep(n) { if n == 0 { 0 } else { 1 + deep(n - 1) } }\nfn main() { deep(3000) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "system_limit") != 0)
 		fail(r == -2 ? err : "non-tail recursion must still hit the frame limit");
 	/* Tail position also reaches through match clause bodies and nested blocks. */
-	r = run("fn count(n, acc) { match n { 0 => acc; _ => { x = acc + 1; count(n - 1, x) } } }\nfn main() { count(3000, 0) }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 3000)
+	r = run("fn count(n, acc) { match n { 0 => acc; _ => { x = acc + 1; count(n - 1, x) } } }\nfn main() { count(3000, 0) }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 3000)
 		fail(r == -2 ? err : r < 0 ? err : "tail call through match clause and block");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	m = compiles("fn loop(n) { if n == 0 { 'done } else { loop(n - 1) } }\n", err, sizeof err);
 	if(m == nil)
 		fail(err);
@@ -258,30 +275,29 @@ main(void)
 		fail("tail-position call did not lower to tailcall");
 	nvmodulefree(m);
 	print("ok - tail calls run in constant frame depth; non-tail calls still bounded\n");
-	nvvaluefree(&arg);
 
-	if(nvvaluetuple(&arg, nil, 0) < 0)
+	arg = nvtuple(&hostheap, nil, 0);
+	if(arg == NvNil)
 		fail("argument allocation");
-	r = run("fn choose() { 1 }\nfn choose(_) { 2 }\n", "choose", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 1)
+	r = run("fn choose() { 1 }\nfn choose(_) { 2 }\n", "choose", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 1)
 		fail(r == -2 ? err : "different arity result");
-	nvvaluefree(&result);
-	nvvaluefree(&arg);
+	nvfragfree(frag);
 	print("ok - function clause arity dispatch\n");
 
-	if(nvvalueint(&result, "9") < 0 || nvvaluetuple(&arg, &result, 1) < 0)
+	one = nvint(nil, 9);
+	arg = nvtuple(&hostheap, &one, 1);
+	if(arg == NvNil)
 		fail("argument allocation");
-	nvvaluefree(&result);
-	r = run("fn choose(x) { x }\nfn choose(_) { 0 }\n", "choose", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != 9)
+	r = run("fn choose(x) { x }\nfn choose(_) { 0 }\n", "choose", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != 9)
 		fail(r == -2 ? err : "overlapping clause order");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	print("ok - function clauses preserve source order\n");
 
-	r = run("fn choose('ok) { 1 }\n", "choose", &arg, &result, err, sizeof err);
+	r = run("fn choose('ok) { 1 }\n", "choose", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "function_clause") != 0)
 		fail(r == -2 ? err : "function clause failure reason");
-	nvvaluefree(&arg);
 	print("ok - function clause failure\n");
 
 	/* Only adjacent declarations merge; a separated redeclaration is still a duplicate. */
@@ -291,130 +307,129 @@ main(void)
 	print("ok - unresolved call rejected\n");
 	/*
 	 * D016/D014: unary -, +, not; and/or short-circuit; all boolean forms
-	 * require 'true/'false. The shared argument tuple was freed by the
-	 * clause-failure test above; every run() here needs a live empty tuple.
+	 * require 'true/'false. The clause-failure test above left arg
+	 * pointing at a one-element tuple; every run() here needs a live
+	 * empty tuple.
 	 */
 	emptytuple(&arg);
-	r = run("fn main() { -1 }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vint || result.i != -1)
+	r = run("fn main() { -1 }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vint || nvtermint(result) != -1)
 		fail(r < 0 ? err : "negative literal folds to a constant");
-	nvvaluefree(&result);
-	r = run("fn main() { x = 5; ${-x, +x, - -x, 3 - -x} }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 4 ||
-	   result.tuple->elem[0].i != -5 || result.tuple->elem[1].i != 5 ||
-	   result.tuple->elem[2].i != 5 || result.tuple->elem[3].i != 8)
+	nvfragfree(frag);
+	r = run("fn main() { x = 5; ${-x, +x, - -x, 3 - -x} }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 4 ||
+	   nvtermint(nvtupleelem(result, 0)) != -5 || nvtermint(nvtupleelem(result, 1)) != 5 ||
+	   nvtermint(nvtupleelem(result, 2)) != 5 || nvtermint(nvtupleelem(result, 3)) != 8)
 		fail(r < 0 ? err : "unary minus and plus on variables");
-	nvvaluefree(&result);
-	r = run("fn main() { -'a }\n", "main", &arg, &result, err, sizeof err);
+	nvfragfree(frag);
+	r = run("fn main() { -'a }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "badarith") != 0)
 		fail(r == -2 ? err : "unary minus on a non-integer must fault badarith");
 	r = run("fn main() { ${'true and 'false, 'true and 'true, 'false or 'false, 'false or 'true, not 'true, not 'false} }\n",
-		"main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 6 ||
-	   strcmp(result.tuple->elem[0].atom, "false") != 0 || strcmp(result.tuple->elem[1].atom, "true") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "false") != 0 || strcmp(result.tuple->elem[3].atom, "true") != 0 ||
-	   strcmp(result.tuple->elem[4].atom, "false") != 0 || strcmp(result.tuple->elem[5].atom, "true") != 0)
+		"main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 6 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "false") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "true") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "false") != 0 || strcmp(nvtermatom(nvtupleelem(result, 3)), "true") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 4)), "false") != 0 || strcmp(nvtermatom(nvtupleelem(result, 5)), "true") != 0)
 		fail(r < 0 ? err : "and/or/not truth table");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	/* The right operand is not evaluated when the left decides: boom() would fault divide_by_zero. */
 	r = run("fn boom() { 1 / 0 }\nfn main() { ${'false and boom() == 1, 'true or boom() == 1} }\n",
-		"main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 2 ||
-	   strcmp(result.tuple->elem[0].atom, "false") != 0 || strcmp(result.tuple->elem[1].atom, "true") != 0)
+		"main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 2 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "false") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "true") != 0)
 		fail(r < 0 ? err : "and/or short-circuit");
-	nvvaluefree(&result);
-	r = run("fn main() { 1 < 2 and 2 < 3 or 'false }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "true") != 0)
+	nvfragfree(frag);
+	r = run("fn main() { 1 < 2 and 2 < 3 or 'false }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "true") != 0)
 		fail(r < 0 ? err : "comparison binds tighter than and, and tighter than or");
-	nvvaluefree(&result);
-	r = run("fn main() { 1 and 'true }\n", "main", &arg, &result, err, sizeof err);
+	nvfragfree(frag);
+	r = run("fn main() { 1 and 'true }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "non-boolean left operand of and must fault match_fail");
-	r = run("fn main() { 'true and 1 }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { 'true and 1 }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "non-boolean right operand of and must fault match_fail");
-	r = run("fn main() { 'false or 'maybe }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { 'false or 'maybe }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "non-boolean right operand of or must fault match_fail");
-	r = run("fn main() { not 0 }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { not 0 }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "not on a non-boolean must fault match_fail");
-	r = run("fn main() { 'true and { y = 'true; y }; y }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { 'true and { y = 'true; y }; y }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r != -2 || strstr(err, "unbound variable") == nil)
 		fail("a binding inside a short-circuit operand must not escape it");
-	nvvaluefree(&arg);
 	print("ok - unary operators, short-circuit and/or, and boolean strictness\n");
 
 	/* D060: guards on function and match clauses; fault or non-boolean means the clause fails. */
 	emptytuple(&arg);
 	r = run("fn sign(x) when x > 0 { 1 }\nfn sign(x) when x < 0 { -1 }\nfn sign(_) { 0 }\n"
-	        "fn main() { ${sign(5), sign(-3), sign(0)} }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
-	   result.tuple->elem[0].i != 1 || result.tuple->elem[1].i != -1 || result.tuple->elem[2].i != 0)
+	        "fn main() { ${sign(5), sign(-3), sign(0)} }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 3 ||
+	   nvtermint(nvtupleelem(result, 0)) != 1 || nvtermint(nvtupleelem(result, 1)) != -1 || nvtermint(nvtupleelem(result, 2)) != 0)
 		fail(r < 0 ? err : "function clause guards select in source order");
-	nvvaluefree(&result);
-	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 'other }\nfn main() { f('a) }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "other") != 0)
+	nvfragfree(frag);
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 'other }\nfn main() { f('a) }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "other") != 0)
 		fail(r < 0 ? err : "a guard that faults badarith is false, not a process fault");
-	nvvaluefree(&result);
-	r = run("fn d(x) when 10 / x > 1 { 'big }\nfn d(_) { 'small }\nfn main() { d(0) }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "small") != 0)
+	nvfragfree(frag);
+	r = run("fn d(x) when 10 / x > 1 { 'big }\nfn d(_) { 'small }\nfn main() { d(0) }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "small") != 0)
 		fail(r < 0 ? err : "a guard that faults divide_by_zero is false");
-	nvvaluefree(&result);
-	r = run("fn g(x) when x { 'yes }\nfn g(_) { 'no }\nfn main() { ${g('true), g(5), g('false)} }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
-	   strcmp(result.tuple->elem[0].atom, "yes") != 0 || strcmp(result.tuple->elem[1].atom, "no") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "no") != 0)
+	nvfragfree(frag);
+	r = run("fn g(x) when x { 'yes }\nfn g(_) { 'no }\nfn main() { ${g('true), g(5), g('false)} }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 3 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "yes") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "no") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "no") != 0)
 		fail(r < 0 ? err : "a non-boolean guard value is false");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	r = run("fn h(x) when is_int(x) and x > 0 { 'pos }\nfn h(_) { 'neg }\nfn main() { ${h(3), h('a), h(-1)} }\n",
-		"main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
-	   strcmp(result.tuple->elem[0].atom, "pos") != 0 || strcmp(result.tuple->elem[1].atom, "neg") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "neg") != 0)
+		"main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 3 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "pos") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "neg") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "neg") != 0)
 		fail(r < 0 ? err : "type test guarding a comparison");
-	nvvaluefree(&result);
+	nvfragfree(frag);
 	r = run("fn kind(x) when is_int(x) { 'int }\nfn kind(x) when is_atom(x) { 'atom }\nfn kind(x) when is_tuple(x) { 'tuple }\n"
 	        "fn main() { ${kind(1), kind('a), kind(${}), is_pid(1), is_ref('a), is_tuple(${1})} }\n",
-		"main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 6 ||
-	   strcmp(result.tuple->elem[0].atom, "int") != 0 || strcmp(result.tuple->elem[1].atom, "atom") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "tuple") != 0 || strcmp(result.tuple->elem[3].atom, "false") != 0 ||
-	   strcmp(result.tuple->elem[4].atom, "false") != 0 || strcmp(result.tuple->elem[5].atom, "true") != 0)
+		"main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 6 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "int") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "atom") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "tuple") != 0 || strcmp(nvtermatom(nvtupleelem(result, 3)), "false") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 4)), "false") != 0 || strcmp(nvtermatom(nvtupleelem(result, 5)), "true") != 0)
 		fail(r < 0 ? err : "type tests as guards and as ordinary expressions");
-	nvvaluefree(&result);
-	r = run("fn main() { match 7 { n when n % 2 == 0 => 'even; n when n % 2 == 1 => 'odd; } }\n", "main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vatom || strcmp(result.atom, "odd") != 0)
+	nvfragfree(frag);
+	r = run("fn main() { match 7 { n when n % 2 == 0 => 'even; n when n % 2 == 1 => 'odd; } }\n", "main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vatom || strcmp(nvtermatom(result), "odd") != 0)
 		fail(r < 0 ? err : "match clause guards");
-	nvvaluefree(&result);
-	r = run("fn e(x) when x > 100 { 'big }\nfn main() { e(1) }\n", "main", &arg, &result, err, sizeof err);
+	nvfragfree(frag);
+	r = run("fn e(x) when x > 100 { 'big }\nfn main() { e(1) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "function_clause") != 0)
 		fail(r == -2 ? err : "guards failing every clause is function_clause");
-	r = run("fn main() { match 1 { n when n > 5 => 'big; } }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn main() { match 1 { n when n > 5 => 'big; } }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "match_fail") != 0)
 		fail(r == -2 ? err : "guards failing every match clause is match_fail");
 	/* Guard mode must be off again after a failed guard: a fault in the next clause's body is a real fault. */
-	r = run("fn f(x) when x > 0 { 'pos }\nfn f(x) { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(x) { 1 / x }\nfn main() { f(0) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
 		fail(r == -2 ? err : "a fault after a failed guard is an ordinary process fault");
-	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 1 / 0 }\nfn main() { f('a) }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn f(x) when x > 0 { 'pos }\nfn f(_) { 1 / 0 }\nfn main() { f('a) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
 		fail(r == -2 ? err : "a fault after a guard that itself faulted is an ordinary process fault");
-	r = run("fn f(x) when x > 0 { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn f(x) when x > 0 { 1 / x }\nfn main() { f(0) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "function_clause") != 0)
 		fail(r == -2 ? err : "guard failure on 0 > 0 reaches function_clause, not the body");
-	r = run("fn f(x) when x == 0 { 1 / x }\nfn main() { f(0) }\n", "main", &arg, &result, err, sizeof err);
+	r = run("fn f(x) when x == 0 { 1 / x }\nfn main() { f(0) }\n", "main", arg, &result, &frag, err, sizeof err);
 	if(r >= 0 || strcmp(err, "divide_by_zero") != 0)
 		fail(r == -2 ? err : "a fault in the body of a clause whose guard passed is a real fault");
 	/* Negative literal patterns. */
 	r = run("fn n(-1) { 'minus }\nfn n(_) { 'other }\nfn main() { ${n(-1), n(1), match -5 { -5 => 'five; _ => 'no; }} }\n",
-		"main", &arg, &result, err, sizeof err);
-	if(r != 0 || result.kind != Vtuple || result.tuple->n != 3 ||
-	   strcmp(result.tuple->elem[0].atom, "minus") != 0 || strcmp(result.tuple->elem[1].atom, "other") != 0 ||
-	   strcmp(result.tuple->elem[2].atom, "five") != 0)
+		"main", arg, &result, &frag, err, sizeof err);
+	if(r != 0 || nvtermkind(result) != Vtuple || nvtuplelen(result) != 3 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 0)), "minus") != 0 || strcmp(nvtermatom(nvtupleelem(result, 1)), "other") != 0 ||
+	   strcmp(nvtermatom(nvtupleelem(result, 2)), "five") != 0)
 		fail(r < 0 ? err : "negative integer literal patterns");
-	nvvaluefree(&result);
-	nvvaluefree(&arg);
+	nvfragfree(frag);
 	/* Guard expression restrictions and reserved type-test names. */
 	compilefails("fn g(_) { 'true }\nfn f(x) when g(x) { 1 }\n", "only type tests may be called in a guard");
 	compilefails("fn f(x) when { x } { 1 }\n", "expression not allowed in a guard");
@@ -481,5 +496,6 @@ main(void)
 	print("ok - compiler allocation failure sweep\n");
 
 	print("all compiled pattern tests passed\n");
+	nvheapfree(&hostheap);
 	exits(nil);
 }

@@ -1,0 +1,65 @@
+// Control for examples/ring.nv: the same ring, built so the token travels
+// UPWARD through process slots (main -> slot 1 -> slot 2 -> ... -> main).
+//
+// examples/ring.nv builds downward. Under the pre-D059 rotating slot scan
+// the two differed by ~20x per hop at 65535 nodes; under the FIFO run queue
+// they must cost the same. If these two ever diverge again, dispatch has
+// become slot-order dependent.
+//
+// Nodes cannot know their successor at spawn time when building upward, so
+// each receives it as a first message and then enters the forwarding loop.
+// `main nodes laps`; root value is the hop count (nodes * laps).
+
+fn node() {
+	receive {
+		${'next, next} => loop(next);
+	}
+}
+
+fn loop(next) {
+	receive {
+		${'token, hops} => {
+			next ! ${'token, hops + 1};
+			loop(next)
+		}
+		'stop => {
+			next ! 'stop;
+			'ok
+		}
+	}
+}
+
+fn build(0, prev, first) {
+	prev ! ${'next, self};
+	first
+}
+
+fn build(n, prev, first) {
+	cur = spawn node();
+	prev ! ${'next, cur};
+	build(n - 1, cur, first)
+}
+
+fn laps(head, 0, hops) {
+	head ! 'stop;
+	receive {
+		'stop => hops;
+	}
+}
+
+fn laps(head, n, hops) {
+	head ! ${'token, hops};
+	receive {
+		${'token, h} => laps(head, n - 1, h);
+	}
+}
+
+fn main() {
+	main(10, 2000)
+}
+
+fn main(nodes, n) {
+	first = spawn node();
+	head = build(nodes - 1, first, first);
+	laps(head, n, 0)
+}

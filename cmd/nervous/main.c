@@ -24,8 +24,9 @@ usage(void)
  * the heap figure is the break's growth over the same interval, which is a
  * high-water mark because Plan 9 malloc never lowers the break. Bytes per
  * peak live process is a rough per-process footprint under this load, not
- * an exact accounting (that is milestone 08's job); it includes mailbox
- * traffic in flight at the peak.
+ * an exact accounting (D066 gives exact word accounting per process, but
+ * this line still reports host bytes across the whole run, not per-process
+ * heap words); it includes mailbox traffic in flight at the peak.
  */
 static void
 printstats(NvScheduler *s, vlong start, uintptr brk0)
@@ -50,6 +51,7 @@ printstats(NvScheduler *s, vlong start, uintptr brk0)
 	if(s->runtime.maxlive != 0)
 		fprint(2, ", %llud per peak live process", (uvlong)heap/s->runtime.maxlive);
 	fprint(2, "\n");
+	fprint(2, "stats: atoms %lud interned\n", nvatomcount());
 }
 
 static char *
@@ -80,30 +82,98 @@ readall(char *name, long *np)
 	return s;
 }
 
+/*
+ * Strict decimal parsing with overflow detection over the full signed
+ * 64-bit range, including the minimum. This reimplements what the old
+ * NvValue-era nvvalueint did as string parsing; nvint (nvvm.h) now owns
+ * deciding whether the parsed value fits a small term or must be boxed.
+ */
 static int
-makeargs(int argc, char **argv, NvValue *args, char *err, int nerr)
+parseint(char *s, vlong *out)
 {
-	NvValue *av;
-	int i, ok;
+	uvlong n, lim;
+	int neg;
+	uchar c;
 
-	av = mallocz(argc*sizeof *av, 1);
-	if(argc != 0 && av == nil){ snprint(err,nerr,"out of memory"); return -1; }
-	ok = -1;
-	for(i = 0; i < argc; i++){
-		if(argv[i][0] == '\'' && argv[i][1] != 0){
-			if(nvvalueatom(&av[i], argv[i]+1) < 0){ snprint(err,nerr,"out of memory"); goto Out; }
-		}else if(nvvalueint(&av[i], argv[i]) < 0){
-			snprint(err,nerr,"bad argument %s: expected integer or atom",argv[i]);
-			goto Out;
+	neg = *s == '-';
+	if(neg)
+		s++;
+	if(*s == 0 || *s == '+')
+		return -1;
+	lim = neg ? (1ULL<<63) : (1ULL<<63)-1;
+	n = 0;
+	while((c = *s++) != 0){
+		if(c < '0' || c > '9' || n > (lim-(c-'0'))/10)
+			return -1;
+		n = n*10 + c-'0';
+	}
+	if(neg && n == (1ULL<<63))
+		*out = (vlong)(1ULL<<63);
+	else
+		*out = neg ? -(vlong)n : (vlong)n;
+	return 0;
+}
+
+/*
+ * Builds the CLI argument tuple in the host-owned heap h: each argv item
+ * is nvatom(name) (quoted-atom convention unchanged) or a parsed integer
+ * boxed by nvint. The tuple itself, and any boxed integers among its
+ * elements, live in h; the caller frees h once the callee has copied the
+ * tuple out (nvexecinit / spawn), or at exit.
+ */
+static int
+makeargs(NvHeap *h, int argc, char **argv, NvTerm *args, char *err, int nerr)
+{
+	NvTerm *av;
+	vlong v;
+	int i;
+
+	av = nil;
+	if(argc != 0){
+		av = mallocz(argc*sizeof *av, 1);
+		if(av == nil){
+			snprint(err, nerr, "out of memory");
+			return -1;
 		}
 	}
-	if(nvvaluetuple(args, av, argc) < 0){ snprint(err,nerr,"out of memory"); goto Out; }
-	ok = 0;
-Out:
-	for(i = 0; i < argc; i++)
-		nvvaluefree(&av[i]);
+	for(i = 0; i < argc; i++){
+		if(argv[i][0] == '\'' && argv[i][1] != 0){
+			av[i] = nvatom(argv[i]+1);
+			if(av[i] == NvNil){
+				snprint(err, nerr, "out of memory");
+				free(av);
+				return -1;
+			}
+		}else if(parseint(argv[i], &v) == 0){
+			av[i] = nvint(h, v);
+			if(av[i] == NvNil){
+				snprint(err, nerr, "out of memory");
+				free(av);
+				return -1;
+			}
+		}else{
+			snprint(err, nerr, "bad argument %s: expected integer or atom", argv[i]);
+			free(av);
+			return -1;
+		}
+	}
+	*args = nvtuple(h, av, argc);
 	free(av);
-	return ok;
+	if(*args == NvNil){
+		snprint(err, nerr, "out of memory");
+		return -1;
+	}
+	return 0;
+}
+
+/* Prints a root/execute result fragment's root term, or "<none>" if there is none. */
+static void
+printroot(Biobuf *b, NvFrag *f)
+{
+	if(f == nil)
+		Bprint(b, "<none>");
+	else
+		nvtermprint(b, f->root);
 }
 
 void
@@ -116,12 +186,14 @@ main(int argc, char **argv)
 	Program *pr;
 	Biobuf bout, bin, berr;
 	NvModule *m;
-	NvValue *av, args, result, rootpid;
+	NvHeap h;
+	NvTerm args, rootpid;
+	NvFrag *result;
 	NvLimits limits;
 	NvScheduler sched;
 	NvIO io;
 	char err[256], *entry;
-	int fd, i, state, stats;
+	int fd, rc, state, stats;
 	vlong start;
 	uintptr brk0;
 
@@ -179,42 +251,28 @@ main(int argc, char **argv)
 		entry = argv[0];
 		argc--;
 		argv++;
-		av = mallocz(argc*sizeof *av, 1);
-		if(argc != 0 && av == nil)
-			sysfatal("out of memory");
-		for(i = 0; i < argc; i++){
-			if(argv[i][0] == '\'' && argv[i][1] != 0){
-				if(nvvalueatom(&av[i], argv[i]+1) < 0)
-					sysfatal("out of memory");
-			}else if(nvvalueint(&av[i], argv[i]) < 0){
-				fprint(2, "bad argument %s: expected integer or atom\n", argv[i]);
-				while(i-- > 0)
-					nvvaluefree(&av[i]);
-				free(av);
-				Bterm(&bout);
-				nvmodulefree(m);
-				exits("argument");
-			}
+		nvheapinit(&h, 0);
+		if(makeargs(&h, argc, argv, &args, err, sizeof err) < 0){
+			nvheapfree(&h);
+			Bterm(&bout);
+			fprint(2, "%s\n", err);
+			nvmodulefree(m);
+			exits("argument");
 		}
-		if(nvvaluetuple(&args, av, argc) < 0)
-			sysfatal("out of memory");
-		for(i = 0; i < argc; i++)
-			nvvaluefree(&av[i]);
-		free(av);
-		if(nvexecute(&bout, m, entry, &args, mode == 't', 1000000, &result, err, sizeof err) < 0){
+		rc = nvexecute(&bout, m, entry, args, mode == 't', 1000000, &result, err, sizeof err);
+		nvheapfree(&h);
+		if(rc < 0){
 			Bterm(&bout);
 			fprint(2, "fault %s\n", err);
-			nvvaluefree(&args);
 			nvmodulefree(m);
 			exits("fault");
 		}
 		if(mode == 't')
 			Bprint(&bout, "value ");
-		nvvalueprint(&bout, &result);
+		printroot(&bout, result);
 		Bputc(&bout, '\n');
 		Bterm(&bout);
-		nvvaluefree(&result);
-		nvvaluefree(&args);
+		nvfragfree(result);
 		nvmodulefree(m);
 		exits(nil);
 	}
@@ -242,7 +300,9 @@ main(int argc, char **argv)
 			nvmodulefree(m);
 		}else{
 			entry = argv[0];
-			if(makeargs(argc-1, argv+1, &args, err, sizeof err) < 0){
+			nvheapinit(&h, 0);
+			if(makeargs(&h, argc-1, argv+1, &args, err, sizeof err) < 0){
+				nvheapfree(&h);
 				Bterm(&bout);
 				fprint(2, "%s\n", err);
 				nvmodulefree(m);
@@ -250,27 +310,34 @@ main(int argc, char **argv)
 				exits("argument");
 			}
 			/*
-			 * A process slot is small (NvProcess plus one NvExec and its
-			 * first frame, a few hundred bytes), so this is a sanity bound
-			 * against runaway spawn loops, not a capacity plan; 1000-node
-			 * rings run fine, and per-process memory is milestone 08's to
-			 * make exact. Exceeding it faults the spawning process with
-			 * system_limit (D039).
+			 * D066: mailbox and message limits are now word counts of
+			 * fragments including their root word, not bytes of the old
+			 * recursive NvValue representation (D040 is superseded).
+			 * maxheap is the per-process word budget; 0 is unlimited,
+			 * which is what stage 2 still uses (exact per-process
+			 * enforcement is stage 3 work). A process slot itself
+			 * remains small (NvProcess plus one NvExec and its frame
+			 * stack, a few hundred words at minimum), so maxprocess
+			 * below is still a sanity bound against runaway spawn loops,
+			 * not a capacity plan; 1000-node rings run fine. Exceeding
+			 * it faults the spawning process with system_limit (D039).
 			 */
 			limits.maxprocess = 65536;
-			limits.maxmailbox = 16*1024*1024;
-			limits.maxmessage = 1024*1024;
+			limits.maxmailbox = 2*1024*1024;
+			limits.maxmessage = 128*1024;
+			limits.maxheap = 0;
 			limits.maxframe = 1024;
 			limits.maxtermdepth = NvMaxtermdepth;
 			limits.maxduration = NvMaxduration;
+			limits.maxatom = 65536;
 			if(stats){
 				start = nsec();
 				brk0 = (uintptr)sbrk(0);
 			}
 			if(nvschedinit(&sched, m, &limits, 1, 1000, err, sizeof err) < 0){
+				nvheapfree(&h);
 				Bterm(&bout);
 				fprint(2, "%s\n", err);
-				nvvaluefree(&args);
 				nvmodulefree(m);
 				programfree(pr);
 				exits("run");
@@ -287,12 +354,19 @@ main(int argc, char **argv)
 			io.out = &bout;
 			io.err = &berr;
 			nvschedsetio(&sched, &io);
-			if(nvschedspawnroot(&sched, entry, &args, &rootpid, err, sizeof err) < 0){
+			rc = nvschedspawnroot(&sched, entry, args, &rootpid, err, sizeof err);
+			/*
+			 * The scheduler copies the argument into the root process's
+			 * own heap at spawn (successful or not; on failure nothing
+			 * is retained either way), so the host-owned argument heap
+			 * can be freed as soon as this call returns.
+			 */
+			nvheapfree(&h);
+			if(rc < 0){
 				Bterm(&bout);
 				Bterm(&berr);
 				fprint(2, "%s\n", err);
 				nvschedfree(&sched);
-				nvvaluefree(&args);
 				nvmodulefree(m);
 				programfree(pr);
 				exits("run");
@@ -328,15 +402,13 @@ main(int argc, char **argv)
 				else{
 					fprint(2, "exit ");
 					Binit(&bout, 2, OWRITE);
-					nvvalueprint(&bout, &sched.rootvalue);
+					printroot(&bout, sched.rootvalue);
 					Bputc(&bout, '\n');
 					Bterm(&bout);
 				}
 				if(state == NvSchedIdle)
 					fprint(2, "deadlock: %lud live process(es) orphaned by the root, none runnable\n", sched.runtime.nlive);
 				nvschedfree(&sched);
-				nvvaluefree(&rootpid);
-				nvvaluefree(&args);
 				nvmodulefree(m);
 				programfree(pr);
 				exits("run");
@@ -346,18 +418,14 @@ main(int argc, char **argv)
 				Bterm(&berr);
 				fprint(2, "deadlock: %lud live process(es), none runnable\n", sched.runtime.nlive);
 				nvschedfree(&sched);
-				nvvaluefree(&rootpid);
-				nvvaluefree(&args);
 				nvmodulefree(m);
 				programfree(pr);
 				exits("deadlock");
 			}
-			nvvalueprint(&bout, &sched.rootvalue);
+			printroot(&bout, sched.rootvalue);
 			Bputc(&bout, '\n');
 			Bterm(&berr);
 			nvschedfree(&sched);
-			nvvaluefree(&rootpid);
-			nvvaluefree(&args);
 			nvmodulefree(m);
 		}
 	}else if(mode == 'a' || mode == 'A')

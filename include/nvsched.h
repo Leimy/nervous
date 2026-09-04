@@ -20,11 +20,9 @@ struct NvClock {
  * D054-D057: optional host output streams. Unlike NvClock, there is no
  * default: leaving both nil (the zero value nvschedinit installs) means
  * print/eprint fault bad_process_context under this scheduler, exactly as
- * they do with no host at all. nvschedspawn snapshots the currently
- * installed NvIO into each newly spawned process's host callbacks, so
- * nvschedsetio must be called before spawning any process that needs
- * output; spawning first and calling nvschedsetio afterward does not
- * retroactively rewire already-spawned processes.
+ * they do with no host at all. The scheduler's single shared host table
+ * (D065) checks these at call time, so nvschedsetio may be called before
+ * or after spawning.
  */
 struct NvIO {
 	Biobuf *out;
@@ -45,9 +43,16 @@ enum {
 	NvRootExit,
 };
 
+/*
+ * D064: lastexit and rootvalue are fragments owned by the scheduler
+ * (taken from the exiting NvExec), freed by nvschedfree. rootvalue is
+ * the root's return value after NvRootDone and its exit reason after
+ * NvRootExit; nil otherwise.
+ */
 struct NvScheduler {
 	NvRuntime runtime;
 	NvModule *module;
+	NvExecHost host;	/* D065: one table shared by every process's NvExec */
 	NvClock clock;
 	NvIO io;
 	uvlong quantum;
@@ -60,13 +65,13 @@ struct NvScheduler {
 	uvlong completed;
 	uvlong faulted;
 	uvlong exited;
-	NvValue lastexit;
+	NvFrag *lastexit;
 	char lastfault[128];
 	ulong rootslot;
 	ulong rootgeneration;
 	int rootvalid;
 	int rootstate;
-	NvValue rootvalue;
+	NvFrag *rootvalue;
 	char rootfault[128];
 };
 
@@ -82,11 +87,11 @@ void nvschedsetclock(NvScheduler *, NvClock *);
  * D054-D057: install or clear the optional output streams. A nil argument
  * clears both to nil (no output installed), unlike nvschedsetclock's nil
  * meaning "restore the production default" -- there is no production
- * default here. Call before spawning any process that needs print/eprint
- * to succeed; see the NvIO comment above nvsched.h's struct definition.
+ * default here.
  */
 void nvschedsetio(NvScheduler *, NvIO *);
 void nvschedfree(NvScheduler *);
-int nvschedspawn(NvScheduler *, char *, NvValue *, NvValue *, char *, int);
-int nvschedspawnroot(NvScheduler *, char *, NvValue *, NvValue *, char *, int);
+/* The argument term may live in any storage; it is copied into the new process's heap. */
+int nvschedspawn(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
+int nvschedspawnroot(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedstep(NvScheduler *, char *, int);

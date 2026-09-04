@@ -7,53 +7,19 @@
 #include "../include/nvpat.h"
 #include "../include/nvproc.h"
 
-static int
-valuesize(NvValue *v, ulong depth, ulong maxdepth, uvlong *size)
-{
-	uvlong n, x;
-	int i;
-
-	if(v == nil || !v->valid || depth > maxdepth)
-		return -1;
-	n = sizeof *v;
-	switch(v->kind){
-	case Vatom:
-		if(v->atom == nil)
-			return -1;
-		x = strlen(v->atom)+1;
-		if(n > ~0ULL-x) return -1;
-		n += x;
-		break;
-	case Vtuple:
-		if(v->tuple == nil || v->tuple->n < 0 || v->tuple->n != 0 && v->tuple->elem == nil)
-			return -1;
-		x = sizeof *v->tuple;
-		if(n > ~0ULL-x) return -1;
-		n += x;
-		for(i = 0; i < v->tuple->n; i++){
-			if(valuesize(&v->tuple->elem[i], depth+1, maxdepth, &x) < 0 || n > ~0ULL-x)
-				return -1;
-			n += x;
-		}
-		break;
-	case Vint: case Vpid: case Vref:
-		break;
-	default:
-		return -1;
-	}
-	*size = n;
-	return 0;
-}
-
 static NvProcess *
-lookup(NvRuntime *r, NvValue *pid)
+lookup(NvRuntime *r, NvTerm pid)
 {
 	NvProcess *p;
+	ulong slot;
 
-	if(pid == nil || !pid->valid || pid->kind != Vpid || pid->pid.slot >= r->nslot)
+	if(nvtermkind(pid) != Vpid)
 		return nil;
-	p = &r->process[pid->pid.slot];
-	if(p->generation != pid->pid.generation ||
+	slot = nvpidslot(pid);
+	if(slot >= r->nslot)
+		return nil;
+	p = &r->process[slot];
+	if(p->generation != nvpidgeneration(pid) ||
 	   p->state != Prrunnable && p->state != Prrunning && p->state != Prwaiting)
 		return nil;
 	return p;
@@ -64,7 +30,18 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
 {
 	memset(r, 0, sizeof *r);
 	if(limits == nil || limits->maxprocess == 0 || limits->maxmailbox == 0 || limits->maxmessage == 0 ||
-	   limits->maxframe == 0 || limits->maxtermdepth == 0 || limits->maxtermdepth > NvMaxtermdepth){
+	   limits->maxframe == 0 || limits->maxtermdepth == 0 || limits->maxtermdepth > NvMaxtermdepth ||
+	   limits->maxatom == 0){
+		snprint(err, nerr, "bad process limits");
+		return -1;
+	}
+	/* D061: a slot index must fit the PID representation's slot field. */
+	if(limits->maxprocess > NvMaxslot+1){
+		snprint(err, nerr, "bad process limits");
+		return -1;
+	}
+	/* D062: install this runtime's atom table ceiling. */
+	if(nvatomlimit(limits->maxatom) < 0){
 		snprint(err, nerr, "bad process limits");
 		return -1;
 	}
@@ -155,20 +132,20 @@ execfree(NvProcess *p)
 	p->exec = nil;
 }
 
+/* D064: the mailbox is a chain of self-contained fragments; free each whole. */
 static void
 mailboxfree(NvProcess *p)
 {
-	NvMessage *m, *next;
+	NvFrag *f, *next;
 
-	for(m = p->head; m != nil; m = next){
-		next = m->next;
-		nvvaluefree(&m->value);
-		free(m);
+	for(f = p->head; f != nil; f = next){
+		next = f->next;
+		nvfragfree(f);
 	}
 	p->head = p->tail = nil;
 	p->scanprev = p->scan = nil;
 	p->scanning = 0;
-	p->mailboxbytes = 0;
+	p->mailboxwords = 0;
 }
 
 void
@@ -187,7 +164,7 @@ nvruntimefree(NvRuntime *r)
 }
 
 int
-nvprocspawn(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 {
 	NvProcess *p, *q;
 	ulong slot;
@@ -198,7 +175,7 @@ nvprocspawn(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	}
 	for(slot = 0; slot < r->nslot; slot++){
 		p = &r->process[slot];
-		if(p->state == Prexited && p->generation == ~0UL){
+		if(p->state == Prexited && p->generation == NvMaxgeneration){
 			p->state = Prretired;
 			continue;
 		}
@@ -239,25 +216,25 @@ nvprocspawn(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	r->nspawned++;
 	if(r->nlive > r->maxlive)
 		r->maxlive = r->nlive;
-	nvvaluepid(pid, slot, p->generation);
+	*pid = nvpid(slot, p->generation);
 	return 0;
 }
 
 int
-nvprocdispatch(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocdispatch(NvRuntime *r, NvTerm pid, char *err, int nerr)
 {
 	NvProcess *p;
 
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
 	if(p->state != Prrunnable){ snprint(err, nerr, "bad_state"); return -1; }
-	runrm(r, pid->pid.slot);
+	runrm(r, nvpidslot(pid));
 	p->state = Prrunning;
 	return 0;
 }
 
 int
-nvprocyield(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocyield(NvRuntime *r, NvTerm pid, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -265,12 +242,12 @@ nvprocyield(NvRuntime *r, NvValue *pid, char *err, int nerr)
 	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
 	if(p->state != Prrunning){ snprint(err, nerr, "bad_state"); return -1; }
 	p->state = Prrunnable;
-	runenq(r, pid->pid.slot);
+	runenq(r, nvpidslot(pid));
 	return 0;
 }
 
 int
-nvprocwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocwait(NvRuntime *r, NvTerm pid, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -282,7 +259,7 @@ nvprocwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
 }
 
 int
-nvprocexit(NvRuntime *r, NvValue *pid)
+nvprocexit(NvRuntime *r, NvTerm pid)
 {
 	NvProcess *p;
 
@@ -291,7 +268,7 @@ nvprocexit(NvRuntime *r, NvValue *pid)
 		return 0;
 	/* D059: a process that dies before its first (or next) dispatch is still queued. */
 	if(p->state == Prrunnable)
-		runrm(r, pid->pid.slot);
+		runrm(r, nvpidslot(pid));
 	execfree(p);
 	mailboxfree(p);
 	/*
@@ -302,7 +279,7 @@ nvprocexit(NvRuntime *r, NvValue *pid)
 	 * deadline scan in nvschedstep guards on state==Prwaiting, so a dead
 	 * or freshly reused (Prrunnable) slot was never actually observed by
 	 * it -- but that guard, not this clear, was doing the work D050
-	 * describes. Clearing it here and in nvprocspawn's reuse branch below
+	 * describes. Clearing it here and in nvprocspawn's reuse branch above
 	 * makes D050's "cannot outlive its slot" literally true of the field,
 	 * not just true of the field's only reader.
 	 */
@@ -315,15 +292,16 @@ nvprocexit(NvRuntime *r, NvValue *pid)
 }
 
 int
-nvprocalive(NvRuntime *r, NvValue *pid)
+nvprocalive(NvRuntime *r, NvTerm pid)
 {
 	return lookup(r, pid) != nil;
 }
 
 int
-nvprocref(NvRuntime *r, NvValue *ref, char *err, int nerr)
+nvprocref(NvRuntime *r, NvHeap *heap, NvTerm *ref, char *err, int nerr)
 {
 	uvlong n;
+	NvTerm t;
 
 	n = r->nextref;
 	if(n == 0 || n == ~0ULL){
@@ -332,70 +310,118 @@ nvprocref(NvRuntime *r, NvValue *ref, char *err, int nerr)
 		return -1;
 	}
 	r->nextref++;
-	return nvvalueref(ref, r->incarnation, n);
+	t = nvref(heap, r->incarnation, n);
+	if(t == NvNil){
+		snprint(err, nerr, nvheapexhausted(heap) ? "system_limit" : "out_of_memory");
+		return -1;
+	}
+	*ref = t;
+	return 0;
 }
 
+/*
+ * D047/D061: nvfragcopy always enforces the portable NvMaxtermdepth
+ * ceiling, but a runtime may configure a stricter limits.maxtermdepth. This
+ * walks an already-copied fragment's root to enforce that stricter ceiling;
+ * it is only ever called when maxtermdepth < NvMaxtermdepth, so the
+ * recursion is bounded by NvMaxtermdepth (256) either way and cannot
+ * exhaust the host C stack.
+ */
+static int
+toodeep(NvTerm t, int depth, int maxdepth)
+{
+	int i, n;
+
+	if(depth > maxdepth)
+		return 1;
+	if(!NvBoxed(t) || nvtermkind(t) != Vtuple)
+		return 0;
+	n = nvtuplelen(t);
+	for(i = 0; i < n; i++)
+		if(toodeep(nvtupleelem(t, i), depth+1, maxdepth))
+			return 1;
+	return 0;
+}
+
+/*
+ * D064 message boundary. value == NvNil is rejected before nvfragcopy is
+ * even called: nvfragcopy reports that case as NvTermerror, which is
+ * numerically identical to its generic allocation-failure return (-1), so
+ * the only way to report the NvNil case as mailbox_full (as nvproc.h's
+ * nvprocsend contract requires) rather than misreporting a real allocation
+ * failure as mailbox_full is to catch it here first.
+ */
 int
-nvprocsend(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+nvprocsend(NvRuntime *r, NvTerm pid, NvTerm value, char *err, int nerr)
 {
 	NvProcess *p;
-	NvMessage *m;
-	uvlong bytes;
+	NvFrag *f;
+	uvlong budget;
+	int rc;
 
 	p = lookup(r, pid);
 	if(p == nil){
 		r->ndropped++;
 		return 0;
 	}
-	if(valuesize(value, 1, r->limits.maxtermdepth, &bytes) < 0 || bytes > r->limits.maxmessage ||
-	   bytes > r->limits.maxmailbox || p->mailboxbytes > r->limits.maxmailbox-bytes){
+	if(value == NvNil){
 		snprint(err, nerr, "mailbox_full");
 		return -1;
 	}
-	m = mallocz(sizeof *m, 1);
-	if(m == nil || nvvaluecopy(&m->value, value) < 0){
-		free(m);
+	budget = p->mailboxwords >= r->limits.maxmailbox ? 0 : r->limits.maxmailbox-p->mailboxwords;
+	if(r->limits.maxmessage < budget)
+		budget = r->limits.maxmessage;
+	rc = nvfragcopy(value, budget, &f);
+	if(rc == NvTermlimit){
+		snprint(err, nerr, "mailbox_full");
+		return -1;
+	}
+	if(rc < 0){
 		snprint(err, nerr, "system_limit");
 		return -1;
 	}
-	m->bytes = bytes;
+	if(r->limits.maxtermdepth < NvMaxtermdepth && toodeep(f->root, 1, r->limits.maxtermdepth)){
+		nvfragfree(f);
+		snprint(err, nerr, "mailbox_full");
+		return -1;
+	}
+	f->next = nil;
 	if(p->tail != nil)
-		p->tail->next = m;
+		p->tail->next = f;
 	else
-		p->head = m;
-	p->tail = m;
-	p->mailboxbytes += bytes;
+		p->head = f;
+	p->tail = f;
+	p->mailboxwords += nvfragwords(f);
 	r->nsent++;
 	if(p->state == Prwaiting)
-		nvprocwake(r, pid->pid.slot);
+		nvprocwake(r, nvpidslot(pid));
 	return 1;
 }
 
 int
-nvprocpop(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+nvprocpop(NvRuntime *r, NvTerm pid, NvFrag **msg, char *err, int nerr)
 {
 	NvProcess *p;
-	NvMessage *m;
+	NvFrag *f;
 
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
 	if(p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
-	m = p->head;
-	if(m == nil)
+	f = p->head;
+	if(f == nil)
 		return 0;
-	p->head = m->next;
+	p->head = f->next;
 	if(p->head == nil)
 		p->tail = nil;
-	p->mailboxbytes -= m->bytes;
-	*value = m->value;
-	memset(&m->value, 0, sizeof m->value);
-	free(m);
+	p->mailboxwords -= nvfragwords(f);
+	f->next = nil;
+	*msg = f;
 	return 1;
 }
 
 /* Bytecode receive scanning is an explicit host-owned phase. */
 int
-nvprocrecvbegin(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+nvprocrecvbegin(NvRuntime *r, NvTerm pid, NvTerm *value, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -408,12 +434,12 @@ nvprocrecvbegin(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
 	p->scan = p->head;
 	if(p->scan == nil)
 		return 0;
-	if(nvvaluecopy(value, &p->scan->value) < 0){ snprint(err,nerr,"system_limit"); return -1; }
+	*value = p->scan->root;
 	return 1;
 }
 
 int
-nvprocrecvnext(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
+nvprocrecvnext(NvRuntime *r, NvTerm pid, NvTerm *value, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -426,36 +452,36 @@ nvprocrecvnext(NvRuntime *r, NvValue *pid, NvValue *value, char *err, int nerr)
 	p->scan = p->scan->next;
 	if(p->scan == nil)
 		return 0;
-	if(nvvaluecopy(value, &p->scan->value) < 0){ snprint(err,nerr,"system_limit"); return -1; }
+	*value = p->scan->root;
 	return 1;
 }
 
 int
-nvprocrecvtake(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocrecvtake(NvRuntime *r, NvTerm pid, NvFrag **taken, char *err, int nerr)
 {
 	NvProcess *p;
-	NvMessage *m;
+	NvFrag *f;
 
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
 	if(p->state != Prrunning || !p->scanning || p->scan == nil){ snprint(err,nerr,"bad_state"); return -1; }
-	m = p->scan;
+	f = p->scan;
 	if(p->scanprev != nil)
-		p->scanprev->next = m->next;
+		p->scanprev->next = f->next;
 	else
-		p->head = m->next;
-	if(p->tail == m)
+		p->head = f->next;
+	if(p->tail == f)
 		p->tail = p->scanprev;
-	p->mailboxbytes -= m->bytes;
+	p->mailboxwords -= nvfragwords(f);
 	p->scanprev = p->scan = nil;
 	p->scanning = 0;
-	nvvaluefree(&m->value);
-	free(m);
+	f->next = nil;
+	*taken = f;
 	return 0;
 }
 
 int
-nvprocrecvwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
+nvprocrecvwait(NvRuntime *r, NvTerm pid, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -491,16 +517,16 @@ nvprocrecvwait(NvRuntime *r, NvValue *pid, char *err, int nerr)
  * fail if `now` itself is already corrupt.
  */
 int
-nvprocarmdeadline(NvRuntime *r, NvValue *pid, NvValue *duration, uvlong now, char *err, int nerr)
+nvprocarmdeadline(NvRuntime *r, NvTerm pid, NvTerm duration, uvlong now, char *err, int nerr)
 {
 	NvProcess *p;
 	uvlong deadline;
+	vlong ival;
 
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
-	if(duration == nil || !duration->valid){ snprint(err,nerr,"bad_timeout"); return -1; }
-	if(duration->kind == Vatom){
-		if(duration->atom == nil || strcmp(duration->atom, "infinity") != 0){
+	if(nvtermkind(duration) == Vatom){
+		if(strcmp(nvtermatom(duration), "infinity") != 0){
 			snprint(err,nerr,"bad_timeout");
 			return -1;
 		}
@@ -508,11 +534,16 @@ nvprocarmdeadline(NvRuntime *r, NvValue *pid, NvValue *duration, uvlong now, cha
 		p->deadline = 0;
 		return 0;
 	}
-	if(duration->kind != Vint || duration->i < 0 || duration->i > NvMaxduration){
+	if(nvtermkind(duration) != Vint){
 		snprint(err,nerr,"bad_timeout");
 		return -1;
 	}
-	deadline = now + (uvlong)duration->i;
+	ival = nvtermint(duration);
+	if(ival < 0 || ival > NvMaxduration){
+		snprint(err,nerr,"bad_timeout");
+		return -1;
+	}
+	deadline = now + (uvlong)ival;
 	if(deadline < now){
 		snprint(err,nerr,"system_limit");
 		return -1;
@@ -532,7 +563,7 @@ nvprocarmdeadline(NvRuntime *r, NvValue *pid, NvValue *duration, uvlong now, cha
  * so it can fall through to the timeout body instead of blocking.
  */
 int
-nvprocrecvwaitdeadline(NvRuntime *r, NvValue *pid, uvlong now, char *err, int nerr)
+nvprocrecvwaitdeadline(NvRuntime *r, NvTerm pid, uvlong now, char *err, int nerr)
 {
 	NvProcess *p;
 
@@ -556,32 +587,31 @@ nvprocrecvwaitdeadline(NvRuntime *r, NvValue *pid, uvlong now, char *err, int ne
 }
 
 int
-nvprocreceive(NvRuntime *r, NvValue *pid, NvPatClause *clause, int nclause, NvBindings *bindings, int *which, NvValue *value, char *err, int nerr)
+nvprocreceive(NvRuntime *r, NvTerm pid, NvPatClause *clause, int nclause, NvBindings *bindings, int *which, NvFrag **msg, char *err, int nerr)
 {
 	NvProcess *p;
-	NvMessage *m, *prev;
+	NvFrag *f, *prev;
 	int selected, rc;
 
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
 	if(p->state != Prrunning || p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
 	prev = nil;
-	for(m = p->head; m != nil; prev = m, m = m->next){
-		rc = nvclauseselect(clause, nclause, &m->value, bindings, &selected, err, nerr);
+	for(f = p->head; f != nil; prev = f, f = f->next){
+		rc = nvclauseselect(clause, nclause, f->root, bindings, &selected, err, nerr);
 		if(rc < 0)
 			return -1;
 		if(rc == 0)
 			continue;
 		if(prev != nil)
-			prev->next = m->next;
+			prev->next = f->next;
 		else
-			p->head = m->next;
-		if(p->tail == m)
+			p->head = f->next;
+		if(p->tail == f)
 			p->tail = prev;
-		p->mailboxbytes -= m->bytes;
-		*value = m->value;
-		memset(&m->value, 0, sizeof m->value);
-		free(m);
+		p->mailboxwords -= nvfragwords(f);
+		f->next = nil;
+		*msg = f;
 		if(which != nil)
 			*which = selected;
 		return 1;

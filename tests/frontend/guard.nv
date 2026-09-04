@@ -1,0 +1,15 @@
+fn sign(x) when x > 0 { 1 }
+fn sign(x) when x < 0 { -1 }
+fn sign(_) { 0 }
+
+fn kind(x) when is_int(x) and x >= 0 { 'natural }
+fn kind(x) when is_atom(x) or is_tuple(x) { 'symbolic }
+fn kind(_) { 'other }
+
+fn main() {
+	match sign(-7) {
+		n when n < 0 => 'negative;
+		-1 => 'unreachable;
+		_ => 'other;
+	}
+}

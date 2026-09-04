@@ -18,6 +18,14 @@ struct NvConst {
 	int kind;
 	vlong ival;
 	char *text;
+	/*
+	 * D062: for a Katom constant, the interned atom term for text, filled
+	 * in once before execution (nvexecinit) instead of interning on
+	 * every loadk/testatom dispatch. 0 (NvNil) until interned. Declared
+	 * as uvlong rather than NvTerm because nvbc.h does not include
+	 * nvvm.h; they are the same type.
+	 */
+	uvlong atom;
 };
 
 enum {

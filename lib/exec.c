@@ -5,80 +5,134 @@
 #include "../include/nvvm.h"
 #include "../include/nvexec.h"
 
-static NvFunc *
-findfunc(NvModule *m, char *name)
+/*
+ * D061-D066: registers, constants, and results are NvTerm words now, not
+ * NvValue structs. There is no nvvaluefree: storage belongs to e->heap
+ * (D063) or to a fragment (D064), and both are freed whole, not per
+ * register. D065: frames live in e->stack, a realloc-grown array of
+ * words; a frame is NvFramehdr header words (function index, pc, caller
+ * frame offset, caller destination register) followed by that
+ * function's registers. e->fp is the executing frame's offset, e->sp
+ * the words in use, e->nstack the capacity.
+ *
+ * Load-bearing discipline (D063): e->stack can move (realloc) only when
+ * a frame is pushed -- Ocall and the growth Otailcall may need. curfunc/
+ * curregs/curpc are therefore recomputed at the top of every dispatch
+ * loop iteration rather than cached across iterations, so no stale
+ * pointer into e->stack ever survives a call, tailcall, or return. Heap
+ * allocations (nvint, nvtuple, nvheapcopy, host calls) do not move the
+ * stack, so a register pointer remains valid across those; only e->stack
+ * itself must never be assumed stable across a push.
+ */
+
+static int
+findfuncidx(NvModule *m, char *name)
 {
 	int i;
 	for(i = 0; i < m->nfunc; i++)
 		if(strcmp(m->func[i].name, name) == 0)
-			return &m->func[i];
-	return nil;
-}
-
-static NvExecFrame *
-framealloc(NvFunc *f, NvValue *arg, NvExecFrame *caller, int dst)
-{
-	NvExecFrame *p;
-	p = mallocz(sizeof *p, 1);
-	if(p == nil) return nil;
-	p->reg = mallocz(f->nreg*sizeof *p->reg, 1);
-	if(p->reg == nil){ free(p); return nil; }
-	p->func = f;
-	p->caller = caller;
-	p->dst = dst;
-	if(nvvaluecopy(&p->reg[0], arg) < 0){ free(p->reg); free(p); return nil; }
-	return p;
-}
-
-static void
-framefree(NvExecFrame *f)
-{
-	int i;
-	if(f == nil) return;
-	for(i = 0; i < f->func->nreg; i++) nvvaluefree(&f->reg[i]);
-	free(f->reg);
-	free(f);
-}
-
-static int
-putvalue(NvValue *d, NvValue *s)
-{
-	NvValue v;
-	if(!s->valid || nvvaluecopy(&v, s) < 0) return -1;
-	nvvaluefree(d);
-	*d = v;
-	return 0;
-}
-
-static int
-loadconst(NvValue *v, NvConst *k)
-{
-	if(k->kind == Kint){
-		memset(v, 0, sizeof *v);
-		v->valid = 1; v->kind = Vint; v->i = k->ival;
-		return 0;
-	}
-	if(k->kind == Katom) return nvvalueatom(v, k->text);
+			return i;
 	return -1;
 }
 
-static int
-intresult(NvValue *d, vlong n)
+static NvFunc *
+curfunc(NvExec *e)
 {
-	NvValue v;
-	memset(&v, 0, sizeof v);
-	v.valid = 1; v.kind = Vint; v.i = n;
-	nvvaluefree(d); *d = v;
+	return &e->module->func[(int)e->stack[e->fp+NvFramefunc]];
+}
+
+static NvTerm *
+curregs(NvExec *e)
+{
+	return e->stack + e->fp + NvFramehdr;
+}
+
+static ulong
+curpc(NvExec *e)
+{
+	return (ulong)e->stack[e->fp+NvFramepc];
+}
+
+static void
+setpc(NvExec *e, ulong pc)
+{
+	e->stack[e->fp+NvFramepc] = pc;
+}
+
+/* Grow e->stack (by doubling) so it holds at least `need` words. */
+static int
+growstack(NvExec *e, ulong need)
+{
+	ulong cap;
+	NvTerm *p;
+
+	if(need <= e->nstack)
+		return 0;
+	cap = e->nstack ? e->nstack : 64;
+	while(cap < need)
+		cap *= 2;
+	p = realloc(e->stack, cap*sizeof(NvTerm));
+	if(p == nil)
+		return -1;
+	e->stack = p;
+	e->nstack = cap;
+	return 0;
+}
+
+/*
+ * D065: push a new frame for funcidx on top of the stack, with reg[0]
+ * set to arg and every other register NvNil. Sets e->fp/e->sp on
+ * success; leaves them untouched on failure (out_of_memory).
+ */
+static int
+pushframe(NvExec *e, int funcidx, NvTerm arg, ulong callerfp, int dst)
+{
+	NvFunc *f;
+	ulong off, nsp;
+	NvTerm *r;
+	int i;
+
+	f = &e->module->func[funcidx];
+	off = e->sp;
+	nsp = off + NvFramehdr + f->nreg;
+	if(growstack(e, nsp) < 0)
+		return -1;
+	e->stack[off+NvFramefunc] = (NvTerm)funcidx;
+	e->stack[off+NvFramepc] = 0;
+	e->stack[off+NvFramecaller] = (NvTerm)callerfp;
+	e->stack[off+NvFramedst] = (NvTerm)dst;
+	r = e->stack + off + NvFramehdr;
+	for(i = 0; i < f->nreg; i++)
+		r[i] = NvNil;
+	r[0] = arg;
+	e->fp = off;
+	e->sp = nsp;
+	return 0;
+}
+
+/*
+ * D062: the runtime's own fixed atoms ('true, 'false, 'ok, 'undefined) are
+ * interned once, on first use, and cached here as term words so every
+ * later use is a load with no allocation and no table lookup.
+ */
+static NvTerm cachedtrue, cachedfalse, cachedok, cachedundefined;
+
+static int
+fixedatom(NvTerm *cache, char *text, NvTerm *out)
+{
+	if(*cache == NvNil){
+		*cache = nvatom(text);
+		if(*cache == NvNil)
+			return -1;
+	}
+	*out = *cache;
 	return 0;
 }
 
 static int
-atomresult(NvValue *d, int truth)
+boolatom(int truth, NvTerm *out)
 {
-	NvValue v;
-	if(nvvalueatom(&v, truth ? "true" : "false") < 0) return -1;
-	nvvaluefree(d); *d = v;
-	return 0;
+	return truth ? fixedatom(&cachedtrue, "true", out) : fixedatom(&cachedfalse, "false", out);
 }
 
 static int
@@ -117,10 +171,10 @@ mulok(vlong a, vlong b, vlong *r)
 /*
  * D060: while a guard executes (guardfail >= 0), a fault is clause failure,
  * not process failure: control transfers to the guard's fail target and
- * guard mode ends. e->frame is always the executing frame at a fault site
- * (every frame change stores it), and guards cannot call, so the target is
- * in this frame. NvGuardfault is private to this file; run() returns it
- * and nvexecrun resumes the loop instead of reporting it.
+ * guard mode ends. guardfail lives on NvExec, not per-frame, because
+ * guards cannot call and so cannot nest (D060). NvGuardfault is private to
+ * this file; run() returns it and nvexecrun resumes the loop instead of
+ * reporting it.
  */
 enum {
 	NvGuardfault = 100,
@@ -130,7 +184,7 @@ static int
 fault(NvExec *e, char *s)
 {
 	if(e->guardfail >= 0){
-		e->frame->pc = e->guardfail;
+		setpc(e, e->guardfail);
 		e->guardfail = -1;
 		return NvGuardfault;
 	}
@@ -140,15 +194,52 @@ fault(NvExec *e, char *s)
 }
 
 int
-nvexecinit(NvExec *e, NvModule *m, char *entry, NvValue *arg, Biobuf *trace, int traceon, char *err, int nerr)
+nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biobuf *trace, int traceon, char *err, int nerr)
 {
-	NvFunc *f;
+	int i, idx, rc;
+	NvTerm copied;
+
 	memset(e, 0, sizeof *e);
-	f = findfunc(m, entry);
-	if(f == nil){ snprint(err,nerr,"bad_function"); return -1; }
-	e->frame = framealloc(f, arg, nil, -1);
-	if(e->frame == nil){ snprint(err,nerr,"out_of_memory"); return -1; }
+	/*
+	 * D062: intern every Katom constant once, here, rather than on every
+	 * loadk/testatom dispatch. m->konst is shared by every NvExec built
+	 * from this module (D042 borrows one module for its whole lifetime),
+	 * so after the first nvexecinit each entry's atom is already set and
+	 * this loop is a cheap no-op scan.
+	 */
+	for(i = 0; i < m->nconst; i++)
+		if(m->konst[i].kind == Katom && m->konst[i].atom == NvNil){
+			m->konst[i].atom = nvatom(m->konst[i].text);
+			if(m->konst[i].atom == NvNil){ snprint(err,nerr,"out_of_memory"); return -1; }
+		}
+	idx = findfuncidx(m, entry);
+	if(idx < 0){ snprint(err,nerr,"bad_function"); return -1; }
 	e->module = m;
+	nvheapinit(&e->heap, maxheap);
+	/*
+	 * NvTermerror (nvheapcopy's "malformed input: NvNil") and a genuine
+	 * allocation failure share the code -1, so the only way to report
+	 * them as the distinct reasons "bad_argument" vs "out_of_memory" is
+	 * to rule the NvNil case out ourselves before calling nvheapcopy.
+	 */
+	if(arg == NvNil){
+		snprint(err,nerr,"bad_argument");
+		nvheapfree(&e->heap);
+		return -1;
+	}
+	rc = nvheapcopy(&e->heap, arg, &copied);
+	if(rc < 0){
+		snprint(err,nerr, rc == NvTermlimit ? "system_limit" : "out_of_memory");
+		nvheapfree(&e->heap);
+		return -1;
+	}
+	if(pushframe(e, idx, copied, NvNoframe, -1) < 0){
+		snprint(err,nerr,"out_of_memory");
+		nvheapfree(&e->heap);
+		free(e->stack);
+		e->stack = nil;
+		return -1;
+	}
 	e->trace = trace;
 	e->traceon = traceon;
 	e->nframe = 1;
@@ -171,168 +262,246 @@ nvexecsetframelimit(NvExec *e, ulong maxframe)
 void
 nvexecsethost(NvExec *e, NvExecHost *host)
 {
-	if(host == nil)
-		memset(&e->host, 0, sizeof e->host);
-	else
-		e->host = *host;
+	e->host = host;
 }
 
 static int
 run(NvExec *e, uvlong quantum)
 {
-	NvExecFrame *f, *n, *caller;
-	NvInsn *i;
+	NvFunc *func, *target;
+	NvTerm *regs, *r;
+	NvInsn *insn;
 	NvConst *k;
-	NvFunc *target;
-	NvValue v;
+	NvTerm v, arg;
+	NvFrag *frag;
 	char hosterr[128];
 	uvlong used;
 	vlong left, right, ir;
-	int dst, truth;
+	ulong pc, callerfp, newsp;
+	int j, truth, eq, rc, found, targetidx, dstreg;
 
 	if(e->state != NvYield) return e->state;
 	if(quantum == 0) return NvYield;
 	used = 0;
-	f = e->frame;
 	while(used < quantum){
-		i = &f->func->insn[f->pc];
+		func = curfunc(e);
+		regs = curregs(e);
+		pc = curpc(e);
+		insn = &func->insn[pc];
 		if(e->traceon && e->trace != nil)
-			Bprint(e->trace, "%llud %s:%d %s\n", e->reductions, f->func->name, f->pc, nvopname(i->op));
+			Bprint(e->trace, "%llud %s:%d %s\n", e->reductions, func->name, (int)pc, nvopname(insn->op));
 		used++; e->reductions++;
-		switch(i->op){
+		switch(insn->op){
 		case Oloadk:
-			memset(&v, 0, sizeof v);
-			if(loadconst(&v, &e->module->konst[i->b]) < 0) return fault(e,"bad_constant");
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a] = v; f->pc++; break;
-		case Omove:
-			if(putvalue(&f->reg[i->a], &f->reg[i->b]) < 0) return fault(e,"out_of_memory");
-			f->pc++; break;
-		case Otuple:
-			dst = nvvaluetuple(&v, &f->reg[i->b], i->c);
-			if(dst < 0) return fault(e,dst == NvValuelimit ? "system_limit" : "out_of_memory");
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a] = v; f->pc++; break;
-		case Ojump: f->pc = i->a; break;
-		case Ocall:
-			k = &e->module->konst[i->b]; target = findfunc(e->module, k->text);
-			if(target == nil) return fault(e,"bad_function");
-			if(e->nframe >= e->maxframe) return fault(e,"system_limit");
-			f->pc++; n = framealloc(target, &f->reg[i->c], f, i->a);
-			if(n == nil) return fault(e,"out_of_memory");
-			e->nframe++;
-			f = n; e->frame = f; break;
-		case Otailcall:
-			k = &e->module->konst[i->a]; target = findfunc(e->module, k->text);
-			if(target == nil) return fault(e,"bad_function");
-			n = framealloc(target, &f->reg[i->b], f->caller, f->dst);
-			if(n == nil) return fault(e,"out_of_memory");
-			framefree(f); f = n; e->frame = f; break;
-		case Oreturn:
-			if(f->caller == nil){
-				if(nvvaluecopy(&e->result, &f->reg[i->a]) < 0) return fault(e,"out_of_memory");
-				framefree(f); e->frame = nil; e->state = NvDone; return NvDone;
+			k = &e->module->konst[insn->b];
+			if(k->kind == Kint){
+				v = nvint(&e->heap, k->ival);
+				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			}else if(k->kind == Katom){
+				/* D062: interned by nvexecinit; nvatom is only a defensive fallback. */
+				v = (NvTerm)k->atom;
+				if(v == NvNil){
+					v = nvatom(k->text);
+					if(v == NvNil) return fault(e,"out_of_memory");
+					k->atom = v;
+				}
+			}else{
+				return fault(e,"bad_constant");
 			}
-			caller = f->caller; dst = f->dst;
-			if(putvalue(&caller->reg[dst], &f->reg[i->a]) < 0) return fault(e,"out_of_memory");
-			framefree(f); e->nframe--; f = caller; e->frame = f; break;
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Omove:
+			regs[insn->a] = regs[insn->b]; setpc(e, pc+1); break;
+		case Otuple:
+			/* D061: no depth check here any more -- copy/equal/print own it. */
+			v = nvtuple(&e->heap, regs+insn->b, insn->c);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Ojump:
+			setpc(e, insn->a); break;
+		case Ocall:
+			k = &e->module->konst[insn->b];
+			targetidx = findfuncidx(e->module, k->text);
+			if(targetidx < 0) return fault(e,"bad_function");
+			if(e->nframe >= e->maxframe) return fault(e,"system_limit");
+			arg = regs[insn->c];
+			setpc(e, pc+1);
+			if(pushframe(e, targetidx, arg, e->fp, insn->a) < 0) return fault(e,"out_of_memory");
+			e->nframe++;
+			break;
+		case Otailcall:
+			/* D065/D047: overwrite the current frame in place; nframe unchanged. */
+			k = &e->module->konst[insn->a];
+			targetidx = findfuncidx(e->module, k->text);
+			if(targetidx < 0) return fault(e,"bad_function");
+			arg = regs[insn->b];
+			target = &e->module->func[targetidx];
+			newsp = e->fp + NvFramehdr + target->nreg;
+			if(growstack(e, newsp) < 0) return fault(e,"out_of_memory");
+			e->stack[e->fp+NvFramefunc] = (NvTerm)targetidx;
+			e->stack[e->fp+NvFramepc] = 0;
+			e->sp = newsp;
+			r = e->stack + e->fp + NvFramehdr;
+			for(j = 0; j < target->nreg; j++)
+				r[j] = NvNil;
+			r[0] = arg;
+			break;
+		case Oreturn:
+			callerfp = (ulong)e->stack[e->fp+NvFramecaller];
+			if(callerfp == NvNoframe){
+				rc = nvfragcopy(regs[insn->a], ~0ULL, &e->result);
+				if(rc == NvTermlimit) return fault(e,"system_limit");
+				if(rc < 0) return fault(e,"out_of_memory");
+				e->state = NvDone;
+				e->fp = NvNoframe;
+				e->sp = 0;
+				return NvDone;
+			}
+			dstreg = (int)e->stack[e->fp+NvFramedst];
+			e->stack[callerfp+NvFramehdr+dstreg] = regs[insn->a];
+			e->sp = e->fp;
+			e->fp = callerfp;
+			e->nframe--;
+			break;
 		case Otestatom:
-			k = &e->module->konst[i->b]; f->pc = f->reg[i->a].kind == Vatom && strcmp(f->reg[i->a].atom,k->text)==0 ? f->pc+1 : i->c; break;
+			k = &e->module->konst[insn->b];
+			if(k->atom == NvNil){
+				k->atom = nvatom(k->text);
+				if(k->atom == NvNil) return fault(e,"out_of_memory");
+			}
+			setpc(e, regs[insn->a] == (NvTerm)k->atom ? pc+1 : insn->c); break;
 		case Otestint:
-			k = &e->module->konst[i->b]; f->pc = f->reg[i->a].kind == Vint && f->reg[i->a].i == k->ival ? f->pc+1 : i->c; break;
-		case Otesteq: f->pc = nvvalueequal(&f->reg[i->a],&f->reg[i->b]) ? f->pc+1 : i->c; break;
-		case Otestarity: f->pc = f->reg[i->a].kind == Vtuple && f->reg[i->a].tuple->n == i->b ? f->pc+1 : i->c; break;
+			k = &e->module->konst[insn->b];
+			setpc(e, nvtermkind(regs[insn->a]) == Vint && nvtermint(regs[insn->a]) == k->ival ? pc+1 : insn->c); break;
+		case Otesteq:
+			eq = nvtermequal(regs[insn->a], regs[insn->b]);
+			if(eq < 0) return fault(e,"system_limit");
+			setpc(e, eq ? pc+1 : insn->c); break;
+		case Otestarity:
+			setpc(e, nvtermkind(regs[insn->a]) == Vtuple && nvtuplelen(regs[insn->a]) == insn->b ? pc+1 : insn->c); break;
 		case Ogetelem:
-			if(f->reg[i->b].kind != Vtuple) return fault(e,"bad_tuple");
-			if(i->c >= f->reg[i->b].tuple->n) return fault(e,"bad_element");
-			if(putvalue(&f->reg[i->a],&f->reg[i->b].tuple->elem[i->c]) < 0) return fault(e,"out_of_memory");
-			f->pc++; break;
+			if(nvtermkind(regs[insn->b]) != Vtuple) return fault(e,"bad_tuple");
+			if(insn->c >= nvtuplelen(regs[insn->b])) return fault(e,"bad_element");
+			regs[insn->a] = nvtupleelem(regs[insn->b], insn->c);
+			setpc(e, pc+1); break;
 		case Oadd: case Osub: case Omul: case Odiv: case Orem:
 		case Olt: case Ole: case Ogt: case Oge:
-			if(f->reg[i->b].kind != Vint || f->reg[i->c].kind != Vint) return fault(e,"badarith");
-			left=f->reg[i->b].i; right=f->reg[i->c].i;
-			if(i->op==Oadd){ if(addok(left,right,&ir)<0) return fault(e,"overflow"); intresult(&f->reg[i->a],ir); }
-			else if(i->op==Osub){ if(subok(left,right,&ir)<0) return fault(e,"overflow"); intresult(&f->reg[i->a],ir); }
-			else if(i->op==Omul){ if(mulok(left,right,&ir)<0) return fault(e,"overflow"); intresult(&f->reg[i->a],ir); }
-			else if(i->op==Odiv || i->op==Orem){
-				if(right==0) return fault(e,"divide_by_zero");
-				if(i->op==Odiv && left==(vlong)0x8000000000000000LL && right==-1) return fault(e,"overflow");
-				ir=i->op==Odiv ? left/right : left==(vlong)0x8000000000000000LL && right==-1 ? 0 : left%right;
-				intresult(&f->reg[i->a],ir);
+			if(nvtermkind(regs[insn->b]) != Vint || nvtermkind(regs[insn->c]) != Vint) return fault(e,"badarith");
+			left = nvtermint(regs[insn->b]); right = nvtermint(regs[insn->c]);
+			if(insn->op == Oadd){
+				if(addok(left,right,&ir) < 0) return fault(e,"overflow");
+				v = nvint(&e->heap, ir);
+				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+				regs[insn->a] = v;
+			}else if(insn->op == Osub){
+				if(subok(left,right,&ir) < 0) return fault(e,"overflow");
+				v = nvint(&e->heap, ir);
+				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+				regs[insn->a] = v;
+			}else if(insn->op == Omul){
+				if(mulok(left,right,&ir) < 0) return fault(e,"overflow");
+				v = nvint(&e->heap, ir);
+				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+				regs[insn->a] = v;
+			}else if(insn->op == Odiv || insn->op == Orem){
+				if(right == 0) return fault(e,"divide_by_zero");
+				if(insn->op == Odiv && left == (vlong)0x8000000000000000LL && right == -1) return fault(e,"overflow");
+				ir = insn->op == Odiv ? left/right : (left == (vlong)0x8000000000000000LL && right == -1) ? 0 : left%right;
+				v = nvint(&e->heap, ir);
+				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+				regs[insn->a] = v;
 			}else{
-				truth=i->op==Olt?left<right:i->op==Ole?left<=right:i->op==Ogt?left>right:left>=right;
-				if(atomresult(&f->reg[i->a],truth)<0) return fault(e,"out_of_memory");
+				truth = insn->op == Olt ? left < right : insn->op == Ole ? left <= right : insn->op == Ogt ? left > right : left >= right;
+				if(boolatom(truth, &v) < 0) return fault(e,"out_of_memory");
+				regs[insn->a] = v;
 			}
-			f->pc++; break;
+			setpc(e, pc+1); break;
 		case Ofail:
-			k=&e->module->konst[i->a]; return fault(e,k->kind==Katom?k->text:"explicit_fail");
+			k = &e->module->konst[insn->a];
+			return fault(e, k->kind == Katom ? k->text : "explicit_fail");
 		case Oself:
-			if(e->host.self == nil) return fault(e,"bad_process_context");
-			memset(&v,0,sizeof v); hosterr[0]=0;
-			if(e->host.self(e->host.aux,&v,hosterr,sizeof hosterr)<0){ nvvaluefree(&v); return fault(e,hosterr[0]?hosterr:"system_limit"); }
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
+			if(e->host == nil || e->host->self == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			if(e->host->self(e, &v, hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
+			regs[insn->a] = v; setpc(e, pc+1); break;
 		case Omakeref:
-			if(e->host.makeref == nil) return fault(e,"bad_process_context");
-			memset(&v,0,sizeof v); hosterr[0]=0;
-			if(e->host.makeref(e->host.aux,&v,hosterr,sizeof hosterr)<0){ nvvaluefree(&v); return fault(e,hosterr[0]?hosterr:"system_limit"); }
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
+			if(e->host == nil || e->host->makeref == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			if(e->host->makeref(e, &v, hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
+			regs[insn->a] = v; setpc(e, pc+1); break;
 		case Osend:
-			if(e->host.send == nil) return fault(e,"bad_process_context");
-			memset(&v,0,sizeof v); hosterr[0]=0;
-			if(nvvaluecopy(&v,&f->reg[i->c])<0) return fault(e,"out_of_memory");
-			if(e->host.send(e->host.aux,&f->reg[i->b],&f->reg[i->c],hosterr,sizeof hosterr)<0){ nvvaluefree(&v); return fault(e,hosterr[0]?hosterr:"system_limit"); }
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
+			/* D061: reg[a] is a word copy of reg[c]; no value is copied on this side. */
+			if(e->host == nil || e->host->send == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			if(e->host->send(e, regs[insn->b], regs[insn->c], hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
+			regs[insn->a] = regs[insn->c]; setpc(e, pc+1); break;
 		case Ospawn:
-			if(e->host.spawn == nil) return fault(e,"bad_process_context");
-			k=&e->module->konst[i->b]; memset(&v,0,sizeof v); hosterr[0]=0;
-			if(e->host.spawn(e->host.aux,k->text,&f->reg[i->c],&v,hosterr,sizeof hosterr)<0){ nvvaluefree(&v); return fault(e,hosterr[0]?hosterr:"system_limit"); }
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
+			if(e->host == nil || e->host->spawn == nil) return fault(e,"bad_process_context");
+			k = &e->module->konst[insn->b]; hosterr[0] = 0;
+			if(e->host->spawn(e, k->text, regs[insn->c], &v, hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
+			regs[insn->a] = v; setpc(e, pc+1); break;
 		case Orecvbegin: case Orecvnext:
-			if(i->op==Orecvbegin && e->host.recvbegin==nil || i->op==Orecvnext && e->host.recvnext==nil) return fault(e,"bad_process_context");
-			memset(&v,0,sizeof v); hosterr[0]=0;
-			dst=i->op==Orecvbegin ? e->host.recvbegin(e->host.aux,&v,hosterr,sizeof hosterr) : e->host.recvnext(e->host.aux,&v,hosterr,sizeof hosterr);
-			if(dst<0){ nvvaluefree(&v); return fault(e,hosterr[0]?hosterr:"system_limit"); }
-			if(dst==0 && nvvalueatom(&v,"undefined")<0) return fault(e,"out_of_memory");
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v;
-			if(atomresult(&f->reg[i->b],dst!=0)<0) return fault(e,"out_of_memory");
-			f->pc++; break;
+			if(e->host == nil || (insn->op == Orecvbegin ? e->host->recvbegin == nil : e->host->recvnext == nil))
+				return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			found = insn->op == Orecvbegin ? e->host->recvbegin(e, &v, hosterr, sizeof hosterr)
+			                               : e->host->recvnext(e, &v, hosterr, sizeof hosterr);
+			if(found < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
+			if(found == 0){
+				if(fixedatom(&cachedundefined, "undefined", &v) < 0) return fault(e,"out_of_memory");
+			}
+			regs[insn->a] = v;
+			if(boolatom(found != 0, &v) < 0) return fault(e,"out_of_memory");
+			regs[insn->b] = v;
+			setpc(e, pc+1); break;
 		case Orecvtake:
-			if(e->host.recvtake==nil) return fault(e,"bad_process_context");
-			hosterr[0]=0;
-			if(e->host.recvtake(e->host.aux,hosterr,sizeof hosterr)<0) return fault(e,hosterr[0]?hosterr:"bad_state");
-			f->pc++; break;
+			if(e->host == nil || e->host->recvtake == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0; frag = nil;
+			if(e->host->recvtake(e, &frag, hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "bad_state");
+			if(frag != nil && nvheapadopt(&e->heap, frag) < 0){
+				nvfragfree(frag);
+				return fault(e,"system_limit");
+			}
+			setpc(e, pc+1); break;
 		case Orecvwait:
-			if(e->host.recvwait==nil) return fault(e,"bad_process_context");
-			hosterr[0]=0;
-			if(e->host.recvwait(e->host.aux,hosterr,sizeof hosterr)<0) return fault(e,hosterr[0]?hosterr:"bad_state");
-			f->pc=i->a; e->frame=f; return NvYield;
+			if(e->host == nil || e->host->recvwait == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			if(e->host->recvwait(e, hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "bad_state");
+			setpc(e, insn->a); return NvYield;
 		case Orecvdeadline:
-			if(e->host.recvdeadline==nil) return fault(e,"bad_process_context");
-			hosterr[0]=0;
-			if(e->host.recvdeadline(e->host.aux,&f->reg[i->a],hosterr,sizeof hosterr)<0) return fault(e,hosterr[0]?hosterr:"bad_timeout");
-			f->pc++; break;
+			if(e->host == nil || e->host->recvdeadline == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			if(e->host->recvdeadline(e, regs[insn->a], hosterr, sizeof hosterr) < 0) return fault(e, hosterr[0] ? hosterr : "bad_timeout");
+			setpc(e, pc+1); break;
 		case Orecvwaitdeadline:
-			if(e->host.recvwaitdeadline==nil) return fault(e,"bad_process_context");
-			hosterr[0]=0;
-			dst=e->host.recvwaitdeadline(e->host.aux,hosterr,sizeof hosterr);
-			if(dst<0) return fault(e,hosterr[0]?hosterr:"bad_state");
-			if(dst==0){ f->pc=i->a; e->frame=f; return NvYield; }
-			f->pc++; break;
+			if(e->host == nil || e->host->recvwaitdeadline == nil) return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			found = e->host->recvwaitdeadline(e, hosterr, sizeof hosterr);
+			if(found < 0) return fault(e, hosterr[0] ? hosterr : "bad_state");
+			if(found == 0){ setpc(e, insn->a); return NvYield; }
+			setpc(e, pc+1); break;
 		case Oexit:
-			if(nvvaluecopy(&e->exitreason,&f->reg[i->a])<0) return fault(e,"out_of_memory");
-			e->state=NvExit; e->frame=f; return NvExit;
+			rc = nvfragcopy(regs[insn->a], ~0ULL, &e->exitreason);
+			if(rc == NvTermlimit) return fault(e,"system_limit");
+			if(rc < 0) return fault(e,"out_of_memory");
+			e->state = NvExit; return NvExit;
 		case Oprint: case Oeprint:
-			if((i->op==Oprint ? e->host.print : e->host.eprint)==nil) return fault(e,"bad_process_context");
-			hosterr[0]=0;
-			dst=i->op==Oprint ? e->host.print(e->host.aux,&f->reg[i->b],hosterr,sizeof hosterr)
-			                  : e->host.eprint(e->host.aux,&f->reg[i->b],hosterr,sizeof hosterr);
-			if(dst<0) return fault(e,hosterr[0]?hosterr:"io_error");
-			if(nvvalueatom(&v,"ok")<0) return fault(e,"out_of_memory");
-			nvvaluefree(&f->reg[i->a]); f->reg[i->a]=v; f->pc++; break;
-		case Onop: f->pc++; break;
-		case Oguard: e->guardfail = i->a; f->pc++; break;
-		case Oguardend: e->guardfail = -1; f->pc++; break;
+			if(e->host == nil || (insn->op == Oprint ? e->host->print == nil : e->host->eprint == nil))
+				return fault(e,"bad_process_context");
+			hosterr[0] = 0;
+			found = insn->op == Oprint ? e->host->print(e, regs[insn->b], hosterr, sizeof hosterr)
+			                           : e->host->eprint(e, regs[insn->b], hosterr, sizeof hosterr);
+			if(found < 0) return fault(e, hosterr[0] ? hosterr : "io_error");
+			if(fixedatom(&cachedok, "ok", &v) < 0) return fault(e,"out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Onop:
+			setpc(e, pc+1); break;
+		case Oguard:
+			e->guardfail = insn->a; setpc(e, pc+1); break;
+		case Oguardend:
+			e->guardfail = -1; setpc(e, pc+1); break;
 		case Oistype:
-			if(atomresult(&f->reg[i->a], f->reg[i->b].valid && f->reg[i->b].kind == i->c) < 0) return fault(e,"out_of_memory");
-			f->pc++; break;
+			if(boolatom(nvtermkind(regs[insn->b]) == insn->c, &v) < 0) return fault(e,"out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
 		default:
 			/*
 			 * Unreachable for a verified module (nvverify rejects unknown
@@ -343,7 +512,6 @@ run(NvExec *e, uvlong quantum)
 			return fault(e,"bad_opcode");
 		}
 	}
-	e->frame = f;
 	return NvYield;
 }
 
@@ -374,10 +542,10 @@ nvexecrun(NvExec *e, uvlong quantum)
 void
 nvexecfree(NvExec *e)
 {
-	NvExecFrame *f, *next;
 	if(e == nil) return;
-	for(f=e->frame; f!=nil; f=next){ next=f->caller; framefree(f); }
-	nvvaluefree(&e->result);
-	nvvaluefree(&e->exitreason);
+	free(e->stack);
+	nvheapfree(&e->heap);
+	if(e->result != nil) nvfragfree(e->result);
+	if(e->exitreason != nil) nvfragfree(e->exitreason);
 	memset(e,0,sizeof *e);
 }

@@ -1,0 +1,62 @@
+// Many idle processes, two busy ones: does the number of BLOCKED processes
+// cost the two that are running anything?
+//
+// main (slot 0) ping-pongs with a ponger spawned first (slot 1) while
+// `waiters` processes, spawned afterwards into every higher slot, sit
+// blocked in receive the whole time. Under the pre-D059 slot scan every
+// pong back to main scanned all the waiters; under the FIFO run queue the
+// waiters are never looked at until the final 'stop drains through them.
+//
+// `main waiters pings`; root value is the number of pongs received.
+
+fn ponger() {
+	receive {
+		${'ping, from} => {
+			from ! 'pong;
+			ponger()
+		}
+		'stop => 'ok;
+	}
+}
+
+fn waiter(next) {
+	receive {
+		'stop => if next != 'nil {
+			next ! 'stop
+		}
+	}
+}
+
+fn spawnwaiters(0, prev) {
+	prev
+}
+
+fn spawnwaiters(n, prev) {
+	spawnwaiters(n - 1, spawn waiter(prev))
+}
+
+fn pings(p, 0, got) {
+	got
+}
+
+fn pings(p, n, got) {
+	p ! ${'ping, self};
+	receive {
+		'pong => pings(p, n - 1, got + 1);
+	}
+}
+
+fn main() {
+	main(1000, 100000)
+}
+
+fn main(waiters, n) {
+	p = spawn ponger();
+	last = spawnwaiters(waiters, 'nil);
+	got = pings(p, n, 0);
+	p ! 'stop;
+	if last != 'nil {
+		last ! 'stop
+	}
+	got
+}

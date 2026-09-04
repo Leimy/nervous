@@ -1,5 +1,4 @@
 typedef struct NvExec NvExec;
-typedef struct NvExecFrame NvExecFrame;
 typedef struct NvExecHost NvExecHost;
 
 enum {
@@ -9,16 +8,30 @@ enum {
 	NvExit,
 };
 
+/*
+ * D043/D065: the host callback table. Every callback receives the
+ * executing NvExec; the host finds its own state through e->host->aux
+ * and, when it must allocate a term for the process (makeref), uses
+ * e->heap. Terms passed in (pid, value, arg, duration) are words in the
+ * process's registers and are valid only for the duration of the call;
+ * a host that keeps one must copy it (nvfragcopy), which is exactly what
+ * send and spawn do.
+ *
+ * recvbegin/recvnext (D064) place a term pointing into the candidate
+ * mailbox fragment in *value; no copy is made. recvtake returns the
+ * unlinked fragment through *taken and the interpreter adopts it into
+ * e->heap; a host with no heap to adopt into frees it.
+ */
 struct NvExecHost {
 	void *aux;
-	int (*self)(void *, NvValue *, char *, int);
-	int (*makeref)(void *, NvValue *, char *, int);
-	int (*send)(void *, NvValue *, NvValue *, char *, int);
-	int (*spawn)(void *, char *, NvValue *, NvValue *, char *, int);
-	int (*recvbegin)(void *, NvValue *, char *, int);
-	int (*recvnext)(void *, NvValue *, char *, int);
-	int (*recvtake)(void *, char *, int);
-	int (*recvwait)(void *, char *, int);
+	int (*self)(NvExec *, NvTerm *, char *, int);
+	int (*makeref)(NvExec *, NvTerm *, char *, int);
+	int (*send)(NvExec *, NvTerm pid, NvTerm value, char *, int);
+	int (*spawn)(NvExec *, char *entry, NvTerm arg, NvTerm *pid, char *, int);
+	int (*recvbegin)(NvExec *, NvTerm *, char *, int);
+	int (*recvnext)(NvExec *, NvTerm *, char *, int);
+	int (*recvtake)(NvExec *, NvFrag **taken, char *, int);
+	int (*recvwait)(NvExec *, char *, int);
 	/*
 	 * D051 timeout boundary. recvdeadline arms one absolute deadline from
 	 * a duration term and returns 0, or -1 with a reason for a duration
@@ -28,41 +41,55 @@ struct NvExecHost {
 	 * already expired and execution must fall through to the timeout body,
 	 * and -1 with a reason on an illegal scan phase.
 	 */
-	int (*recvdeadline)(void *, NvValue *, char *, int);
-	int (*recvwaitdeadline)(void *, char *, int);
+	int (*recvdeadline)(NvExec *, NvTerm duration, char *, int);
+	int (*recvwaitdeadline)(NvExec *, char *, int);
 	/*
 	 * D053-D057 I/O boundary. print/eprint write one value to host
 	 * stdout/stderr respectively and return 0 on success or -1 with a
-	 * reason (io_error on a host write failure). Unlike self/send, the
-	 * callback does not produce the destination value: nvexecrun writes
-	 * the fixed atom 'ok into the destination register itself on
-	 * success, the same way arithmetic instructions build their own
-	 * result. A nil slot (no host, or a host that did not wire this
-	 * operation) faults bad_process_context exactly like every other
-	 * process instruction.
+	 * reason (io_error on a host write failure, system_limit if the value
+	 * is deeper than NvMaxtermdepth). The callback does not produce the
+	 * destination value: nvexecrun writes the fixed atom 'ok into the
+	 * destination register itself on success. A nil slot faults
+	 * bad_process_context exactly like every other process instruction.
 	 */
-	int (*print)(void *, NvValue *, char *, int);
-	int (*eprint)(void *, NvValue *, char *, int);
+	int (*print)(NvExec *, NvTerm, char *, int);
+	int (*eprint)(NvExec *, NvTerm, char *, int);
 };
 
-struct NvExecFrame {
-	NvFunc *func;
-	int pc;
-	NvValue *reg;
-	int dst;
-	NvExecFrame *caller;
+/*
+ * D065: the frame stack. One contiguous array of words. A frame is
+ * NvFramehdr header words followed by the function's nreg register
+ * words, all initialized to NvNil at push. The header holds the
+ * function's index in module->func, the pc, the caller frame's offset
+ * (NvNoframe for the root frame), and the caller's destination register.
+ * `fp` is the offset of the executing frame; `sp` the words in use.
+ * The stack may move on a push (realloc), so register pointers are
+ * recomputed from fp after every call, tail call, and return.
+ */
+enum {
+	NvFramefunc = 0,
+	NvFramepc = 1,
+	NvFramecaller = 2,
+	NvFramedst = 3,
+	NvFramehdr = 4,
 };
+
+#define NvNoframe (~0UL)
 
 struct NvExec {
 	NvModule *module;
-	NvExecFrame *frame;
-	NvValue result;
-	NvValue exitreason;
-	uvlong reductions;
+	NvHeap heap;		/* D063: the process heap; freed whole by nvexecfree */
+	NvTerm *stack;		/* D065 */
+	ulong fp;
+	ulong sp;
+	ulong nstack;		/* capacity in words */
 	ulong nframe;
 	ulong maxframe;
+	NvFrag *result;		/* D064: the root return value, as a fragment; nil until NvDone */
+	NvFrag *exitreason;	/* D064: the `exit` reason, as a fragment; nil until NvExit */
+	uvlong reductions;
 	Biobuf *trace;
-	NvExecHost host;
+	NvExecHost *host;	/* D065: shared table owned by the host; nil = no host */
 	int traceon;
 	int state;
 	/*
@@ -74,7 +101,16 @@ struct NvExec {
 	char fault[128];
 };
 
-int nvexecinit(NvExec *, NvModule *, char *, NvValue *, Biobuf *, int, char *, int);
+/*
+ * nvexecinit copies arg into the fresh process heap (system_limit if it
+ * is deeper than NvMaxtermdepth) and pushes the entry frame. maxheap of
+ * 0 is unlimited (D066 accounting arrives in stage 3). nvexecsethost
+ * installs the host table by pointer; the table must outlive the exec.
+ * The caller owns e->result / e->exitreason after NvDone / NvExit and
+ * may take them (set the field nil) before nvexecfree, which otherwise
+ * frees them.
+ */
+int nvexecinit(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, int, char *, int);
 void nvexecsethost(NvExec *, NvExecHost *);
 int nvexecsetframelimit(NvExec *, ulong);
 int nvexecrun(NvExec *, uvlong);

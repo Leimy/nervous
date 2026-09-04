@@ -33,19 +33,20 @@ check(int ok, char *s)
  * exactly three progress steps plus the final NvSchedDone step.
  */
 static void
-run(NvIO *io, char *entry, NvModule *m, NvLimits *limits, uvlong incarnation,
+run(NvHeap *heap, NvIO *io, char *entry, NvModule *m, NvLimits *limits, uvlong incarnation,
 	uvlong *dispatches, uvlong *completed, uvlong *faulted, int *steps)
 {
 	NvScheduler sched;
-	NvValue arg, pid;
+	NvTerm arg, pid;
 	char err[128];
 	int state, i;
 
-	check(nvvaluetuple(&arg, nil, 0) == 0, "argument tuple");
+	arg = nvtuple(heap, nil, 0);
+	check(nvtermkind(arg) == Vtuple, "argument tuple");
 	check(nvschedinit(&sched, m, limits, incarnation, 1, err, sizeof err) == 0, err);
 	if(io != nil)
 		nvschedsetio(&sched, io);
-	check(nvschedspawn(&sched, entry, &arg, &pid, err, sizeof err) == 0, "spawn fixture entry");
+	check(nvschedspawn(&sched, entry, arg, &pid, err, sizeof err) == 0, "spawn fixture entry");
 	i = 0;
 	do{
 		state = nvschedstep(&sched, err, sizeof err);
@@ -58,8 +59,6 @@ run(NvIO *io, char *entry, NvModule *m, NvLimits *limits, uvlong incarnation,
 	*faulted = sched.faulted;
 	*steps = i;
 	nvschedfree(&sched);
-	nvvaluefree(&pid);
-	nvvaluefree(&arg);
 }
 
 void
@@ -71,6 +70,7 @@ main(void)
 	NvConst konst[1];
 	NvLimits limits;
 	NvIO io;
+	static NvHeap hostheap;
 	Biobuf *devnull;
 	uvlong pdispatch, pcompleted, pfaulted, ndispatch, ncompleted, nfaulted;
 	int psteps, nsteps;
@@ -79,6 +79,8 @@ main(void)
 	memset(func, 0, sizeof func);
 	memset(insn, 0, sizeof insn);
 	memset(konst, 0, sizeof konst);
+
+	nvheapinit(&hostheap, 0);
 
 	konst[0].kind = Katom;
 	konst[0].text = "hi";
@@ -111,15 +113,17 @@ main(void)
 	limits.maxmessage = 1024;
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
+	limits.maxatom = 65536;
 
 	devnull = Bopen("/dev/null", OWRITE);
 	check(devnull != nil, "open /dev/null for the print sink");
 	io.out = devnull;
 	io.err = nil;
 
-	run(&io, "printone", &module, &limits, 1, &pdispatch, &pcompleted, &pfaulted, &psteps);
-	run(nil, "nopone", &module, &limits, 2, &ndispatch, &ncompleted, &nfaulted, &nsteps);
+	run(&hostheap, &io, "printone", &module, &limits, 1, &pdispatch, &pcompleted, &pfaulted, &psteps);
+	run(&hostheap, nil, "nopone", &module, &limits, 2, &ndispatch, &ncompleted, &nfaulted, &nsteps);
 	Bterm(devnull);
 
 	check(pfaulted == 0, "print under an installed sink never faults");
@@ -128,6 +132,7 @@ main(void)
 	check(psteps == 4 && psteps == nsteps, "print costs no extra scheduler steps versus nop");
 	print("ok - print consumes one ordinary reduction and changes no scheduling behavior\n");
 
+	nvheapfree(&hostheap);
 	print("all io scheduling tests passed\n");
 	exits(nil);
 }

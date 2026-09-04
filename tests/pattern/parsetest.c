@@ -6,6 +6,9 @@
 #include "../../include/nvvm.h"
 #include "../../include/nvpat.h"
 
+/* D061/D064: one host heap backs every term this program builds. */
+static NvHeap hostheap;
+
 static void
 fail(char *s)
 {
@@ -52,16 +55,10 @@ clausepattern(Clause *c, char *err, int nerr)
 	return p;
 }
 
-static NvValue
+static NvTerm
 integer(vlong n)
 {
-	NvValue v;
-
-	memset(&v, 0, sizeof v);
-	v.valid = 1;
-	v.kind = Vint;
-	v.i = n;
-	return v;
+	return nvint(nil, n);
 }
 
 void
@@ -75,9 +72,11 @@ main(void)
 	NvPatClause pc[2];
 	NvPattern *p[2];
 	NvBindings b;
-	NvValue args, elem[2], inner, ie[2], *x;
+	NvTerm args, elem[2], inner, ie[2], *x;
 	char err[128];
 	int which, nchain;
+
+	nvheapinit(&hostheap, 0);
 
 	/* Two adjacent declarations of one name are one function's clauses (D058). */
 	src = "fn choose(${'ok, x}, x) { x }\nfn choose(_, y) { y }\n";
@@ -94,50 +93,54 @@ main(void)
 		pc[which].pattern = p[which];
 	}
 
-	ie[0].valid = 1;
-	ie[0].kind = Vatom;
-	ie[0].atom = strdup("ok");
-	ie[1] = integer(7);
-	if(ie[0].atom == nil || nvvaluetuple(&inner, ie, 2) < 0)
+	/*
+	 * D062: atoms are interned, so ie[0] must be built through nvatom
+	 * rather than a private strdup. D061: nvtuple copies the term word,
+	 * not the atom text, so there is no dangling-pointer hazard here any
+	 * more -- the atom stays interned in the runtime-wide table.
+	 */
+	ie[0] = nvatom("ok");
+	if(ie[0] == NvNil)
 		fail("value allocation");
-	free(ie[0].atom);
+	ie[1] = integer(7);
+	inner = nvtuple(&hostheap, ie, 2);
+	if(inner == NvNil)
+		fail("value allocation");
 	elem[0] = inner;
 	elem[1] = integer(7);
-	if(nvvaluetuple(&args, elem, 2) < 0)
+	args = nvtuple(&hostheap, elem, 2);
+	if(args == NvNil)
 		fail("argument allocation");
-	nvvaluefree(&inner);
 	memset(&b, 0, sizeof b);
-	if(nvclauseselect(pc, 2, &args, &b, &which, err, sizeof err) != 1 || which != 0)
+	if(nvclauseselect(pc, 2, args, &b, &which, err, sizeof err) != 1 || which != 0)
 		fail("parsed first clause not selected");
 	x = nvbinding(&b, "x");
-	if(x == nil || x->kind != Vint || x->i != 7)
+	if(x == nil || nvtermkind(*x) != Vint || nvtermint(*x) != 7)
 		fail("parsed repeated binding missing");
 	print("ok - parsed repeated tuple pattern\n");
 	nvbindingsfree(&b);
-	nvvaluefree(&args);
 
-	ie[0].valid = 1;
-	ie[0].kind = Vatom;
-	ie[0].atom = strdup("other");
-	ie[1] = integer(4);
-	if(ie[0].atom == nil || nvvaluetuple(&inner, ie, 2) < 0)
+	ie[0] = nvatom("other");
+	if(ie[0] == NvNil)
 		fail("value allocation");
-	free(ie[0].atom);
+	ie[1] = integer(4);
+	inner = nvtuple(&hostheap, ie, 2);
+	if(inner == NvNil)
+		fail("value allocation");
 	elem[0] = inner;
 	elem[1] = integer(9);
-	if(nvvaluetuple(&args, elem, 2) < 0)
+	args = nvtuple(&hostheap, elem, 2);
+	if(args == NvNil)
 		fail("argument allocation");
-	nvvaluefree(&inner);
 	memset(&b, 0, sizeof b);
-	if(nvclauseselect(pc, 2, &args, &b, &which, err, sizeof err) != 1 || which != 1)
+	if(nvclauseselect(pc, 2, args, &b, &which, err, sizeof err) != 1 || which != 1)
 		fail("parsed fallback clause not selected");
 	x = nvbinding(&b, "y");
-	if(x == nil || x->kind != Vint || x->i != 9)
+	if(x == nil || nvtermkind(*x) != Vint || nvtermint(*x) != 9)
 		fail("parsed fallback binding missing");
 	print("ok - parsed clauses preserve source order\n");
 
 	nvbindingsfree(&b);
-	nvvaluefree(&args);
 	nvpatternfree(p[0]);
 	nvpatternfree(p[1]);
 	programfree(program);
@@ -214,5 +217,6 @@ main(void)
 	}
 	print("ok - operator chain depth is controlled\n");
 	print("all parsed pattern tests passed\n");
+	nvheapfree(&hostheap);
 	exits(nil);
 }

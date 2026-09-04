@@ -14,13 +14,9 @@ D053 settles why this milestone exists and where it sits (after R2, before the r
 
 ## Milestone 08 - Memory
 
-- Per-process footprint. Measured motivation: `examples/ring.nv main 65535 2000` could not allocate its processes in a modest VM; 32768 fit. An idle `node` process today is roughly `NvProcess` (~100 bytes) + `NvExec` (~200 bytes, including a private copy of the ten-entry host callback table that is identical in every process) + one frame whose register array holds full `NvValue` structs (tens of bytes each) + the copied `next` pid + Plan 9 malloc headers on each of four or five blocks: 1-1.5 KB per blocked process. Two things are visible independent of the heap design: the host callback table should be one shared pointer per scheduler, and a term should be a tagged word, not a struct. Both belong to the tagging/layout questions below rather than to a patch now.
-- Exact 64-bit term tagging.
-- Initial heap layout and copying-collector details.
-- Stack/frame root enumeration.
-- Message-fragment merge timing.
-- Heap and allocation exhaustion behavior.
-- Atom lifetime and atom-table limits.
+Every original question is answered in D061 through D066: term tagging (D061), atom lifetime and table limits (D062), heap layout, collector, and root enumeration (D063, D065), fragment merge timing (D064), and exhaustion behavior (D066). The per-process footprint motivation (65535 ring nodes would not fit in a modest VM; ~1-1.5 KB per blocked process) is recorded in `bench/README.md`, and the two fixes it named -- a shared host callback table and word-sized terms -- are D065 and D061.
+
+Two details are left to the implementation and should be recorded as a note on the relevant decision once measured rather than decided ahead: the exact slot/generation split of the PID payload (D061 fixes only that `maxprocess` fits the slot field) and the heap's initial size and growth factor (D063 fixes only the rule, not the constants).
 
 ## Milestone 09 - Binaries
 

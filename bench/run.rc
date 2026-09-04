@@ -1,0 +1,58 @@
+#!/bin/rc
+# Scheduler and message-passing benchmarks. Not part of tests/run.rc: these
+# take seconds to minutes and their value is the numbers, not pass/fail.
+# Each run prints `nervous -s` statistics; compare "ns per message" and
+# "per peak live process" across shapes and across builds.
+#
+# usage: rc bench/run.rc [small|large]
+#   small (default): every shape at a size that finishes in a few seconds.
+#   large: the D059 motivating sizes; needs enough memory for 32768+ processes.
+
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+root=`{basename -d $benchdir}
+bin=$root/nervous
+
+if(! test -x $bin){
+	echo $0: build first with mk >[1=2]
+	exit no-binary
+}
+
+size=small
+if(~ $#* 1)
+	size=$1
+
+# Labels, `time`, and -s statistics all go to stderr; stdout carries only
+# the program's own output, so a shape that prints a lot can be sent to
+# /dev/null without losing its numbers.
+fn bench {
+	echo '==' $* >[1=2]
+	time $bin -s -r $*
+	echo >[1=2]
+}
+
+switch($size){
+case small
+	bench $root/examples/ring.nv main 10 200000
+	bench $root/examples/ring.nv main 1000 2000
+	bench $benchdir/ring-up.nv main 1000 2000
+	bench $benchdir/waiters.nv main 1000 100000
+	bench $benchdir/waiters.nv main 10000 100000
+	bench $root/examples/sieve.nv main 5000 >/dev/null
+case large
+	bench $root/examples/ring.nv main 32768 2000
+	bench $benchdir/ring-up.nv main 32768 2000
+	bench $benchdir/waiters.nv main 32768 1000000
+	bench $root/examples/sieve.nv main 20000 >/dev/null
+case *
+	echo usage: $0 '[small|large]' >[1=2]
+	exit usage
+}
