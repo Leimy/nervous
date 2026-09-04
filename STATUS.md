@@ -16,7 +16,10 @@ milestone: 08 - Memory (process-local heap and GC)
 state: ready (design proposed, not yet recorded as decisions; no code started)
 dependencies: R2, 05, 06 -- all complete
 last verified build: mk clean && mk tests passes from empty
-last verified test run: rc tests/run.rc full pass, user-confirmed, on the build that includes D060 guards
+last verified test run: rc tests/run.rc full pass, user-confirmed, on the committed tree (guards,
+  exec.c default arm, documentation compaction all included)
+source control: git, first commit pushed at the end of the post-R2 session; .gitignore covers
+  object files (*.[0-9]) and built binaries -- if any were committed before it existed, git rm --cached them
 ```
 
 Milestone states: `not-started`, `ready`, `active`, `blocked`, `acceptance`, `complete`. Review milestones are mandatory gates; forward feature work pauses until the active review's exit criterion is met.
@@ -76,7 +79,7 @@ Staging to keep the suite green: (1) atom interning alone, measured; (2) tagged 
 
 ## Recently completed
 
-All user-confirmed; details in the archive and the decisions log. Tail calls (R2-F21). Root-fault-first CLI reporting (R2-F22). Examples `ring`, `isolation`, `ioserver`. D059 FIFO run queue (R2-F23). `maxprocess` 65536. `nervous -s` and `bench/`. Unary and boolean operators. D060 guards and type tests. Documentation compaction: this file, `docs/review-findings.md`, and the two archives.
+All user-confirmed and committed; details in the archive and the decisions log. Tail calls (R2-F21). Root-fault-first CLI reporting (R2-F22). Examples `ring`, `isolation`, `ioserver`. D059 FIFO run queue (R2-F23). `maxprocess` 65536. `nervous -s` and `bench/`. Unary and boolean operators. D060 guards and type tests. Documentation compaction: this file, `docs/review-findings.md`, and the two archives; `README.md` now carries the minimum reading list.
 
 ## Next coordinator actions
 
