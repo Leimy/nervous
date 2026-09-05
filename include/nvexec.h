@@ -6,6 +6,7 @@ enum {
 	NvDone,
 	NvFault,
 	NvExit,
+	NvCollect,	/* request only; exec state remains NvYield */
 };
 
 /*
@@ -30,6 +31,8 @@ struct NvExecHost {
 	int (*spawn)(NvExec *, char *entry, NvTerm arg, NvTerm *pid, char *, int);
 	int (*recvbegin)(NvExec *, NvTerm *, char *, int);
 	int (*recvnext)(NvExec *, NvTerm *, char *, int);
+	/* Validate/size the candidate without consuming it; paired with recvtake. */
+	int (*recvneed)(NvExec *, uvlong *, char *, int);
 	int (*recvtake)(NvExec *, NvFrag **taken, char *, int);
 	int (*recvwait)(NvExec *, char *, int);
 	/*
@@ -98,13 +101,20 @@ struct NvExec {
 	 * guards cannot call, so they cannot nest.
 	 */
 	int guardfail;
+	int gcstress;
+	int gcpending;
+	int gcretry;		/* 0 fresh, 1 collected, 2 limit, 3 allocation failure */
+	uvlong gcneed;		/* additional charge; also conservative space allowance */
+	uvlong collections;
+	uvlong livewords;	/* live heap words at last successful collection */
 	char fault[128];
 };
 
 /*
  * nvexecinit copies arg into the fresh process heap (system_limit if it
  * is deeper than NvMaxtermdepth) and pushes the entry frame. maxheap of
- * 0 is unlimited (D066 accounting arrives in stage 3). nvexecsethost
+ * 0 is unlimited; startup and retained stack capacity are charged.
+ * nvexecsethost
  * installs the host table by pointer; the table must outlive the exec.
  * The caller owns e->result / e->exitreason after NvDone / NvExit and
  * may take them (set the field nil) before nvexecfree, which otherwise
@@ -113,5 +123,17 @@ struct NvExec {
 int nvexecinit(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, int, char *, int);
 void nvexecsethost(NvExec *, NvExecHost *);
 int nvexecsetframelimit(NvExec *, ulong);
+/* NvCollect leaves pc, registers and reductions unchanged at the pending
+ * instruction. Stop the owner and call nvexecgc before retrying. */
 int nvexecrun(NvExec *, uvlong);
+/* Explicit collection only while suspended at NvYield; no state/pc/reduction
+ * change. Charges stack capacity (nstack), scans only active registers.
+ * Returns nvheapcollect's status; malformed frame metadata is NvTermerror.
+ */
+int nvexeccollect(NvExec *, uvlong need);
+/* Service one NvCollect request, recording success/failure for the retry.
+ * Never executes an instruction or faults a guard outside the interpreter. */
+void nvexecgc(NvExec *);
+/* Standalone convenience: service requests inline within the same quantum. */
+int nvexecruninline(NvExec *, uvlong);
 void nvexecfree(NvExec *);

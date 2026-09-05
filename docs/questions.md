@@ -16,7 +16,15 @@ D053 settles why this milestone exists and where it sits (after R2, before the r
 
 Every original question is answered in D061 through D066: term tagging (D061), atom lifetime and table limits (D062), heap layout, collector, and root enumeration (D063, D065), fragment merge timing (D064), and exhaustion behavior (D066). The per-process footprint motivation (65535 ring nodes would not fit in a modest VM; ~1-1.5 KB per blocked process) is recorded in `bench/README.md`, and the two fixes it named -- a shared host callback table and word-sized terms -- are D065 and D061.
 
-Two details are left to the implementation and should be recorded as a note on the relevant decision once measured rather than decided ahead: the exact slot/generation split of the PID payload (D061 fixes only that `maxprocess` fits the slot field) and the heap's initial size and growth factor (D063 fixes only the rule, not the constants).
+Off-process collection, raised after stage 2, is settled in D067-D070 (reserve at the boundary, yield to collect; heap owner state; collector procs via `rfork(RFMEM)`; Plan 9 procs as the multicore unit) and is stage 3 work, not milestone 10 work.
+
+Constants left to measurement, to be recorded as notes on the named decision once the bench settles them:
+
+- PID payload split (D061). Stage 2 chose 30 slot / 32 generation bits (`include/nvvm.h`).
+- Space sizing (D069): 64-word minimum, power-of-two growth with live+need at most half. Stage 2's chunk policy (64-word minimum, doubling, 65536-word cap, `lib/value.c`) is replaced by the single contiguous space in stage 3.
+- `gcoffload` threshold (D068): the heap size above which a collection goes to a separate proc. The bench that sets it is a ring with one process holding a large live set: measure the other nodes' hop latency with the threshold at 0, at infinity, and at candidate values; the crossover where the fork cost is repaid is the default.
+- Opportunistic-collection threshold (D067): how many dead-or-adopted words a `waiting` process may hold before the idle step collects it. Start with "the same as would trigger a demand collection" and adjust only if the idle step's sweep shows in a profile.
+- Space shrinking (D069 defers it): no policy in this milestone. Revisit if `nervous -s` shows a long-lived process that once held a large live set retaining its space indefinitely.
 
 ## Milestone 09 - Binaries
 

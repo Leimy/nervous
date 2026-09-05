@@ -5,6 +5,9 @@
 #include "../../include/nvvm.h"
 #include "../../include/nvexec.h"
 
+/* These tests measure bytecode quanta, not collector scheduling. */
+#define nvexecrun nvexecruninline
+
 static void
 fail(char *s)
 {

@@ -14,7 +14,7 @@ static char *version = "nervous frontend 4";
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-s] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-sG] [-H heapwords] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...]]\n");
 	exits("usage");
 }
 
@@ -47,10 +47,12 @@ printstats(NvScheduler *s, vlong start, uintptr brk0)
 	if(hops != 0 && ns > 0)
 		fprint(2, ", %llud ns per message", (uvlong)ns/hops);
 	fprint(2, "\n");
-	fprint(2, "stats: heap %llud bytes peak", (uvlong)heap);
+	fprint(2, "stats: host allocation %llud bytes high-water", (uvlong)heap);
 	if(s->runtime.maxlive != 0)
 		fprint(2, ", %llud per peak live process", (uvlong)heap/s->runtime.maxlive);
 	fprint(2, "\n");
+	fprint(2, "stats: GC %llud collections, %llud failed; per-process live heap %llud words last, %llud words largest collected\n",
+		s->collections, s->gcfailed, s->lastlivewords, s->maxlivewords);
 	fprint(2, "stats: atoms %lud interned\n", nvatomcount());
 }
 
@@ -179,8 +181,9 @@ printroot(Biobuf *b, NvFrag *f)
 void
 main(int argc, char **argv)
 {
-	char *file, *src;
-	int mode;
+	char *file, *src, *stressenv;
+	int mode, gcstress;
+	vlong heaplimit;
 	long n;
 	Parser p;
 	Program *pr;
@@ -202,8 +205,23 @@ main(int argc, char **argv)
 	stats = 0;
 	start = 0;
 	brk0 = 0;
+	heaplimit = 0;
+	gcstress = 0;
+	stressenv = getenv("nervous_gcstress");
+	if(stressenv != nil){
+		if(strcmp(stressenv, "1") == 0)
+			gcstress = 1;
+		else if(strcmp(stressenv, "0") != 0)
+			usage();
+		free(stressenv);
+	}
 	ARGBEGIN{
 	case 's': stats = 1; break;
+	case 'G': gcstress = 1; break;
+	case 'H':
+		if(parseint(EARGF(usage()), &heaplimit) < 0 || heaplimit < 0)
+			usage();
+		break;
 	case 'a': mode = 'a'; file = EARGF(usage()); break;
 	case 'A': mode = 'A'; file = EARGF(usage()); break;
 	case 'b': mode = 'b'; file = EARGF(usage()); break;
@@ -259,7 +277,7 @@ main(int argc, char **argv)
 			nvmodulefree(m);
 			exits("argument");
 		}
-		rc = nvexecute(&bout, m, entry, args, mode == 't', 1000000, &result, err, sizeof err);
+		rc = nvexecutelimits(&bout, m, entry, args, mode == 't', 1000000, heaplimit, gcstress, &result, err, sizeof err);
 		nvheapfree(&h);
 		if(rc < 0){
 			Bterm(&bout);
@@ -313,9 +331,9 @@ main(int argc, char **argv)
 			 * D066: mailbox and message limits are now word counts of
 			 * fragments including their root word, not bytes of the old
 			 * recursive NvValue representation (D040 is superseded).
-			 * maxheap is the per-process word budget; 0 is unlimited,
-			 * which is what stage 2 still uses (exact per-process
-			 * enforcement is stage 3 work). A process slot itself
+			 * maxheap is the enforced per-process word budget (-H);
+			 * 0 is unlimited, but collection still bounds garbage.
+			 * gcstress (-G) collects at every reservation. A process slot itself
 			 * remains small (NvProcess plus one NvExec and its frame
 			 * stack, a few hundred words at minimum), so maxprocess
 			 * below is still a sanity bound against runaway spawn loops,
@@ -325,7 +343,8 @@ main(int argc, char **argv)
 			limits.maxprocess = 65536;
 			limits.maxmailbox = 2*1024*1024;
 			limits.maxmessage = 128*1024;
-			limits.maxheap = 0;
+			limits.maxheap = heaplimit;
+			limits.gcstress = gcstress;
 			limits.maxframe = 1024;
 			limits.maxtermdepth = NvMaxtermdepth;
 			limits.maxduration = NvMaxduration;

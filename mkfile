@@ -12,6 +12,7 @@ OFILES=\
 	lib/compile.$O\
 	lib/exec.$O\
 	lib/format.$O\
+	lib/gc.$O\
 	lib/lex.$O\
 	lib/parse.$O\
 	lib/patbc.$O\
@@ -27,34 +28,49 @@ HFILES=include/nervous.h include/nvalloc.h include/nvbc.h include/nvvm.h include
 
 all:V: $TARG
 
-tests:V: all patterntest parsepatterntest patternbctest patterncompiletest processtest exectest schedtest iotest r2test
+tests:V: all patterntest parsepatterntest patternbctest patterncompiletest processtest exectest schedtest iotest r2test memorytest automatictest
 
-patterntest: tests/pattern/ptest.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/pattern/ptest tests/pattern/ptest.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
+automatictest: tests/memory/autotest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/memory/autotest $prereq
 
-parsepatterntest: tests/pattern/parsetest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/pattern/parsetest tests/pattern/parsetest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
+tests/memory/autotest.$O: tests/memory/autotest.c include/nervous.h include/nvbc.h include/nvvm.h include/nvexec.h include/nvproc.h include/nvsched.h include/nvcompile.h
+	$CC $CFLAGS -o tests/memory/autotest.$O tests/memory/autotest.c
+
+memorytest: tests/memory/gctest.$O lib/gc.$O lib/exec.$O lib/value.$O lib/bytecode.$O
+	$LD $LDFLAGS -o tests/memory/gctest $prereq
+
+tests/memory/gctest.$O: tests/memory/gctest.c include/nvbc.h include/nvvm.h include/nvexec.h
+	$CC $CFLAGS -o tests/memory/gctest.$O tests/memory/gctest.c
+
+lib/gc.$O: lib/gc.c include/nvbc.h include/nvvm.h
+	$CC $CFLAGS -o lib/gc.$O lib/gc.c
+
+patterntest: tests/pattern/ptest.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/pattern/ptest $prereq
+
+parsepatterntest: tests/pattern/parsetest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/pattern/parsetest $prereq
 
 patternbctest: tests/pattern/bctest.$O lib/alloc.$O lib/patbc.$O lib/verify.$O lib/bytecode.$O
 	$LD $LDFLAGS -o tests/pattern/bctest tests/pattern/bctest.$O lib/alloc.$O lib/patbc.$O lib/verify.$O lib/bytecode.$O
 
-processtest: tests/process/ptest.$O lib/process.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/process/ptest tests/process/ptest.$O lib/process.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
+processtest: tests/process/ptest.$O lib/process.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/process/ptest $prereq
 
-exectest: tests/process/exectest.$O lib/exec.$O lib/value.$O lib/vm.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/process/exectest tests/process/exectest.$O lib/exec.$O lib/value.$O lib/vm.$O lib/bytecode.$O
+exectest: tests/process/exectest.$O lib/exec.$O lib/value.$O lib/vm.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/process/exectest $prereq
 
-schedtest: tests/process/schedtest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/process/schedtest tests/process/schedtest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O
+schedtest: tests/process/schedtest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/process/schedtest $prereq
 
-iotest: tests/process/iotest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/process/iotest tests/process/iotest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O
+iotest: tests/process/iotest.$O lib/sched.$O lib/process.$O lib/pattern.$O lib/exec.$O lib/value.$O lib/vm.$O lib/verify.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/process/iotest $prereq
 
-r2test: tests/process/r2test.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/process/r2test tests/process/r2test.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
+r2test: tests/process/r2test.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/process/r2test $prereq
 
-patterncompiletest: tests/pattern/compiletest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
-	$LD $LDFLAGS -o tests/pattern/compiletest tests/pattern/compiletest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O
+patterncompiletest: tests/pattern/compiletest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o tests/pattern/compiletest $prereq
 
 $TARG: $OFILES
 	$LD $LDFLAGS -o $target $OFILES
@@ -141,7 +157,7 @@ lib/vm.$O: lib/vm.c include/nvbc.h include/nvvm.h include/nvexec.h
 	$CC $CFLAGS -o lib/vm.$O lib/vm.c
 
 clean:V:
-	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test $TARG
+	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test tests/memory/*.[$OS] tests/memory/gctest tests/memory/autotest $TARG
 
 install:V: $TARG
 	cp $TARG $BIN/

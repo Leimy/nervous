@@ -1,0 +1,14 @@
+module
+const func worker
+const atom failure
+func main 2
+0: guard 5
+1: call 1 0 0
+2: guardend
+3: return 1
+4: nop
+5: return 0
+end
+func worker 1
+0: fail 1
+end

@@ -59,23 +59,44 @@ setpc(NvExec *e, ulong pc)
 	e->stack[e->fp+NvFramepc] = pc;
 }
 
-/* Grow e->stack (by doubling) so it holds at least `need` words. */
+static int
+stackcap(ulong current, uvlong need, ulong *out)
+{
+	ulong cap, max;
+
+	max = (~0UL)/sizeof(NvTerm);
+	cap = current ? current : 64;
+	while(cap < need){
+		if(cap > max/2)
+			return -1;
+		cap *= 2;
+	}
+	*out = cap;
+	return 0;
+}
+
+/* Only the interpreter moves the frame stack; the collector never does. */
 static int
 growstack(NvExec *e, ulong need)
 {
 	ulong cap;
 	NvTerm *p;
 
+	e->heap.exhausted = 0;
 	if(need <= e->nstack)
 		return 0;
-	cap = e->nstack ? e->nstack : 64;
-	while(cap < need)
-		cap *= 2;
+	if(stackcap(e->nstack, need, &cap) < 0 ||
+	   (e->heap.maxwords != 0 && (cap > e->heap.maxwords ||
+	    e->heap.words > e->heap.maxwords-cap))){
+		e->heap.exhausted = 1;
+		return -1;
+	}
 	p = realloc(e->stack, cap*sizeof(NvTerm));
 	if(p == nil)
 		return -1;
 	e->stack = p;
 	e->nstack = cap;
+	e->heap.stackwords = cap;
 	return 0;
 }
 
@@ -227,25 +248,34 @@ nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biob
 		nvheapfree(&e->heap);
 		return -1;
 	}
+	/* Charge the initial retained stack before copying the argument. */
+	if(pushframe(e, idx, NvNil, NvNoframe, -1) < 0){
+		snprint(err,nerr, e->heap.exhausted ? "system_limit" : "out_of_memory");
+		nvexecfree(e);
+		return -1;
+	}
 	rc = nvheapcopy(&e->heap, arg, &copied);
 	if(rc < 0){
-		snprint(err,nerr, rc == NvTermlimit ? "system_limit" : "out_of_memory");
-		nvheapfree(&e->heap);
+		snprint(err,nerr, rc == NvTermlimit || e->heap.exhausted ? "system_limit" : "out_of_memory");
+		nvexecfree(e);
 		return -1;
 	}
-	if(pushframe(e, idx, copied, NvNoframe, -1) < 0){
-		snprint(err,nerr,"out_of_memory");
-		nvheapfree(&e->heap);
-		free(e->stack);
-		e->stack = nil;
-		return -1;
-	}
+	curregs(e)[0] = copied;
 	e->trace = trace;
 	e->traceon = traceon;
 	e->nframe = 1;
 	e->maxframe = 1024;
 	e->state = NvYield;
 	e->guardfail = -1;
+	/* Initial copying used non-moving chunks; compact once before execution. */
+	rc = nvexeccollect(e, 0);
+	if(rc < 0){
+		snprint(err,nerr, rc == NvTermlimit ? "system_limit" : "out_of_memory");
+		nvexecfree(e);
+		return -1;
+	}
+	e->heap.managed = 1;
+	e->collections = 0;
 	return 0;
 }
 
@@ -265,6 +295,121 @@ nvexecsethost(NvExec *e, NvExecHost *host)
 	e->host = host;
 }
 
+/* Pure arithmetic preflight: only a full-range result needs heap words. */
+static char *
+arithresult(NvExec *e, NvInsn *in, vlong *out)
+{
+	NvTerm *r;
+	vlong a, b;
+
+	r = curregs(e);
+	if(nvtermkind(r[in->b]) != Vint || nvtermkind(r[in->c]) != Vint)
+		return "badarith";
+	a = nvtermint(r[in->b]); b = nvtermint(r[in->c]);
+	switch(in->op){
+	case Oadd: if(addok(a,b,out) < 0) return "overflow"; break;
+	case Osub: if(subok(a,b,out) < 0) return "overflow"; break;
+	case Omul: if(mulok(a,b,out) < 0) return "overflow"; break;
+	case Odiv: case Orem:
+		if(b == 0) return "divide_by_zero";
+		if(a == (vlong)0x8000000000000000ULL && b == -1){
+			if(in->op == Odiv) return "overflow";
+			*out = 0;
+		}else
+			*out = in->op == Odiv ? a/b : a%b;
+		break;
+	}
+	return nil;
+}
+
+/*
+ * D067: no writes, side effects or reduction charge precede reservation.
+ * space is bump-space demand; charge also covers adoption/stack growth.
+ * Adopted words participate in space pressure even when maxheap is zero.
+ * A successful collection permits one retry, not endless stress requests.
+ */
+static int
+prepare(NvExec *e, NvInsn *in, char *err, int nerr)
+{
+	NvHeap *h;
+	NvConst *k;
+	uvlong space, charge, newsp, limit;
+	ulong cap;
+	vlong v;
+	char *why;
+	int idx, active, retry, fits;
+
+	h = &e->heap;
+	retry = e->gcretry;
+	e->gcretry = 0;
+	if(retry >= 2){
+		snprint(err,nerr, retry == 2 ? "system_limit" : "out_of_memory");
+		return -1;
+	}
+	space = charge = 0;
+	active = 0;
+	why = nil;
+	switch(in->op){
+	case Otuple:
+		space = 1+in->c;
+		break;
+	case Oloadk:
+		k = &e->module->konst[in->b];
+		if(k->kind == Kint && (k->ival < NvMinsmall || k->ival > NvMaxsmall))
+			space = 2;
+		break;
+	case Oadd: case Osub: case Omul: case Odiv: case Orem:
+		why = arithresult(e, in, &v);
+		if(why == nil && (v < NvMinsmall || v > NvMaxsmall))
+			space = 2;
+		break;
+	case Omakeref:
+		if(e->host == nil || e->host->makeref == nil)
+			why = "bad_process_context";
+		else
+			space = 3;
+		break;
+	case Ocall: case Otailcall:
+		active = 1;
+		k = &e->module->konst[in->op == Ocall ? in->b : in->a];
+		idx = findfuncidx(e->module, k->text);
+		if(idx < 0){ why = "bad_function"; break; }
+		if(in->op == Ocall && e->nframe >= e->maxframe){ why = "system_limit"; break; }
+		newsp = (uvlong)(in->op == Ocall ? e->sp : e->fp) + NvFramehdr + e->module->func[idx].nreg;
+		if(stackcap(e->nstack, newsp, &cap) < 0){ why = "system_limit"; break; }
+		charge = cap-e->nstack;
+		break;
+	case Orecvtake:
+		active = 1;
+		if(e->host == nil || e->host->recvtake == nil || e->host->recvneed == nil){
+			why = "bad_process_context";
+			break;
+		}
+		if(e->host->recvneed(e, &charge, err, nerr) < 0){
+			if(err[0] == 0) snprint(err,nerr,"bad_state");
+			return -1;
+		}
+		break;
+	}
+	if(why != nil){ snprint(err,nerr,"%s",why); return -1; }
+	if(space != 0){ charge = space; active = 1; }
+	if(!active)
+		return 0;
+	limit = h->maxwords == 0 ? ~0ULL : h->maxwords;
+	fits = e->nstack <= limit && h->words <= limit-e->nstack && charge <= limit-e->nstack-h->words;
+	fits = fits && h->cur != nil && space <= h->cur->cap-h->cur->top &&
+		h->words <= h->cur->cap && charge <= h->cur->cap-h->words;
+	if(fits && (!e->gcstress || retry == 1))
+		return 0;
+	if(retry == 1){
+		snprint(err,nerr,"system_limit");
+		return -1;
+	}
+	e->gcneed = charge;
+	e->gcpending = 1;
+	return 1;
+}
+
 static int
 run(NvExec *e, uvlong quantum)
 {
@@ -281,6 +426,7 @@ run(NvExec *e, uvlong quantum)
 	int j, truth, eq, rc, found, targetidx, dstreg;
 
 	if(e->state != NvYield) return e->state;
+	if(e->gcpending) return NvCollect;
 	if(quantum == 0) return NvYield;
 	used = 0;
 	while(used < quantum){
@@ -288,9 +434,15 @@ run(NvExec *e, uvlong quantum)
 		regs = curregs(e);
 		pc = curpc(e);
 		insn = &func->insn[pc];
+		hosterr[0] = 0;
+		rc = prepare(e, insn, hosterr, sizeof hosterr);
+		if(rc > 0)
+			return NvCollect;
 		if(e->traceon && e->trace != nil)
 			Bprint(e->trace, "%llud %s:%d %s\n", e->reductions, func->name, (int)pc, nvopname(insn->op));
 		used++; e->reductions++;
+		if(rc < 0)
+			return fault(e, hosterr);
 		switch(insn->op){
 		case Oloadk:
 			k = &e->module->konst[insn->b];
@@ -324,8 +476,9 @@ run(NvExec *e, uvlong quantum)
 			if(targetidx < 0) return fault(e,"bad_function");
 			if(e->nframe >= e->maxframe) return fault(e,"system_limit");
 			arg = regs[insn->c];
-			setpc(e, pc+1);
-			if(pushframe(e, targetidx, arg, e->fp, insn->a) < 0) return fault(e,"out_of_memory");
+			callerfp = e->fp;
+			if(pushframe(e, targetidx, arg, callerfp, insn->a) < 0) return fault(e, e->heap.exhausted ? "system_limit" : "out_of_memory");
+			e->stack[callerfp+NvFramepc] = pc+1;
 			e->nframe++;
 			break;
 		case Otailcall:
@@ -536,6 +689,94 @@ nvexecrun(NvExec *e, uvlong quantum)
 		state = run(e, quantum - used);
 		if(state != NvGuardfault)
 			return state;
+	}
+}
+
+/*
+ * Build a view of the complete D065 register root set before invoking
+ * the collector. It sees neither NvExec nor module/frame metadata.
+ * Capacity, rather than just sp, is charged: popped stack storage stays
+ * allocated. Inactive slots are not roots. The owner must be stopped.
+ */
+int
+nvexeccollect(NvExec *e, uvlong need)
+{
+	NvRoot *roots;
+	NvTerm idx, caller;
+	ulong fp, end, n, i;
+	int rc;
+
+	if(e == nil)
+		return NvTermerror;
+	e->heap.exhausted = 0;
+	if(e->state != NvYield || e->module == nil ||
+	   e->stack == nil || e->nframe == 0 || e->sp > e->nstack ||
+	   e->nframe > (~0UL)/sizeof(NvRoot))
+		return NvTermerror;
+	roots = malloc(e->nframe*sizeof(NvRoot));
+	if(roots == nil)
+		return NvTermerror;
+	fp = e->fp;
+	end = e->sp;
+	rc = NvTermerror;
+	for(i = 0; i < e->nframe; i++){
+		if(fp > end || end-fp < NvFramehdr)
+			goto out;
+		idx = e->stack[fp+NvFramefunc];
+		if(idx >= e->module->nfunc)
+			goto out;
+		n = e->module->func[idx].nreg;
+		if(n != end-fp-NvFramehdr)
+			goto out;
+		roots[i].word = e->stack+fp+NvFramehdr;
+		roots[i].nword = n;
+		roots[i].next = i+1 < e->nframe ? &roots[i+1] : nil;
+		caller = e->stack[fp+NvFramecaller];
+		if(i+1 == e->nframe){
+			if(fp != 0 || caller != NvNoframe)
+				goto out;
+		}else if(caller >= fp)
+			goto out;
+		end = fp;
+		fp = caller;
+	}
+	rc = nvheapcollect(&e->heap, roots, e->nstack, need);
+	if(rc == 0){
+		e->collections++;
+		e->livewords = e->heap.words;
+	}
+out:
+	free(roots);
+	return rc;
+}
+
+void
+nvexecgc(NvExec *e)
+{
+	int rc;
+
+	if(!e->gcpending)
+		return;
+	rc = nvexeccollect(e, e->gcneed);
+	e->gcpending = 0;
+	e->gcretry = rc == 0 ? 1 : rc == NvTermlimit ? 2 : 3;
+}
+
+int
+nvexecruninline(NvExec *e, uvlong quantum)
+{
+	uvlong start, used;
+	int state;
+
+	start = e->reductions;
+	for(;;){
+		used = e->reductions-start;
+		if(used >= quantum)
+			return e->state;
+		state = nvexecrun(e, quantum-used);
+		if(state != NvCollect)
+			return state;
+		nvexecgc(e);
 	}
 }
 

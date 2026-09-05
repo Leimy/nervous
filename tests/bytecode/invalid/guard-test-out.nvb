@@ -1,0 +1,7 @@
+module
+func main 1
+0: guard 3
+1: testarity 0 0 3
+2: guardend
+3: return 0
+end

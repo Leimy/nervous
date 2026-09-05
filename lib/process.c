@@ -31,7 +31,7 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
 	memset(r, 0, sizeof *r);
 	if(limits == nil || limits->maxprocess == 0 || limits->maxmailbox == 0 || limits->maxmessage == 0 ||
 	   limits->maxframe == 0 || limits->maxtermdepth == 0 || limits->maxtermdepth > NvMaxtermdepth ||
-	   limits->maxatom == 0){
+	   limits->maxatom == 0 || (limits->gcstress != 0 && limits->gcstress != 1)){
 		snprint(err, nerr, "bad process limits");
 		return -1;
 	}
@@ -454,6 +454,19 @@ nvprocrecvnext(NvRuntime *r, NvTerm pid, NvTerm *value, char *err, int nerr)
 		return 0;
 	*value = p->scan->root;
 	return 1;
+}
+
+/* Non-consuming reservation query; the owner alone may take this candidate. */
+int
+nvprocrecvneed(NvRuntime *r, NvTerm pid, uvlong *words, char *err, int nerr)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
+	if(p->state != Prrunning || !p->scanning || p->scan == nil){ snprint(err,nerr,"bad_state"); return -1; }
+	*words = nvfragwords(p->scan);
+	return 0;
 }
 
 int

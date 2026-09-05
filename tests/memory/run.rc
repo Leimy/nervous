@@ -1,0 +1,22 @@
+#!/bin/rc
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+if(! test -x $testdir/gctest){
+	echo $0: build with '''mk tests''' first >[1=2]
+	exit no-binary
+}
+$testdir/gctest || exit memory
+if(! test -x $testdir/autotest){
+	echo $0: build with '''mk tests''' first >[1=2]
+	exit no-binary
+}
+$testdir/autotest || exit automatic-memory
+exit ''

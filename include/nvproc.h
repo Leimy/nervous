@@ -8,15 +8,16 @@ typedef struct NvExec NvExec;
 /*
  * D066: maxmailbox and maxmessage are word counts of fragments including
  * their root word (nvfragwords), checked all-or-nothing during the D064
- * copy. maxheap is the per-process word budget (heap in use plus adopted
- * fragments plus, in stage 3, the frame stack); 0 means unlimited until
- * stage 3 makes it exact.
+ * copy. maxheap is the per-process word budget: heap in use plus adopted
+ * fragments plus retained frame-stack capacity. 0 means unlimited.
+ * Initialize gcstress to 0 or 1; the scheduler copies it to each exec.
  */
 struct NvLimits {
 	ulong maxprocess;	/* may not exceed NvMaxslot+1 (D061) */
 	uvlong maxmailbox;
 	uvlong maxmessage;
 	uvlong maxheap;
+	int gcstress;		/* force one collection at every allocating instruction */
 	ulong maxframe;
 	ulong maxtermdepth;
 	/*
@@ -135,6 +136,7 @@ int nvprocsend(NvRuntime *, NvTerm pid, NvTerm value, char *, int);
 int nvprocpop(NvRuntime *, NvTerm pid, NvFrag **msg, char *, int);
 int nvprocrecvbegin(NvRuntime *, NvTerm pid, NvTerm *value, char *, int);
 int nvprocrecvnext(NvRuntime *, NvTerm pid, NvTerm *value, char *, int);
+int nvprocrecvneed(NvRuntime *, NvTerm pid, uvlong *, char *, int);
 int nvprocrecvtake(NvRuntime *, NvTerm pid, NvFrag **taken, char *, int);
 int nvprocrecvwait(NvRuntime *, NvTerm pid, char *, int);
 /*

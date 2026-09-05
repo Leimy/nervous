@@ -62,6 +62,10 @@ struct NvScheduler {
 	uvlong dispatches;
 	uvlong reductions;
 	uvlong timerwakes;
+	uvlong collections;
+	uvlong gcfailed;
+	uvlong lastlivewords;	/* heap words in the most recently collected process */
+	uvlong maxlivewords;	/* largest successful per-process live sample */
 	uvlong completed;
 	uvlong faulted;
 	uvlong exited;

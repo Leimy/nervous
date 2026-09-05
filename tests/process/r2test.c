@@ -107,6 +107,7 @@ h1regression(void)
 	int state;
 	ulong slot;
 
+	limits.gcstress = 0;
 	m = compilesrc("h1regression", src);
 
 	limits.maxprocess = 4;
@@ -182,6 +183,7 @@ crossreceiveleak(void)
 	int state;
 	ulong slot;
 
+	limits.gcstress = 0;
 	m = compilesrc("crossreceiveleak", src);
 
 	limits.maxprocess = 2;
@@ -262,6 +264,7 @@ midscanappend(void)
 	int state, i;
 	ulong slot;
 
+	limits.gcstress = 0;
 	m = compilesrc("midscanappend", src);
 
 	limits.maxprocess = 2;
@@ -339,6 +342,7 @@ sendthenexit(void)
 	char err[256];
 	int state;
 
+	limits.gcstress = 0;
 	m = compilesrc("sendthenexit", src);
 
 	limits.maxprocess = 4;
@@ -425,6 +429,7 @@ belowcursorfairness(void)
 	int i;
 	ulong slot;
 
+	limits.gcstress = 0;
 	m = compilesrc("belowcursorfairness", src);
 
 	limits.maxprocess = 8;
@@ -501,6 +506,7 @@ tinylimits(void)
 	uvlong words;
 	int i;
 
+	limits.gcstress = 0;
 	/* T5-01: maxprocess=2 is an exact boundary, and slot reuse works at the minimum useful limit. */
 	limits.maxprocess = 2;
 	limits.maxmailbox = 4096;
@@ -605,6 +611,7 @@ tinylimits(void)
 		lim2.maxframe = 64;
 		lim2.maxtermdepth = 2;
 		lim2.maxheap = 0;
+		lim2.gcstress = 0;
 		lim2.maxduration = NvMaxduration;
 		lim2.maxatom = 65536;
 		check(nvruntimeinit(&r2, &lim2, 52, err2, sizeof err2) == 0, err2);
@@ -644,6 +651,7 @@ receiveguard(void)
 	char err[256];
 	int state;
 
+	limits.gcstress = 0;
 	m = compilesrc("receiveguard", src);
 
 	limits.maxprocess = 2;
@@ -700,10 +708,102 @@ receiveguard(void)
 	print("ok - D060: a receive guard skips non-selecting and faulting candidates, leaving them queued, and selects a later one\n");
 }
 
+/*
+ * D071 / post-R2-F01: compiler-produced guards must still verify and run.
+ * Combine branchy function, match, and receive guards, including Ofail
+ * from boolean strictness, a call after guardend, and a tail call from a
+ * selected function clause. Run the same fixture with ordinary and
+ * single-instruction quanta: the latter must suspend with guardfail set
+ * and resume without leaking it into a later guard, body, or frame.
+ */
+static void
+guardboundaries(void)
+{
+	char *src =
+		"fn finish(x) {\n"
+		"\tmatch x {\n"
+		"\t\tn when not (n != 2) or 'false => n + 10;\n"
+		"\t\t_ => 0;\n"
+		"\t}\n"
+		"}\n"
+		"fn guarded(x) when is_int(x) and (not (x == 0) or x == 2) { finish(x) }\n"
+		"fn guarded(_) { finish(0) }\n"
+		"fn pick() {\n"
+		"\tselected = receive {\n"
+		"\t\t${'n, x} when x and 'true => 999;\n"
+		"\t\t${'n, x} when is_int(x) and (not (x == 0) or x == 2) and ${x, 'tag} == ${2, 'tag} => guarded(x);\n"
+		"\t};\n"
+		"\treceive { ${'n, y} => ${selected, y}; }\n"
+		"}\n";
+	NvModule *m;
+	NvLimits limits;
+	NvScheduler sched;
+	NvTerm arg, pid, elem[2], msg, values[3], result;
+	NvExec *e;
+	char err[256];
+	int q, j, step, state, sawguard;
+	uvlong quantum[2];
+
+	limits.gcstress = 0;
+	m = compilesrc("guardboundaries", src);
+	limits.maxprocess = 2;
+	limits.maxmailbox = 4096;
+	limits.maxmessage = 1024;
+	limits.maxframe = 64;
+	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxheap = 0;
+	limits.maxduration = NvMaxduration;
+	limits.maxatom = 65536;
+	quantum[0] = 1;
+	quantum[1] = 1000;
+	arg = nvtuple(&hostheap, nil, 0);
+	check(arg != NvNil, "guardboundary: argument tuple");
+	elem[0] = nvatom("n");
+	values[0] = nvatom("a");
+	values[1] = nvint(nil, 0);
+	values[2] = nvint(nil, 2);
+	check(elem[0] != NvNil && values[0] != NvNil, "guardboundary: atoms");
+	for(q = 0; q < nelem(quantum); q++){
+		check(nvschedinit(&sched, m, &limits, 61+q, quantum[q], err, sizeof err) == 0, err);
+		check(nvschedspawnroot(&sched, "pick", arg, &pid, err, sizeof err) == 0,
+			"guardboundary: spawn root");
+		for(j = 0; j < nelem(values); j++){
+			elem[1] = values[j];
+			msg = nvtuple(&hostheap, elem, 2);
+			check(msg != NvNil, "guardboundary: message tuple");
+			check(nvprocsend(&sched.runtime, pid, msg, err, sizeof err) == 1,
+				"guardboundary: queue message");
+		}
+		sawguard = 0;
+		state = NvSchedProgress;
+		for(step = 0; step < 10000 && state == NvSchedProgress; step++){
+			state = nvschedstep(&sched, err, sizeof err);
+			e = sched.runtime.process[nvpidslot(pid)].exec;
+			if(e != nil && e->guardfail >= 0)
+				sawguard = 1;
+		}
+		check(state == NvSchedDone && sched.rootstate == NvRootDone && sched.rootvalue != nil,
+			"guardboundary: finite execution completes normally under both quanta");
+		result = sched.rootvalue->root;
+		check(nvtermkind(result) == Vtuple && nvtuplelen(result) == 2 &&
+			nvtermkind(nvtupleelem(result, 0)) == Vint && nvtermint(nvtupleelem(result, 0)) == 12 &&
+			nvtermkind(nvtupleelem(result, 1)) == Vatom && strcmp(nvtermatom(nvtupleelem(result, 1)), "a") == 0,
+			"guardboundary: select 2, return through guarded calls, preserve oldest rejected message");
+		check(sched.completed == 1 && sched.faulted == 0,
+			"guardboundary: strict-boolean guard faults remain clause failures");
+		if(quantum[q] == 1)
+			check(sawguard, "guardboundary: single-step run actually suspended inside a guard");
+		nvschedfree(&sched);
+	}
+	nvmodulefree(m);
+	print("ok - D071: branchy source guards and post-guard calls survive single-instruction quanta\n");
+}
+
 void
 main(void)
 {
 	nvheapinit(&hostheap, 0);
+	guardboundaries();
 	receiveguard();
 	h1regression();
 	crossreceiveleak();

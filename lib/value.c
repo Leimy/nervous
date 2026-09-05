@@ -11,11 +11,10 @@
  * is no free function for a term any more: storage belongs to a heap
  * (freed whole by nvheapfree) or a fragment (freed whole by nvfragfree).
  *
- * Stage 2 note (D063): the heap below is a non-moving chunk list with no
- * collector. Code here still follows the moving-collector discipline
- * (never hold a raw pointer into a heap across a call that might
- * allocate from it) so stage 3 can add the collector without reworking
- * this file's shape.
+ * Host construction and startup copying use non-moving chunks. Managed
+ * execution heaps refuse chunk growth: D067 reservation returns NvCollect
+ * before an instruction, and the host calls lib/gc.c while the owner is
+ * stopped. Constructors never collect or invalidate C locals themselves.
  */
 
 /*
@@ -450,15 +449,27 @@ nvheapalloc(NvHeap *h, ulong nword)
 
 	if(h == nil)
 		return nil;
-	if(h->maxwords != 0 && h->words + nword > h->maxwords){
+	h->exhausted = 0;
+	if(h->words > ~0ULL-h->stackwords ||
+	   nword > ~0ULL-h->stackwords-h->words ||
+	   (h->maxwords != 0 && (h->stackwords > h->maxwords ||
+	    h->words > h->maxwords-h->stackwords ||
+	    nword > h->maxwords-h->stackwords-h->words))){
 		h->exhausted = 1;
 		return nil;
 	}
-	if(h->cur != nil && h->cur->top + nword <= h->cur->cap){
+	if(h->cur != nil && nword <= h->cur->cap-h->cur->top){
 		w = h->cur->word + h->cur->top;
 		h->cur->top += nword;
 		h->words += nword;
 		return w;
+	}
+	/* Managed heaps grow only at a stopped-owner collection boundary. */
+	if(h->managed)
+		return nil;
+	if(nword > (~0UL)/sizeof(NvTerm)){
+		h->exhausted = 1;
+		return nil;
 	}
 	cap = nword;
 	if(h->cur != nil && 2*h->cur->cap > cap)
@@ -467,6 +478,10 @@ nvheapalloc(NvHeap *h, ulong nword)
 		cap = NvHeapminchunk;
 	if(cap > NvHeapmaxchunk && nword <= NvHeapmaxchunk)
 		cap = NvHeapmaxchunk;
+	if(cap > (~0UL)/sizeof(NvTerm)){
+		h->exhausted = 1;
+		return nil;
+	}
 	c = malloc(sizeof *c);
 	if(c == nil){
 		h->exhausted = 0;
@@ -506,7 +521,10 @@ nvheapadopt(NvHeap *h, NvFrag *f)
 	if(h == nil || f == nil)
 		return -1;
 	fw = nvfragwords(f);
-	if(h->maxwords != 0 && h->words+fw > h->maxwords){
+	h->exhausted = 0;
+	if(h->words > ~0ULL-h->stackwords || fw > ~0ULL-h->stackwords-h->words ||
+	   (h->maxwords != 0 && (h->stackwords > h->maxwords ||
+	    h->words > h->maxwords-h->stackwords || fw > h->maxwords-h->stackwords-h->words))){
 		h->exhausted = 1;
 		return -1;
 	}

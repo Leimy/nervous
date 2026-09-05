@@ -63,6 +63,7 @@ mailboxlimits(void)
 	limits.maxmessage = words;
 	limits.maxmailbox = words;
 	limits.maxheap = 0;
+	limits.gcstress = 0;
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxduration = NvMaxduration;
@@ -159,6 +160,7 @@ timeouts(void)
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcstress = 0;
 	check(nvruntimeinit(&r, &limits, 1, err, sizeof err) == 0, err);
 	check(nvprocspawn(&r, &pid, err, sizeof err) == 0, "spawn timeout tester");
 	p = &r.process[nvpidslot(pid)];
@@ -239,6 +241,7 @@ main(void)
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcstress = 0;
 	check(nvruntimeinit(&runtime, &limits, 0x1234, err, sizeof err) == 0, err);
 	check(nvprocspawn(&runtime, &p1, err, sizeof err) == 0, "spawn p1");
 	check(nvprocspawn(&runtime, &p2, err, sizeof err) == 0, "spawn p2");

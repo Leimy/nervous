@@ -300,6 +300,7 @@ main(void)
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxheap = 0;
+	limits.gcstress = 0;
 	limits.maxatom = 65536;
 
 	insn[0].a = 99;

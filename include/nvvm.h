@@ -31,16 +31,17 @@
  * NvTermlimit rather than recursing past it.
  *
  * Load-bearing rule (D063): no C variable holds a pointer into a heap
- * across anything that may allocate from that heap. Stage 2's heap is a
- * non-moving chunk list, so today this is discipline rather than
- * necessity; the stage-3 collector makes it necessity. Fragments and
- * the frame stack never move during a collection; heap objects do.
+ * across anything that may collect that heap. D067 reserves before an
+ * instruction, then yields to its host to collect; constructors never
+ * collect internally. The frame stack is stable during collection.
+ * Queued fragments stay put; adopted objects move into the heap.
  */
 
 typedef uvlong NvTerm;
 typedef struct NvHeap NvHeap;
 typedef struct NvChunk NvChunk;
 typedef struct NvFrag NvFrag;
+typedef struct NvRoot NvRoot;
 
 enum {
 	NvMaxtermdepth = 256,
@@ -101,13 +102,13 @@ enum {
 #define NvBoxptr(t) ((NvTerm*)(uintptr)(t))
 
 /*
- * A heap: bump allocation over a chunk list (stage 2), plus the adopted
- * fragments D064 hands it. `words` is the running total of chunk words
- * in use plus adopted fragment words -- the D066 basis. `maxwords` of 0
- * means unlimited; a nonzero value makes nvheapalloc and nvheapadopt
- * refuse (return nil / -1) rather than exceed it. Initialization is lazy:
- * a zeroed NvHeap is a valid empty heap and nvheapinit only records the
- * budget, so a process that never allocates costs no heap memory.
+ * A heap: execution uses one contiguous bump chunk plus adopted
+ * fragments. managed heaps refuse unreserved growth; a stopped-owner
+ * collection is the only growth path. Host construction and startup
+ * copying retain non-moving chunk growth until roots are registered.
+ * words counts used objects plus adopted fragment words; stackwords is
+ * retained frame capacity. maxwords bounds their sum (0 = unlimited).
+ * nvheapinit is lazy; nvexecinit compacts and enables managed allocation.
  */
 struct NvChunk {
 	NvChunk *next;
@@ -122,6 +123,8 @@ struct NvHeap {
 	NvFrag *adopted;	/* D064: taken messages, freed with the heap */
 	uvlong words;
 	uvlong maxwords;
+	uvlong stackwords;	/* retained frame capacity charged with heap words */
+	int managed;		/* execution heap: no unreserved chunk growth */
 	int exhausted;		/* why the last refusal happened: 1 budget, 0 host allocator; read by nvheapexhausted */
 };
 
@@ -204,6 +207,33 @@ int nvheapadopt(NvHeap *, NvFrag *);
 int nvheapcopy(NvHeap *, NvTerm src, NvTerm *out);
 
 /*
+ * Explicit stopped-owner collection (M08-T04a). Each range describes
+ * only term slots; the caller skips frame headers. Ranges and slots
+ * must live outside the heap/adopted storage and remain stable for the
+ * call. External boxed terms must be self-contained, stable fragments;
+ * they are neither traversed nor moved. No concurrent heap/roots access.
+ *
+ * stackwords is the charged frame-stack size; need is additional word
+ * budget required after collection (not allocated by this call). Returns
+ * 0, NvTermlimit (live + stackwords + need cannot fit, or host allocation
+ * size cannot be represented), or NvTermerror (allocation failure or
+ * malformed owned object). exhausted distinguishes a resource limit
+ * from other failures. On failure roots, objects and ownership remain
+ * unchanged; only exhausted changes. On success all chunks/adopted
+ * fragments are replaced by one contiguous chunk, words = live words.
+ *
+ * The collector accepts non-moving host/startup chunks too. Managed
+ * execution heaps remain contiguous; their hosts service NvCollect
+ * requests only at instruction boundaries.
+ */
+struct NvRoot {
+	NvTerm *word;
+	ulong nword;
+	NvRoot *next;
+};
+int nvheapcollect(NvHeap *, NvRoot *, uvlong stackwords, uvlong need);
+
+/*
  * Fragments (D064). nvfragcopy copies src into a new fragment: 0 and
  * *out set; NvTermlimit if the copy would exceed NvMaxtermdepth or
  * nvfragwords() would exceed maxwords (nothing is allocated in that
@@ -221,3 +251,4 @@ void nvfragfree(NvFrag *);
  * a fragment the caller frees.
  */
 int nvexecute(Biobuf *, NvModule *, char *, NvTerm, int, vlong, NvFrag **, char *, int);
+int nvexecutelimits(Biobuf *, NvModule *, char *, NvTerm, int, vlong, uvlong maxheap, int gcstress, NvFrag **, char *, int);

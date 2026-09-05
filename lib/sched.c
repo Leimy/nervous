@@ -83,6 +83,18 @@ hostrecvnext(NvExec *e, NvTerm *value, char *err, int nerr)
 }
 
 static int
+hostrecvneed(NvExec *e, uvlong *words, char *err, int nerr)
+{
+	NvScheduler *s;
+	NvTerm pid;
+
+	s = e->host->aux;
+	if(currentpid(s, &pid, err, nerr) < 0)
+		return -1;
+	return nvprocrecvneed(&s->runtime, pid, words, err, nerr);
+}
+
+static int
 hostrecvtake(NvExec *e, NvFrag **taken, char *err, int nerr)
 {
 	NvScheduler *s;
@@ -253,6 +265,7 @@ nvschedinit(NvScheduler *s, NvModule *m, NvLimits *limits, uvlong incarnation, u
 	s->host.spawn = hostspawn;
 	s->host.recvbegin = hostrecvbegin;
 	s->host.recvnext = hostrecvnext;
+	s->host.recvneed = hostrecvneed;
 	s->host.recvtake = hostrecvtake;
 	s->host.recvwait = hostrecvwait;
 	s->host.recvdeadline = hostrecvdeadline;
@@ -306,6 +319,7 @@ nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, in
 		return -1;
 	}
 	nvexecsethost(e, &s->host);
+	e->gcstress = s->runtime.limits.gcstress;
 	/* Re-fetch by slot: nvprocspawn/nvexecinit may have grown the table. */
 	s->runtime.process[nvpidslot(*pid)].exec = e;
 	return 0;
@@ -325,6 +339,19 @@ nvschedspawnroot(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err
 	s->rootvalid = 1;
 	s->rootstate = NvRootRunning;
 	return 0;
+}
+
+static void
+gcsample(NvScheduler *s, NvExec *e, int ok)
+{
+	if(!ok){
+		s->gcfailed++;
+		return;
+	}
+	s->collections++;
+	s->lastlivewords = e->livewords;
+	if(e->livewords > s->maxlivewords)
+		s->maxlivewords = e->livewords;
 }
 
 int
@@ -361,6 +388,15 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 				snprint(err, nerr, "process left running outside scheduler dispatch");
 				return NvSchedError;
 			}
+		/* Reclaim waiting-process garbage without touching mailbox state.
+		 * The live watermark prevents recollecting an unchanged live set. */
+		for(i = 0; i < r->nslot; i++){
+			p = &r->process[i];
+			e = p->exec;
+			if(p->state == Prwaiting && e != nil && e->heap.cur != nil &&
+			   e->heap.words > e->livewords && e->heap.words > e->heap.cur->cap/2)
+				gcsample(s, e, nvexeccollect(e, 0) == 0);
+		}
 		/*
 		 * D050: idle with an armed deadline is progress, not deadlock.
 		 * Ties (equal deadlines) wake together, matching "advances to
@@ -423,6 +459,14 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	s->currentvalid = 0;
 	/* Process operations may grow the slot table; never retain its old address. */
 	p = &r->process[slot];
+	if(state == NvCollect){
+		if(p->state != Prrunning || nvprocyield(r, pid, err, nerr) < 0)
+			return NvSchedError;
+		/* Inline only: stopped owner, enqueued once, no host callback active. */
+		nvexecgc(e);
+		gcsample(s, e, e->gcretry == 1);
+		return NvSchedProgress;
+	}
 	if(state == NvYield){
 		if(p->state == Prrunning){
 			if(nvprocyield(r, pid, err, nerr) < 0)

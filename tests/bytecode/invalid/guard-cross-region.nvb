@@ -1,0 +1,10 @@
+module
+func main 1
+0: guard 6
+1: jump 4
+2: guardend
+3: guard 6
+4: nop
+5: guardend
+6: return 0
+end

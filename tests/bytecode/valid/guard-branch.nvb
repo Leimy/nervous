@@ -1,0 +1,23 @@
+module
+const int 0
+const int 1
+const atom true
+const atom false
+const atom match_fail
+func main 5
+0: loadk 1 1
+1: guard 14
+2: istype 2 1 0
+3: testatom 2 2 11
+4: tuple 3 1 1
+5: getelem 3 3 0
+6: testeq 3 1 9
+7: loadk 4 2
+8: jump 12
+9: loadk 4 3
+10: jump 12
+11: fail 4
+12: guardend
+13: return 4
+14: return 1
+end

@@ -23,6 +23,7 @@ rc $testroot/bytecode/run.rc $bin || exit bytecode
 rc $testroot/vm/run.rc $bin || exit vm
 rc $testroot/pattern/run.rc || exit pattern
 rc $testroot/process/run.rc || exit process
+rc $testroot/memory/run.rc || exit memory
 
 out=`{$bin -r $root/examples/arithmetic.nv main} || exit source-run
 if(! ~ $out 51){

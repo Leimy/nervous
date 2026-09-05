@@ -1,0 +1,5 @@
+module
+func main 1
+0: guardend
+1: return 0
+end

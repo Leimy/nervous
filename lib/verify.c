@@ -136,6 +136,122 @@ verifyinsn(NvModule *m, NvFunc *f, int pc, NvInsn *i, char *err, int nerr)
 	return 0;
 }
 
+/* D071: guards cannot call, leave the frame, or perform host operations. */
+static int
+guardop(int op)
+{
+	switch(op){
+	case Oloadk: case Omove: case Otuple: case Ojump:
+	case Otestatom: case Otestint: case Otesteq: case Otestarity:
+	case Ogetelem: case Oadd: case Osub: case Omul: case Odiv: case Orem:
+	case Olt: case Ole: case Ogt: case Oge:
+	case Ofail: case Onop: case Oistype: case Oguardend:
+		return 1;
+	}
+	return 0;
+}
+
+static int
+guardedge(NvFunc *f, int pc, int to, int active, int *region, char *err, int nerr)
+{
+	/* verifyinsn has already checked every explicit target's range. */
+	if(region[to] != active)
+		return bad(err, nerr, f, pc, "control flow crosses guard boundary");
+	return 0;
+}
+
+/*
+ * D071 / post-R2-F01: guardfail is execution-wide, not a frame field.
+ * Establish that every entry to an instruction has the guard state its
+ * lexical region describes, and that no frame or host operation runs
+ * with guard mode active. The map records state BEFORE the instruction:
+ * -1 outside, otherwise the pc of the owning guard. Thus the guard itself
+ * is outside, while its guardend still belongs to the guarded region.
+ *
+ * Check all instructions, not only reachable ones, just as verifyinsn
+ * does. A normal edge must preserve the region, except the fallthroughs
+ * of guard and guardend. A fault clears guard mode, so a guard's failure
+ * edge must lead outside. Entry pc 0 is always outside. Together these
+ * rules prove guard state by induction over execution, including loops.
+ */
+static int
+verifyguards(NvFunc *f, char *err, int nerr)
+{
+	int *region;
+	int pc, active, out, fall;
+	NvInsn *i;
+	char msg[80];
+
+	region = malloc(f->ninsn*sizeof *region);
+	if(region == nil){
+		snprint(err, nerr, "%s: out of memory", f->name);
+		return -1;
+	}
+	active = -1;
+	for(pc = 0; pc < f->ninsn; pc++){
+		i = &f->insn[pc];
+		region[pc] = active;
+		if(i->op == Oguard){
+			if(active >= 0){
+				bad(err, nerr, f, pc, "nested guard");
+				goto fail;
+			}
+			active = pc;
+		}else if(i->op == Oguardend){
+			if(active < 0){
+				bad(err, nerr, f, pc, "guardend without guard");
+				goto fail;
+			}
+			active = -1;
+		}else if(active >= 0 && !guardop(i->op)){
+			snprint(msg, sizeof msg, "%s not allowed in guard", nvopname(i->op));
+			bad(err, nerr, f, pc, msg);
+			goto fail;
+		}
+	}
+	if(active >= 0){
+		bad(err, nerr, f, active, "guard without guardend");
+		goto fail;
+	}
+	for(pc = 0; pc < f->ninsn; pc++){
+		i = &f->insn[pc];
+		out = region[pc];
+		fall = 1;
+		switch(i->op){
+		case Oguard:
+			if(region[i->a] != -1){
+				bad(err, nerr, f, pc, "guard failure target inside guard");
+				goto fail;
+			}
+			out = pc;
+			break;
+		case Oguardend:
+			out = -1;
+			break;
+		case Ojump: case Orecvwait: case Orecvwaitdeadline:
+			if(guardedge(f, pc, i->a, out, region, err, nerr) < 0)
+				goto fail;
+			fall = i->op == Orecvwaitdeadline;
+			break;
+		case Otestatom: case Otestint: case Otesteq: case Otestarity:
+			if(guardedge(f, pc, i->c, out, region, err, nerr) < 0)
+				goto fail;
+			break;
+		case Otailcall: case Oreturn: case Ofail: case Oexit:
+			fall = 0;
+			break;
+		}
+		if(fall && pc+1 < f->ninsn &&
+		   guardedge(f, pc, pc+1, out, region, err, nerr) < 0)
+			goto fail;
+	}
+	free(region);
+	return 0;
+fail:
+	free(region);
+	return -1;
+}
+
 static void
 setreg(ulong *s, int r)
 {
@@ -356,7 +472,7 @@ nvverify(NvModule *m, char *err, int nerr)
 		for(j = 0; j < f->ninsn; j++)
 			if(verifyinsn(m, f, j, &f->insn[j], err, nerr) < 0)
 				return -1;
-		if(verifyflow(f, err, nerr) < 0)
+		if(verifyguards(f, err, nerr) < 0 || verifyflow(f, err, nerr) < 0)
 			return -1;
 	}
 	return 0;

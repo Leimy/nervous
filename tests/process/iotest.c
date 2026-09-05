@@ -114,6 +114,7 @@ main(void)
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxheap = 0;
+	limits.gcstress = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
 

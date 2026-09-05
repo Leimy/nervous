@@ -1,120 +1,151 @@
 # Nervous Project Status
 
-Current operational state only. Maintained by the active coordinator; workers report changes rather than editing concurrently. Completed ledger rows and past-session narrative live in `STATUS-archive.md`; settled design lives in `docs/decisions.md`; closed review findings live in `docs/review-findings-archive.md`. Nothing an agent needs for forward work should require reading those three.
+Operational source of truth. Historical work is in `STATUS-archive.md`; normative design is in `docs/decisions.md`; review concerns persist in the finding ledgers.
 
 ## Coordinator
 
 ```text
-name/session: claude-coordinator-session-4
-since: milestone 08 opening (M08-T01, decisions recorded); event-labeled, no clock in this environment
+name/session: nervous-memory-coordinator (current user-authorized session)
+scope: sole implementer; no sub-agent write assignments
+identity: role label, not a discovered claude9fs session name
 ```
 
-## Current milestone
+## Current milestone and evidence
 
 ```text
-milestone: 08 - Memory (process-local heap and GC)
-state: active (stages 1 and 2 of 3 implemented; stage 2 built clean from empty, awaiting the user's
-  rc tests/run.rc and rc bench/run.rc before commit)
-dependencies: R2, 05, 06 -- all complete
-last verified build: mk clean && mk tests passes from empty on the stage-2 tree
-last verified test run: rc tests/run.rc full pass, user-confirmed, on the stage-1 tree; the stage-2
-  tree has NOT yet had a test run (no shell from the coordinator's seat) -- that is the next step
-source control: git, first commit pushed at the end of the post-R2 session; .gitignore covers
-  object files (*.[0-9]) and built binaries -- if any were committed before it existed, git rm --cached them
+milestone: 08 - Memory
+state: active; automatic INLINE collection implemented, awaiting user runtime verification
+prerequisites: R2, 05, 06 and PR2-T01 accepted
+latest build: mk -a tests rebuilt every command/library/test object and linked all targets
+  without diagnostics after the final M08-T04b source/test edits; incremental mk tests also passed
+latest accepted runtime evidence: user reports both rc tests/memory/run.rc and rc tests/run.rc
+  passing on M08-T04a, the explicit collector core. Earlier PR2-T01 suites also passed.
+pending runtime evidence: all tests on M08-T04b, including new autotest and CLI inline-stress runs
+benchmark: historical stage-2 data only; automatic-GC benchmark has not been run
+source control: no commit/push/staging or independent git status inspection by this coordinator
 ```
 
-Milestone states: `not-started`, `ready`, `active`, `blocked`, `acceptance`, `complete`. Review milestones are mandatory gates; forward feature work pauses until the active review's exit criterion is met.
+The ordinary runtime now collects automatically. This is not milestone-08 completion: off-process collection, its ownership/wakeup/teardown tests, both-mode stress acceptance and measured policy constants remain outstanding. No formal review gate is active; R3 is neither open nor complete.
 
 ## Milestone ledger
 
-Milestones 00-07 and reviews R1-R2 are complete; their rows are in `STATUS-archive.md`. Every dependency named below on an archived milestone is satisfied.
+00-07 and R1-R2 are complete; historical rows are archived.
 
 | Milestone | State | Dependencies | Summary |
 |---|---|---|---|
-| 08 Memory | active | R2, 05, 06 | Tagged terms, interned atoms, per-process copying heap, message fragments merged at take, frame stack, exact accounting (D061-D066) |
-| 09 Binaries | not-started | 04, 08 | Binary construction and exact matching |
-| R3 Memory review | not-started | 08, 09 | GC roots, fragments, representation, binary ownership gate |
-| 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement; starts from one D059 FIFO per scheduler |
-| R4 Multicore review | not-started | 10 | Mandatory part of milestone 10 acceptance |
+| 08 Memory | active | R2, 05, 06 | Representation, fragments, roots, collector, accounting and policy |
+| 09 Binaries | not-started | 04, 08 | Binary construction and matching |
+| R3 Memory review | not-started | 08, 09 | Root/fragment/representation/binary ownership gate |
+| 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement |
+| R4 Multicore review | not-started | 10 | Mandatory part of multicore acceptance |
 
-## Active task ledger
+## Task ledger
 
-| Task | Owner | State | Notes |
+| Task | Owner | State | Evidence / next step |
 |---|---|---|---|
-| M08-T01 record D061-D066, resolve questions.md "Milestone 08" | coordinator | done | this session |
-| M08-T02 stage 1: interned atoms (D062) | coordinator (sub-agent implemented, coordinator reviewed + audited) | done; user asked to commit it as one change before stage 2 began | `nvatomintern` table in `lib/value.c`; bench row in `bench/README.md`: 24-33% less per message, 10-25% less heap per process. Superseded in shape by stage 2 (atoms are now term words indexing the same table). |
-| M08-T03 stage 2: tagged terms, frame stack, fragment mailboxes; bump heap freed at exit, no collector (D061, D062, D064, D065; D066 word accounting for mailboxes only) | coordinator (headers + integration + review); six sub-agents by disjoint file (value.c / exec.c+vm.c / process.c+pattern.c+sched.c / main.c+exectest+ptest / schedtest+iotest+r2test / pattern tests) | implemented, built clean from empty, coordinator-reviewed; awaiting `rc tests/run.rc` + bench + commit | See "Stage 2 as built" below. |
-| M08-T04 stage 3: Cheney collector, D066 exact accounting (heap + adopted fragments + frame stack), heap sizing policy, the milestone's required tests | unclaimed | next | `milestones/08-memory.md` "Required tests" and exit criterion. Starts from the notes under "Stage 2 as built". |
+| M08-T01 representation design | prior coordinator | done | D061-D066 recorded |
+| M08-T02 interned atoms | prior coordinator | done | User-accepted and committed before stage 2 |
+| M08-T03 tagged terms, frame stack, fragment mailboxes | prior coordinator | done | Tests/bench user-confirmed; committed as "milestone 08 stage 2" |
+| PR2-T01 guard verifier boundary | prior/resumed coordinator | done | D071; user reports bytecode/full suites passing; post-R2-F01 closed |
+| M08-T04 complete collector/accounting/policy stage | coordinator | active | Inline first, off-process after inline validation |
+| M08-T04a explicit collector and frame-root adapter | coordinator | done | User reports memory/full suites passing; write set released |
+| M08-T04b automatic inline collection | coordinator, sole implementer | integrating | Forced build passed; new runtime and stress suites pending |
 
-Stage numbering changed this session: the old stage 3 ("fragments with in-place scan") collapsed into stage 2, because once a term is a word the mailbox must store a self-contained copy anyway, and that copy *is* the D064 fragment; handing `recvbegin` a pointer into it and having `recvtake` adopt it was less code than copying it into the heap. Without a collector, adoption is just "freed with the heap at exit". So there are three stages, not four.
+### M08-T04b assignment / exclusive ownership
 
-Stages are sequential: each must leave `mk clean && mk tests` and `rc tests/run.rc` green before the next starts. Constants deferred to measurement (PID payload split, heap initial size and growth) are noted in `docs/questions.md` "Milestone 08" and get recorded as notes on D061/D063 when settled; stage 2 fixed the PID split (30 slot bits, 32 generation bits, `include/nvvm.h`) and a provisional chunk policy (64-word minimum, doubling, 65536-word cap, `lib/value.c`) -- record them on D061/D063 once the bench confirms them.
+Depends on accepted T04a. Objective: reservation/retry, automatic inline servicing, startup/frame/adoption accounting, stress/limits interfaces, regression coverage and commit-message handoff. Off-process collection is not assigned.
 
-## Reserved integration surfaces
+Exclusive canonical paths (all listed relative paths are under `/usr/dave/work/nervous/`): `lib/exec.c`, `lib/value.c`, `lib/gc.c`, `lib/process.c`, `lib/sched.c`, `lib/vm.c`, `include/nvvm.h`, `include/nvexec.h`, `include/nvproc.h`, `include/nvsched.h`, `cmd/nervous/main.c`, `tests/memory/`, `tests/process/exectest.c`, `tests/process/schedtest.c`, `tests/process/iotest.c`, `tests/process/r2test.c`, `tests/process/ptest.c`, `tests/run.rc`, `mkfile`, `.gitignore`, `README.md`, `STATUS.md`, `docs/decisions.md`, `milestones/08-memory.md`. Shared integration surfaces remain coordinator-owned under `COORDINATION.md`. No parallel edits or sub-agent assignments.
 
-Coordinator-owned by default: `README.md`, `STATUS.md`, `STATUS-archive.md`, `COORDINATION.md`, `mkfile`, `docs/decisions.md`, `docs/questions.md`, `docs/review-findings.md`, `docs/review-findings-archive.md`, shared mkfiles, shared public headers.
+Acceptance: forced compilation, user-run memory/full suites and CLI inline-stress suite. Compilation is not behavioral acceptance. Write set remains reserved pending those results.
 
 ## Review findings
 
-No finding is open. R2-F16 (`NvLimits.maxduration` dead field) is deferred to milestone 10. R3-F01 is closed. Ledger: `docs/review-findings.md`.
+post-R2-F01 is closed: structural guard verification, 5 valid and 21 invalid fixtures, and compiler-produced guard coverage at quanta 1/1000 passed the user-run suites. D071 and `docs/review-findings.md` retain evidence. R2-F16 (advisory NvLimits.maxduration) stays deferred to milestone 10. R3-F01 is closed. `REVIEW-impressions.md` is not declared resolved by the collector work.
 
-## Integration queue
+## What is built
 
-```text
-gate: none active. Milestone 08 is active (stage 2 built, stage 3 next); R3 opens once 08/09 are far enough along.
-uncommitted: the stage-2 tree (six headers, six lib files, main.c, eight test programs, docs/bytecode.md,
-  this file). Build clean from empty; tests and bench NOT yet run. Sequence: user runs rc tests/run.rc,
-  then rc bench/run.rc; coordinator adds the stage-2 bench row; commit as one change.
-performance after stage 1: ~1.06-1.31 us per ring hop (from 1.5-2.0), 1.1-1.4 KB per blocked process.
-performance after stage 2 (bench/README.md, user-run): ~300-350 ns per ring hop (from 1.06-1.31 us
-  after stage 1, 1.5-2.0 us at baseline), -70 to -82%; ~12.5 ns per reduction. The `-s` heap figure
-  is currently uncollected garbage and not a footprint; the real per-process number returns with the
-  stage-3 collector, along with the waiters-10000 cache regression it causes (513 vs 310 ns).
-first test run on stage 2 found one real bug, fixed: nvtermequal took the identical-word fast path
-  before its depth check, so equality and copy disagreed by one level about the depth ceiling.
-  Rerun of rc tests/run.rc pending.
-stage-1 notes for later stages: the atom table is process-global and unlocked (fine under D009,
-  needs a lock or per-scheduler discipline in milestone 10); nvatomlimit refuses a ceiling below
-  the current count, so two runtimes in one host process must agree on maxatom; nvexecinit
-  rescans m->konst on every spawn (cheap no-op; a module flag would remove it if it ever shows).
-baseline: mk clean && mk tests from empty; rc tests/run.rc full pass (user-confirmed).
-performance baseline: bench/README.md -- ~1.5 us per ring hop, 24 reductions per hop
-  (~65 ns per reduction, mostly malloc), 1.2-1.7 KB per blocked process, flat in
-  process count to 32768. These are the numbers milestone 08 is expected to move.
-required first reads for milestone 08: README.md, this file, milestones/08-memory.md,
-  docs/decisions.md D061-D066 (the design) and D039/D040/D047 (the provisional accounting
-  they replace), bench/README.md (the numbers and where the time goes today).
-adjacent source for milestone 08: lib/value.c (NvValue representation), lib/exec.c (frames,
-  registers), lib/pattern.c, lib/process.c (mailbox fragments, byte accounting),
-  include/nvvm.h, include/nvexec.h, include/nvproc.h; every test that hand-builds NvValue.
+### Accepted explicit core (T04a)
+
+`lib/gc.c` performs Cheney copying over root ranges with no exec, scheduler or mailbox dependency. Owned objects are in current/full chunks or adopted fragments; external boxed pointers are left untouched without dereferencing them. The caller guarantees stable self-contained external storage. Only tuples contain traceable fields; Ref and integer bodies are opaque.
+
+Forwarding uses a one-word offset header, including for empty tuples. Source addresses recorded alongside to-space permit restoring headers on a failed copy or growth trial. Roots are committed only after all fallible work. Successful collection frees old chunks/all adopted fragments, produces one contiguous chunk and sets heap.words to live object words.
+
+`nvexeccollect` validates the active frame chain, supplies register-only ranges, skips frame metadata/inactive slots, and charges retained nstack capacity. It changes no pc, guard target or reductions. Core tests include deep/wide/shared graphs, adopted versus queued fragments, cyclic host metadata, partial-copy failure rollback, frame roots and guarded execution.
+
+### New automatic inline integration (T04b, D072)
+
+- `prepare` in `lib/exec.c` determines allocation before instruction side effects, tracing or reduction charging. Tuple, boxed loadk/arithmetic, mkref, call/tailcall stack growth and recvtake all participate. Space demand is distinct from budget-only charge; adopted fragments contribute to pressure even with maxheap=0.
+- A failed reservation returns NvCollect with the unchanged pending instruction and charge. Durable exec state remains NvYield. Repeated execution calls cannot run a pending request.
+- `nvexecgc` services the request while the owner is stopped and records success/limit/allocator failure for exactly one retry. It does not execute or fault bytecode. The interpreter charges the retried failing instruction once and uses its normal fault path, preserving D060 guard-fault-as-clause-failure semantics.
+- Scheduler returns the owner to the D059 FIFO tail exactly once before collecting inline. A queued peer runs before its retry. Standalone `nvexecruninline` instead services requests within the same quantum, preserving exact reduction limits and trace lines.
+- Initial retained stack capacity is charged before argument copying. The argument is rooted and compacted before execution. Managed heaps refuse chunk growth; host construction/startup copying retain non-moving chunks. Budget/byte-size arithmetic is checked before allocation.
+- `nvprocrecvneed` and the host recvneed callback validate/size the queued candidate without taking it. Only successfully reserved recvtake unlinks/adopts it. Core collectors still never inspect mailbox metadata.
+- Idle scheduler steps may collect waiting processes with used/adopted words above half their space and above their last live watermark, without executing bytecode. An unchanged live set is not repeatedly collected; failed optional collection leaves ownership intact.
+- `NvLimits.gcstress` is explicitly initialized in existing tests and validated as 0/1. The scheduler copies it into each exec. New callers must initialize it.
+- CLI `-H words` enforces the process budget (0 = unlimited); `-G` forces one collection per allocating-instruction reservation. Both apply to -r/-x/-t. `nervous_gcstress=1` supplies the CLI stress default for regression scripts; it does not override C tests' explicit runtime limits.
+- Statistics now label host allocator high-water bytes separately from successful per-process live-heap samples. Collection counters exclude startup compaction; sampled heap words exclude frame capacity and are labeled per-process, not aggregate footprint.
+
+### Tests and build changes
+
+New `tests/memory/autotest.c` has five groups: atomic requests and call/tailcall capacity/FIFO peer progress; guard exhaustion; receive reservation and one-time adoption; idle reclamation; and a source-compiled 1000-message tuple/Ref/boxed-arithmetic loop. The loop runs at quanta 1/1000 with stress off/on, asserting bounded managed space, actual collections, identical reductions and no duplicate messages or Refs.
+
+The memory runner executes both gctest and autotest; the full runner already includes memory. `tests/process/exectest.c` uses the inline convenience wrapper because its assertions measure bytecode quanta, not collector dispatches. Other process tests initialize the added limit field. The mkfile builds/links the new test and the ordinary clean rule names its outputs; `.gitignore` ignores both memory binaries. No clean target was run.
+
+`tests/memory/README.md` documents coverage and its limits. README, milestone 08, headers and D072 describe the new API and scope. D063/D067-D070's off-process design is recorded but not implemented by this slice.
+
+## Verification handoff
+
+User runs against the rebuilt working tree:
+
+```rc
+cd /usr/dave/work/nervous
+rc tests/memory/run.rc
+rc tests/run.rc
+nervous_gcstress=1 rc tests/run.rc
 ```
 
-## Stage 2 as built
+Expected memory endings: `all memory collector tests passed` and `all automatic inline collector tests passed`. The memory suite's C integration test always exercises both stress settings. The environment run stresses all command-driven execution paths while preserving C fixtures' explicit scheduler configurations.
 
-Representation (`include/nvvm.h`, read its header comment first): `NvTerm` is one 64-bit word; low two bits tag boxed pointer / small int (62-bit) / atom index / PID (30 slot + 32 generation bits). Boxed header `NvHdr(kind, len)` with kinds `Btuple`, `Bref`, `Bint`; bit 3 of the header is reserved for the stage-3 forwarding mark. `NvNil` (0) is "no term"; `nvtermkind` reports `Vnil` for it. `NvHeap` is a chunk-list bump allocator (`cur`/`full`), plus an `adopted` fragment list and `words`/`maxwords` (D066 basis; 0 = unlimited, which every caller passes today). `NvFrag` is one malloc holding a root word and a body of words with absolute internal pointers; `nvfragwords` = body+1 is the accounting unit. `NvValue` and every `nvvalue*` function are gone.
+Then measure normally (not under stress):
 
-Interfaces (`include/nvexec.h`, `nvproc.h`, `nvpat.h`, `nvsched.h`): host callbacks take `NvExec *` first and reach the scheduler via `e->host->aux`; `NvExec.host` is a pointer to the scheduler's single shared table (D065). `nvexecinit` gained a `maxheap` argument and copies its argument into the fresh heap. `NvExec.result`/`exitreason` and `NvScheduler.rootvalue`/`lastexit` are fragments, moved by pointer. `nvprocsend` copies once into a fragment that is the mailbox entry; `nvprocrecvbegin/next` return a term pointing into it; `nvprocrecvtake`, `nvprocpop`, `nvprocreceive` hand the fragment to the caller (the interpreter adopts it). `NvLimits.maxmailbox`/`maxmessage` are words; `maxheap` was added. `NvConst.atom` is a `uvlong` term.
+```rc
+rc bench/run.rc
+```
 
-Where the time should now go (from the exec.c handoff): per ring hop, heap allocation is one `tuple` per message construction (1+n words) and nothing else in the common path -- `move`, `getelem`, `send`'s result, `return`, pattern bindings, and boolean results are word copies or cached atoms; `call`/`tailcall`/`return` allocate nothing (frame stack reallocs amortized); `send` does exactly one fragment malloc+copy; `recvbegin` copies nothing; `recvtake` links. Remaining known costs worth measuring: `call`/`tailcall` still resolve the target function by `strcmp` over `module->func` on every call (`findfuncidx`; resolve once per `Kfunc` constant like atoms if it shows); `nvheapcopy` mallocs a scratch array per tuple copied (spawn only).
+Record numbers in `bench/README.md` only after the user supplies them. No new performance or footprint claim has been made. The latest `mk -a tests` rebuilt and linked every target without diagnostics; that is build-only evidence, not a runtime pass or clean-from-empty claim.
 
-Known stage-2 limitations, all deliberate and all stage-3 work: no collector, so a process's heap grows monotonically until exit (long rings are fine in memory terms only because a node's per-message garbage is a few words; `bench/run.rc large` may not fit); the frame stack is not charged to `maxwords`; `maxheap` is 0 everywhere; heap chunk constants unmeasured. Test-side changes of intent (not just port): `exectest` "term depth" now proves the ceiling at root `return` (was: at `tuple`); `ptest` `termdepth()` now proves it at `nvfragcopy`/`nvtermequal` (was: at `nvvaluetuple`); `ptest` `mailboxlimits()` counts words (an int message is 1 word, a 2-tuple of ints is 4) and sends `NvNil` for the "malformed value" case; `r2test` T5-02 mailbox boundary uses `words = 1`; `schedtest` reads live registers through a local `REG(e,n)` macro over `e->stack`/`e->fp`. No `ok - ...` line that a `run.rc` compares changed; expected-output fixtures under `tests/process/cli` were not touched (term printing is byte-identical by construction; the first `rc tests/run.rc` will confirm).
+On success, accept T04b, release its write set and review/stage the combined changes. On failure, fix the reported regression before off-process work or acceptance. User has requested a combined commit message for the safety/collector work; the coordinator supplies it in the response, without asserting that pending runtime checks passed. No commit or push has been performed.
 
-Coordinator review notes for stage 3: `nvheapexhausted` is a per-heap field (`NvHeap.exhausted`), not a file-static -- keep it that way for milestone 10. `NvTermerror` and allocation failure are both -1 from the copy functions; callers that must distinguish pre-check `NvNil` (documented in `nvvm.h`). `sched.c` gives `rootvalue` an independent copy of a root exit reason and `lastexit` the original.
+## Source-control context
 
-## Milestone 08 design
+The prior coordinator recorded uncommitted D063/D067-D070 design changes and PR2-T01 verifier/fixture/doc changes. T04a and T04b now overlap those documentation paths. Review the actual diff and stage deliberately rather than treating the tree as one docs-only change. This coordinator has not inspected git status, and cannot infer staged/committed state from successful builds. The user owns commit/push.
 
-Recorded as D061-D066 in `docs/decisions.md`; read them there, not here. Three things changed between the discussion proposal and the record, all from reading the current code: (1) the PID payload is not a 32/32 split -- tag bits make that impossible, so the split is an implementation constant and D041's slot retirement keys off the representation's generation ceiling; (2) with structure sharing, tuple construction no longer traverses, so D047's depth ceiling is enforced at message copy, equality, and print instead of at construction; (3) two implementation rules are stated as load-bearing: within a heap a copy is a word copy (never deep), and no C variable holds a heap pointer across anything that may allocate. Constants (PID split, heap sizes) are deliberately deferred to measurement.
+## Next implementation after inline acceptance
 
-Where the current cost is, for whoever picks up stage 1: one ring hop is ~18 malloc/free pairs and four tree walks of the message -- `recvbegin` deep-copies the candidate, `getelem`/`move`/`return` deep-copy, `Osend` deep-copies the message once for its result register and once into the mailbox after a `valuesize` walk, every `loadk` of an atom and every `atomresult` (`'true`/`'false`) is a `strdup`, and each call or tail call is two mallocs. Stage 1 removes the strdups; stage 2 removes the deep copies and the frame mallocs; stage 3 removes the mailbox-side copies and the size walk.
+Read D063-D072, `milestones/08-memory.md`, `tests/memory/README.md`, the heap/exec/process/scheduler headers and their source, and `bench/README.md`.
 
-## Recently completed
+1. D068 heap owner states (idle/running/collecting), lock and dispatch ownership. Current collection is synchronous and relies on exclusive stopped-owner access; there is no owner lock yet.
+2. Off-process policy: gcoffload threshold, rfork(RFPROC|RFMEM|RFNOWAIT), `_exits`, completion semaphore, skip/requeue collecting runnable slots, deadline-bounded waits, teardown waiting for every collector. Never let a collector read mailbox metadata.
+3. Demand/idle collection tests under off-process ownership, sends/deadlines during collection, teardown, and full stress in both configurations. Preserve retry-time guard fault delivery from D072.
+4. Benchmark large-live-set latency and choose gcoffload and sizing/idle thresholds from evidence; update questions and decision notes. Remeasure the stage-2 waiters regression before attributing it conclusively.
+5. Finish milestone acceptance criteria, then binaries and R3 in order. No later review/milestone is implicitly accepted by T04b.
 
-All user-confirmed and committed; details in the archive and the decisions log. Tail calls (R2-F21). Root-fault-first CLI reporting (R2-F22). Examples `ring`, `isolation`, `ioserver`. D059 FIFO run queue (R2-F23). `maxprocess` 65536. `nervous -s` and `bench/`. Unary and boolean operators. D060 guards and type tests. Documentation compaction: this file, `docs/review-findings.md`, and the two archives; `README.md` now carries the minimum reading list.
+## Known limitations / measurements still needed
 
-## Next coordinator actions
+- Linear chunk/adopted address lookup and scratch source-address storage proportional to space capacity are deliberately simple. Growth trials may recopy. A collection's transient memory includes old/new space and scratch, not merely the maxheap live-data budget.
+- The collector conservatively sizes space using the added charge even for adoption/stack growth. This may retain extra slack; it is recorded on D072, not hidden as optimal sizing.
+- Startup compaction and preflight checks add overhead; arithmetic/call validation is currently repeated at execution after preflight. Measure before optimizing.
+- Host malloc failure paths have source review but no deterministic injection test. Owned-header checks do not make arbitrary C pointers/root descriptors safe. Custom host recvneed/recvtake callbacks must report a stable candidate charge and must not collect internally.
+- Off-process collection, gcoffload, lock/owner protocol, off-process stress and policy measurements remain undone.
+- The global atom table remains unlocked under one scheduler; milestone 10 owns synchronization. Its configured limit cannot fall below the already interned count. Calls still resolve target names and initialization rescans constants.
 
-1. User runs `rc tests/run.rc` on the stage-2 tree; fix anything it finds (coordinator owns the fix, all files are released). Then `rc bench/run.rc`; add the stage-2 row to `bench/README.md`; commit as one change.
-2. Stage 3 (M08-T04): Cheney collector over a single contiguous space (replace the chunk list), roots = frame stack, from-space classification by address including adopted fragments, D066 accounting including the frame stack, heap sizing policy, `NvLimits.maxheap` made real in `main.c`, and the required tests in `milestones/08-memory.md`. Same discipline: bench before/after, tests green, user-confirmed, commit.
-3. Record the deferred constants as notes on D061/D063 once measured; open R3 when 08 and 09 are far enough along.
+## Historical baseline
 
-Two adjacent questions stay open in `docs/questions.md` and block nothing: a command-wide execution bound for `nervous -r` (CLI policy) and R2-F16.
+Stage 2 used tagged 64-bit terms (62-bit small integers, atom indices, PID 30-slot/32-generation bits) and copied ordinary messages once into fragments. Register copies were word copies, frame stacks contiguous, and root results/exit reasons independent fragments. Its ordinary heaps accumulated garbage until exit.
+
+User-reported stage-2 performance: about 300-350 ns/ring hop (~12.5 ns/reduction), versus 1.06-1.31 us after atom interning and 1.5-2.0 us at baseline. Its `-s` heap figure measured uncollected garbage, not live footprint. Waiters-10000 measured 513 ns/message versus 310 at 1000; automatic-GC results are still needed. The large stage-2 ring was not run because accumulated garbage would not fit.
+
+The first stage-2 test run found nvtermequal's identity fast path preceding the depth check. Fixed, user rerun passed, committed with stage 2. Do not confuse that historical result, PR2-T01 acceptance, or T04a acceptance with verification of T04b.
+
+Tools: mk is compilation-only. Runtime scripts, benchmarks, cleaning, installation and source-control commands must be run by the user, not smuggled through mk.

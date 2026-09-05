@@ -1,0 +1,11 @@
+module
+const func worker
+func main 2
+0: guard 3
+1: guardend
+2: call 1 0 0
+3: return 0
+end
+func worker 1
+0: return 0
+end
