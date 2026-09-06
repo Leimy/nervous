@@ -4,11 +4,22 @@
 
 Milestones 05 and 06 and Review R2 must complete before process-local heap integration begins. (Milestone 07, Basic I/O, does not gate this: it needs nothing from heap representation and this milestone needs nothing from it.)
 
-## Current safety preflight
+## Accepted checkpoint; implementation paused
 
-PR2-T01 is accepted: the user reports the bytecode and full regression suites passing with D071's guard-boundary verification. post-R2-F01 is closed and M08-T04 may resume. See `../docs/review-findings.md` and `../STATUS.md`. This bounded prerequisite does not change the collector design or declare R3 open or complete.
+T04e correction: a bare CLI invocation could fail on an empty environment entry, and `rfork E` in test runners discarded inherited CLI stress. The repair compiles; fresh normal/CLI-stress checks are pending. Historical acceptance below retains normal and explicit C stress evidence, not full CLI-stress coverage. Only the bounded defect repair is active; feature tasks remain paused.
 
-M08-T04a (collector core and frame-root adapter) is user-accepted: memory and full regression suites passed. M08-T04b adds automatic inline collection (D072): pre-instruction reservation/retry, startup/stack/fragment accounting, idle reclamation, CLI limits and stress, and integration tests. The user reports all requested T04b tests passing; correctness is accepted. The first benchmark is recorded in bench/README.md and motivates a separate inline performance investigation. Evidence and next assignments are in STATUS. Off-process collection (D068), both-mode stress acceptance, and benchmark-based policy tuning remain outstanding; this is not milestone-08 completion.
+PR2-T01 (D071 guard verification), M08-T04a (collector/root adapter), M08-T04b (automatic inline collection, D072), and M08-T04p (amortized table storage, small-GC allocation reduction and diagnostics, D073) are accepted. The user confirmed normal and CLI-stress regressions passing after the T04p benchmark review. `mk -a tests benchmarks` rebuilt all targets without diagnostics. Latest measurements are in `../bench/README.md`; post-R2-F01 is closed in the finding ledger.
+
+The user has paused implementation at this save point. No source write assignment is active; upcoming tasks are planned/unassigned in `../STATUS.md`. This documentation handoff is not permission to start them. Milestone 08 is still active, not complete; R3 has not opened.
+
+## Planned continuation
+
+1. Optional, bounded T04q: remove duplicated arithmetic/call-target computations between preflight and execution. Preserve reservation, guard, root and reduction semantics; discard/recompute any per-attempt plan across NvCollect. Do not weaken checks or enlarge global heap defaults. Test and measure, then stop or defer rather than indefinitely pursuing stage-2 throughput.
+2. T04r: establish an inline large-live-set latency baseline with unrelated small-message peers. Measure latency tails as well as throughput and memory, with controls for observation overhead. Existing tiny-live-set benchmarks cannot select an offload threshold.
+3. T04c: implement D068 off-process ownership, completion/wakeup and teardown. Test sends/deadlines during collection, queue progress without duplicate dispatch or spinning, failed collector launch/allocation, and shutdown with collectors in flight. Preserve D072 retry-time guard-aware fault delivery. Account for relocatable process tables and diagnostic access to collecting heaps.
+4. T04d: run full inline-only and forced-offload stress, repeat representative benchmarks, select policy constants from evidence, and reconcile all milestone acceptance criteria. Only then proceed to binaries and R3.
+
+T04q is a recommendation, not a new dependency gate; the user may choose the large-live-set/off-process track directly. Exact interfaces and exclusive write sets must be assigned before implementation. D069/D072's current minimum/sizing/idle policies remain in place until a measured decision changes them.
 
 ## Goal
 

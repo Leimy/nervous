@@ -207,12 +207,16 @@ main(int argc, char **argv)
 	brk0 = 0;
 	heaplimit = 0;
 	gcstress = 0;
+	/* rc may export an unset/restored variable as an empty /env file. */
 	stressenv = getenv("nervous_gcstress");
 	if(stressenv != nil){
 		if(strcmp(stressenv, "1") == 0)
 			gcstress = 1;
-		else if(strcmp(stressenv, "0") != 0)
-			usage();
+		else if(stressenv[0] != 0 && strcmp(stressenv, "0") != 0){
+			fprint(2, "nervous: invalid nervous_gcstress (expected empty, 0 or 1)\n");
+			free(stressenv);
+			exits("environment");
+		}
 		free(stressenv);
 	}
 	ARGBEGIN{

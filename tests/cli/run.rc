@@ -1,0 +1,105 @@
+#!/bin/rc
+# Lowercase e copies the environment; E would silently disable CLI stress.
+rfork e
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+root=`{basename -d `{basename -d $testdir}}
+bin=$root/nervous
+expected=0
+if(~ $"nervous_gcstress 1)
+	expected=1
+if(~ $#* 2){
+	bin=$1
+	expected=$2
+}
+if not if(! ~ $#* 0){
+	echo usage: $0 '[nervous-binary expected-inherited-stress]' >[1=2]
+	exit usage
+}
+if(! ~ $expected 0 1 || ! test -x $bin)
+	exit setup
+
+tmp=/tmp/nervous-envtest-$pid
+mkdir $tmp || exit mkdir
+fn fail {
+	echo FAIL: CLI environment: $* >[1=2]
+	echo diagnostics preserved in $tmp >[1=2]
+	exit test
+}
+echo '${42}' >$tmp/value.want
+echo 20000 >$tmp/ring.want
+echo 'nervous: invalid nervous_gcstress (expected empty, 0 or 1)' >$tmp/error.want
+
+fn value {
+	label=$1
+	gc=$2
+	shift; shift
+	$bin -s $* -r $testdir/value.nv main >$tmp/$label.out >[2]$tmp/$label.err
+	if(! ~ $status '')
+		fail $label: execution failed
+	if(! cmp -s $tmp/$label.out $tmp/value.want)
+		fail $label: wrong value
+	if(! grep -s '^stats: GC '^$gc^' collections, 0 failed;' $tmp/$label.err)
+		fail $label: wrong collection count
+	echo ok - CLI environment $label
+}
+fn ring {
+	$bin -r $root/examples/ring.nv main >$tmp/ring.out >[2]$tmp/ring.err
+	if(! ~ $status '')
+		fail bare ring execution
+	if(! cmp -s $tmp/ring.out $tmp/ring.want || test -s $tmp/ring.err)
+		fail bare ring output
+	# A false final if condition would leave a failure status in rc.
+	echo ok - CLI environment bare ring
+}
+
+# Parent passes its expected mode explicitly: changing either runner back
+# to rfork E must fail here, not silently turn a stress run into normal.
+value inherited $expected
+
+# These subshells have private environment groups. Export the empty rc
+# variable before removing its env file, so later exec cannot recreate it.
+@ {
+	rfork e
+	nervous_gcstress=()
+	rm -f /env/nervous_gcstress || exit remove-env
+	if(test -e /env/nervous_gcstress)
+		exit env-still-present
+	value absent 0
+	ring
+} || fail absent
+
+@ {
+	rfork e
+	nervous_gcstress=()
+	# test's exec exports the changed variable as a zero-length env file.
+	if(! test -e /env/nervous_gcstress || test -s /env/nervous_gcstress)
+		exit expected-empty-env
+	value zero-length 0
+	ring
+} || fail zero-length
+
+nervous_gcstress='' value quoted-empty 0
+nervous_gcstress=0 value zero 0
+nervous_gcstress=1 value one 1
+nervous_gcstress=0 value explicit-G 1 -G
+nervous_gcstress='' value empty-G 1 -G
+
+for(bad in 2 invalid '0 1'){
+	nervous_gcstress=$bad $bin -r $testdir/value.nv main >$tmp/bad.out >[2]$tmp/bad.err
+	if(~ $status '')
+		fail invalid value accepted
+	if(test -s $tmp/bad.out || ! cmp -s $tmp/bad.err $tmp/error.want)
+		fail invalid value diagnostic
+}
+echo ok - CLI environment invalid values name the setting
+rm -rf $tmp
+echo all CLI environment tests passed
+exit ''

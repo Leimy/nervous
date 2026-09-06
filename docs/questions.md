@@ -16,15 +16,20 @@ D053 settles why this milestone exists and where it sits (after R2, before the r
 
 Every original question is answered in D061 through D066: term tagging (D061), atom lifetime and table limits (D062), heap layout, collector, and root enumeration (D063, D065), fragment merge timing (D064), and exhaustion behavior (D066). The per-process footprint motivation (65535 ring nodes would not fit in a modest VM; ~1-1.5 KB per blocked process) is recorded in `bench/README.md`, and the two fixes it named -- a shared host callback table and word-sized terms -- are D065 and D061.
 
-Off-process collection, raised after stage 2, is settled in D067-D070 (reserve at the boundary, yield to collect; heap owner state; collector procs via `rfork(RFMEM)`; Plan 9 procs as the multicore unit) and is stage 3 work, not milestone 10 work.
+Off-process collection's architecture is settled in D067-D070 (reserve at the boundary, yield to collect; heap owner state; collector procs via `rfork(RFMEM)`; Plan 9 procs as the multicore unit). It remains milestone-08 work, not milestone 10 work, and is not implemented yet. D072 records the accepted inline integration and D073 the accepted bounded performance pass. Implementation is paused by the user; STATUS lists planned/unassigned continuation.
 
-Constants left to measurement, to be recorded as notes on the named decision once the bench settles them:
+The PID split is already an implementation fact, not an unresolved policy choice: 30 slot / 32 generation bits (`include/nvvm.h`). Current managed execution heaps are contiguous; host/startup construction intentionally retains non-moving chunks (D072).
 
-- PID payload split (D061). Stage 2 chose 30 slot / 32 generation bits (`include/nvvm.h`).
-- Space sizing (D069): 64-word minimum, power-of-two growth with live+need at most half. Stage 2's chunk policy (64-word minimum, doubling, 65536-word cap, `lib/value.c`) is replaced by the single contiguous space in stage 3.
+Policy measurements still open, to be recorded on the named decision when supported by representative runs:
+
+- Space sizing (D069): current minimum 64 words, power-of-two growth with live+need at most half; no new default selected. T04p's busy-only experiment at 512 words cut collections 88.7% but traffic cost only 7.4%. Applying that extra capacity to 10000 idle heaps would add 35.84 MB. Adaptive hot-process sizing is optional later research, not required before off-process ownership work or accepted by this result.
 - `gcoffload` threshold (D068): the heap size above which a collection goes to a separate proc. The bench that sets it is a ring with one process holding a large live set: measure the other nodes' hop latency with the threshold at 0, at infinity, and at candidate values; the crossover where the fork cost is repaid is the default.
-- Opportunistic-collection threshold (D067): how many dead-or-adopted words a `waiting` process may hold before the idle step collects it. Start with "the same as would trigger a demand collection" and adjust only if the idle step's sweep shows in a profile.
+- Opportunistic-collection threshold (D067/D072): current inline policy collects a waiting process when used/adopted words exceed half its space and exceed the last live watermark. It avoids recollecting an unchanged live set. Retain it until representative measurements justify a change; separate idle sweep cost from demand-path throughput.
 - Space shrinking (D069 defers it): no policy in this milestone. Revisit if `nervous -s` shows a long-lived process that once held a large live set retaining its space indefinitely.
+
+Off-process implementation questions to settle in the future T04c assignment, without reopening the D068 ownership split: collector-launch failure policy (for example, inline fallback versus controlled failure), publication/completion ordering, how teardown waits safely for all collectors, and how explicit snapshots avoid inspecting collecting heaps. Define tests and record any cross-cutting choice before embedding it in shared interfaces. A collector must not retain a pointer into the relocatable process table.
+
+The next throughput candidate is duplicated arithmetic/call-target work across reservation and execution. It is a bounded optional optimization (T04q), not a language question or a dependency gate. The large-live-set latency baseline (T04r) is still needed regardless: current tiny-live-set benchmarks cannot choose gcoffload, and timing instrumentation perturbs the measured workload substantially.
 
 ## Milestone 09 - Binaries
 

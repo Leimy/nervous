@@ -1,5 +1,7 @@
 # Benchmarks
 
+Test-evidence correction (T04e): historical environment-prefixed suite passes did not prove full CLI stress, because test runners used `rfork E`. The CLI/environment repair compiles; corrected normal/stress runs are pending in STATUS. Existing benchmark measurements are unchanged; this correction does not turn them into stress measurements.
+
 These measure the scheduler and message passing. They are deliberately not in `tests/run.rc`: they take seconds to minutes, and their output is numbers to compare, not pass/fail. Run them with
 
 ```text
@@ -129,7 +131,7 @@ remains provisional. Next is a bounded inline performance investigation,
 then the large-live-set benchmark and D068 off-process policy. No heap-size
 or offload default has been selected from this first run.
 
-## T04p diagnostic pass: measurements to run next
+## T04p diagnostic pass: reproducing the accepted checkpoint
 
 The T04p working tree changes no heap minimum, sizing ratio, reservation
 threshold, stress rule or scheduling order. It removes three auxiliary
@@ -157,8 +159,10 @@ rc bench/perf.rc
 
 `mk benchmarks` only compiles/links the command and `bench/perftest`; no
 benchmark is executed by mk. The agent may build, but the user must run
-the scripts. The first T04p results are recorded below; regression and
-stress acceptance still requires a separate user report.
+the scripts. T04p results are recorded below, and the user subsequently
+confirmed all requested normal/stress regressions passed. These commands
+reproduce the accepted checkpoint or validate a future change; no rerun
+is required merely because its documentation has been updated.
 
 ### Phase-separated waiter control
 
@@ -224,9 +228,9 @@ live sets; the large-live-set latency benchmark remains future work.
 
 User supplied `rc bench/run.rc` and all seven `rc bench/perf.rc` cases via
 `/dev/snarf` after the T04p build. This is a single-run comparison, not a
-confidence interval or an agent-executed measurement. The clipboard does
-not report the requested regression/stress suites, so those remain pending.
-No new runtime defaults are chosen here.
+confidence interval or an agent-executed measurement. The user separately
+confirmed all requested normal/stress regressions passed after this review;
+T04p is accepted. No new runtime defaults are chosen here.
 
 ### Original whole-program shapes
 
@@ -336,13 +340,16 @@ collections recovers only about 7% of traffic time. Preflight, arithmetic,
 call lookup, host messaging and dispatch still need examination if the
 goal is to approach stage-2 throughput. In particular, source inspection
 already identifies arithmetic and call-target work repeated after
-reservation. Optimize that duplication while preserving the reservation
-proof before weakening any checks or moving tiny collections off-process.
+reservation. A bounded attempt to remove that duplication while preserving
+the reservation proof is the recommended next throughput experiment, not
+a mandatory prerequisite for off-process correctness. Do not weaken checks
+or offload tiny collections merely to chase a throughput number.
 
-Disposition: after this benchmark review, the user explicitly confirmed
-all requested tests passed. T04p is accepted as a save point. The pending
-test notes above describe the earlier measurement-only report, not the
-current acceptance state. No new heap minimum, sizing rule or offload
-threshold has been accepted.
+Disposition: T04p is an accepted save point on user-confirmed passing tests
+and the recorded measurements. Implementation is paused at the user's
+request; future tasks in STATUS are planned/unassigned. No new heap minimum,
+sizing rule or offload threshold has been accepted. The remaining offload
+measurement is a large-live-set latency baseline, not another repetition
+of tiny-heap throughput alone.
 
 Add a row here whenever a change is meant to move these numbers, with the build it was measured on.

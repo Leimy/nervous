@@ -1,5 +1,6 @@
 #!/bin/rc
-rfork E
+# Preserve inherited settings in a private environment.
+rfork e
 
 script=$0
 switch($script){

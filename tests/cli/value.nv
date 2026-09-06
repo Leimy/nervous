@@ -1,0 +1,5 @@
+// One allocating instruction: normal execution needs no demand GC;
+// stress must collect before constructing this tuple.
+fn main() {
+	${42}
+}

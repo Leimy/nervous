@@ -1,5 +1,6 @@
 #!/bin/rc
-rfork E
+# Private COPY: uppercase E discards inherited CLI stress settings.
+rfork e
 
 script=$0
 switch($script){
@@ -17,6 +18,13 @@ if(! test -x $bin){
 	echo $0: build with '''mk tests''' >[1=2]
 	exit no-binary
 }
+
+# Pass the shell's expected mode separately so lost environment inheritance
+# cannot silently turn the stress suite into another normal run.
+clistress=0
+if(~ $"nervous_gcstress 1)
+	clistress=1
+rc $testroot/cli/run.rc $bin $clistress || exit cli-environment
 
 rc $testroot/frontend/run.rc $bin || exit frontend
 rc $testroot/bytecode/run.rc $bin || exit bytecode
@@ -91,7 +99,14 @@ echo ok - source CLI fault, exit, and deadlock diagnostics
 # isolation.nv (a child faults; siblings and root continue; the lost reply
 # is detected by `after`) and ioserver.nv (I/O as a Ref-correlated message
 # exchange with a device process) are examples too, with goldens here.
+# GC stress adds FIFO yields: in print-order, the second spawn's argument
+# allocation lets child a run before the root prints. Dispatch ordering is
+# preserved, but unsynchronized cross-process output need not be identical
+# between normal and stress modes. Keep an exact golden for each mode.
 for(name in hello print-kinds print-order isolation ioserver){
+	want=$testroot/process/cli/$name.out
+	if(~ $name print-order && ~ $clistress 1)
+		want=$testroot/process/cli/print-order.stress.out
 	src=$testroot/process/cli/$name.nv
 	if(~ $name hello isolation ioserver)
 		src=$root/examples/$name.nv
@@ -102,10 +117,10 @@ for(name in hello print-kinds print-order isolation ioserver){
 		rm -rf $tmp
 		exit source-run
 	}
-	if(! cmp -s $testroot/process/cli/$name.out $tmp/$name.out){
+	if(! cmp -s $want $tmp/$name.out){
 		echo FAIL: CLI $name stdout differs >[1=2]
 		echo expected: >[1=2]
-		cat $testroot/process/cli/$name.out >[1=2]
+		cat $want >[1=2]
 		echo actual: >[1=2]
 		cat $tmp/$name.out >[1=2]
 		rm -rf $tmp

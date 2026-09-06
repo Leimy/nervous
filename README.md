@@ -55,11 +55,15 @@ Distribution, maps, floats, links, monitors, general FFI, code replacement, and 
 
 ## Current position
 
-Milestones 00 through 07 and reviews R1 and R2 are all complete; `rc tests/run.rc` passes completely, including milestone 07's `print`/`eprint` I/O fixtures, `examples/hello.nv`, and R2's concurrency/lifecycle regressions in `tests/process/r2test.c`. No review gate is currently active. Milestone 08 (Memory) is the next available forward-feature track. Three post-R2 defect fixes are closed (R2-F21 tail calls, R2-F22 root-fault reporting, R2-F23 the D059 FIFO run queue replacing the O(n) dispatch scan; see `docs/review-findings.md`): message passing costs about 2 us per hop on a single scheduler independent of how many processes exist, measured up to 32768. Operational state is recorded in `STATUS.md`, which is authoritative if this summary becomes stale.
+CLI evidence correction (T04e): empty `nervous_gcstress` incorrectly caused usage, and test runners discarded inherited stress via `rfork E`. Both are now repaired and compile; fresh user-run normal/CLI-stress suites are pending. Earlier passes retain normal and explicit C stress evidence, not full CLI-stress coverage. Feature work remains paused; see STATUS.
+
+Milestones 00-07 and reviews R1-R2 are complete. Milestone 08 is active: verified guard boundaries, automatic process-local inline GC, accounting/stress controls, and the first bounded performance pass are accepted on user-confirmed passing tests. The latest benchmark evidence is in `bench/README.md`; historical pre-GC numbers are not current performance claims.
+
+Implementation is paused at the accepted T04p save point at the user's request. Off-process GC, its ownership/wakeup/teardown tests, and final policy/acceptance measurements remain milestone-08 work. No review gate is currently active; R3 is still future work. `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md`; it names the current milestone, the design proposal awaiting recording as decisions, and the next actions. No review finding or write ownership is open (R2-F16 is deferred to milestone 10 with a named owner).
+Read `STATUS.md` and `milestones/08-memory.md`. D061-D073 record the current design; the status lists accepted evidence and planned, unassigned next tasks. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Commit/push status has not been independently established; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
 
 ## Try it
 
@@ -80,7 +84,7 @@ rc tests/run.rc
 nervous_gcstress=1 rc tests/run.rc
 ```
 
-The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. Off-process collection and final memory-policy measurements remain future milestone-08 work; see STATUS before treating this slice as accepted.
+Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also enables it. Other nonempty environment values produce a diagnostic naming `nervous_gcstress`. The repaired runners use `rfork e` to preserve the inherited setting in a private environment. The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. This inline checkpoint is accepted; off-process collection and final memory-policy measurements remain future milestone-08 work. See STATUS for the implementation pause and planned continuation.
 
 ## Working with multiple agents
 

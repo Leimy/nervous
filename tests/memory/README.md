@@ -74,9 +74,13 @@ Six groups, ending with `all automatic inline collector tests passed`:
 
 ## Limits of the evidence
 
-T04a and T04b were user-confirmed passing before T04p. The table/scratch
-optimizations and diagnostic additions need fresh runtime verification;
-do not reuse earlier results as evidence for the T04p working tree.
+T04p's reported passes establish normal-suite and explicit C stress evidence.
+Correction: the old runners used `rfork E`, discarding inherited CLI stress;
+the environment-prefixed run did not establish full CLI-stress coverage.
+T04e now uses `rfork e`, fixes empty-environment CLI startup, and adds a
+collection-count canary in `tests/cli/run.rc`. `mk tests` passed; fresh normal
+and CLI-stress runtime checks are pending. Feature work remains paused.
+See STATUS for the bounded repair and verification handoff.
 
 These are inline tests. No gcoffload option, collector proc, owner-lock
 protocol, multicore behavior or milestone-08 acceptance is claimed.
