@@ -19,6 +19,14 @@ struct NvMemstats {
 	uvlong nexec;
 	uvlong nadopted;
 	uvlong nmailbox;
+	/*
+	 * D074: a process whose heap is under off-process collection is
+	 * skipped entirely rather than read racily (its heap.cur/full/
+	 * adopted may be actively rewritten by the collector proc); this
+	 * counts how many were skipped, so a snapshot taken during heavy
+	 * offload is honestly partial rather than silently wrong.
+	 */
+	uvlong ncollecting;
 };
 
 /*
@@ -89,6 +97,28 @@ struct NvScheduler {
 	uvlong gcoutputwords;	/* live words from successful collections */
 	uvlong gcdemand;
 	uvlong gcidle;
+	/*
+	 * D074: off-process collection bookkeeping. gcoutstanding is the
+	 * number of heaps currently NvHeapCollecting under a launched
+	 * collector proc whose completion this scheduler has not yet
+	 * folded; it is the only new cross-cutting state a collector's
+	 * existence adds here. gcofffallback counts a failed rfork that
+	 * fell back to an immediate inline collection in the parent,
+	 * distinct from a deliberate policy choice to collect inline.
+	 * gcsem is the malloc'd completion semaphore a launched collector
+	 * child semrelease's; gchold is a malloc'd test-only hold point (see
+	 * nvschedgchold below). Both must be malloc'd, not plain fields:
+	 * rfork(RFPROC|RFMEM) shares only data/bss, never a caller's stack
+	 * segment, and NvScheduler is stack-allocated by every caller
+	 * (cmd/nervous/main.c, every test's main), so a word the collector
+	 * child writes or semrelease's must live outside the NvScheduler
+	 * struct itself or the child's writes land in its own private copy
+	 * of the parent's stack and are never observed.
+	 */
+	uvlong gcoutstanding;
+	uvlong gcofffallback;
+	long *gcsem;
+	long *gchold;
 	int profile;		/* opt-in real monotonic elapsed timing, default off */
 	uvlong execns;		/* includes host callbacks and nested spawn time */
 	uvlong gcns;		/* demand + idle collection, excludes startup */
@@ -122,6 +152,20 @@ void nvschedsetclock(NvScheduler *, NvClock *);
  */
 void nvschedsetio(NvScheduler *, NvIO *);
 void nvschedfree(NvScheduler *);
+/*
+ * D074 "Test determinism": a deterministic hold point, absent (a no-op)
+ * in production. Setting hold nonzero parks every off-process collector
+ * -- already launched and still running, or launched later -- at the
+ * point just after it finishes nvexecgc but before it publishes
+ * completion (before it takes the heap lock to set the heap idle and
+ * semrelease's the scheduler's completion semaphore). Setting hold back
+ * to 0 releases every currently parked collector at once. This lets a
+ * test park a launched collector, observe scheduler/process state with
+ * the heap still NvHeapCollecting, then release it and observe the
+ * lazy completion fold, all without depending on real scheduling races.
+ * nil-safe (nvschedinit always allocates the underlying storage).
+ */
+void nvschedgchold(NvScheduler *, int hold);
 /* The argument term may live in any storage; it is copied into the new process's heap. */
 int nvschedspawn(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedspawnroot(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);

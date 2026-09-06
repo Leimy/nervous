@@ -170,6 +170,8 @@ main(int argc, char **argv)
 	l.maxtermdepth = NvMaxtermdepth;
 	l.maxduration = NvMaxduration;
 	l.maxatom = 65536;
+	/* D074: already memset to zero above; explicit for consistency. */
+	l.gcoffload = 0;
 	print("waiters=%lud pings=%lud busy-headroom=%lud profiling=%lud; times exclude snapshots/printing\n", waiters, pings, headroom, profile);
 	base = (uintptr)sbrk(0);
 	start = uptime();

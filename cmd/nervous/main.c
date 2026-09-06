@@ -353,6 +353,8 @@ main(int argc, char **argv)
 			limits.maxtermdepth = NvMaxtermdepth;
 			limits.maxduration = NvMaxduration;
 			limits.maxatom = 65536;
+			/* D074: 0 = never off-process; no CLI option exists yet. */
+			limits.gcoffload = 0;
 			if(stats){
 				start = nsec();
 				brk0 = (uintptr)sbrk(0);

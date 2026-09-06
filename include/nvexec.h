@@ -107,6 +107,16 @@ struct NvExec {
 	uvlong gcneed;		/* additional charge; also conservative space allowance */
 	uvlong collections;
 	uvlong livewords;	/* live heap words at last successful collection */
+	/*
+	 * D074: set by the scheduler proc when it launches an off-process
+	 * collector for this exec's heap, before the rfork; cleared by the
+	 * scheduler proc's completion fold, the first time it observes
+	 * heap.owner idle again with this bit still set. The collector
+	 * child itself never reads or writes this field -- it is scheduler
+	 * bookkeeping, not something the collector's own restricted
+	 * argument list (NvExec*, the completion semaphore) can reach.
+	 */
+	int offlaunched;
 	char fault[128];
 };
 

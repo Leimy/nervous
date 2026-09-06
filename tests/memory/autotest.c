@@ -47,6 +47,9 @@ limits(NvLimits *l, uvlong maxheap, int stress)
 	l->maxtermdepth = NvMaxtermdepth;
 	l->maxduration = NvMaxduration;
 	l->maxatom = 65536;
+	/* D074: already memset to zero above, so this is redundant but kept
+	 * explicit for consistency with every other field. 0 = never off-process. */
+	l->gcoffload = 0;
 }
 
 static void

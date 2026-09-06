@@ -20,4 +20,9 @@ if(! test -x $testdir/autotest){
 	exit no-binary
 }
 $testdir/autotest || exit automatic-memory
+if(! test -x $testdir/offloadtest){
+	echo $0: build with '''mk tests''' first >[1=2]
+	exit no-binary
+}
+$testdir/offloadtest || exit off-process-memory
 exit ''

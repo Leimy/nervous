@@ -250,6 +250,21 @@ nvschedinit(NvScheduler *s, NvModule *m, NvLimits *limits, uvlong incarnation, u
 		return -1;
 	if(nvruntimeinit(&s->runtime, limits, incarnation, err, nerr) < 0)
 		return -1;
+	/*
+	 * D074 "Shared-memory placement": these must be malloc'd, not plain
+	 * NvScheduler fields -- see the field comments in nvsched.h. Both
+	 * start at 0: gcsem is an ordinary empty counting semaphore, gchold
+	 * starts released (no test hold engaged).
+	 */
+	s->gcsem = mallocz(sizeof(long), 1);
+	s->gchold = mallocz(sizeof(long), 1);
+	if(s->gcsem == nil || s->gchold == nil){
+		free(s->gcsem);
+		free(s->gchold);
+		nvruntimefree(&s->runtime);
+		snprint(err, nerr, "out of memory");
+		return -1;
+	}
 	s->module = m;
 	s->quantum = quantum;
 	/*
@@ -293,6 +308,7 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 	NvChunk *c;
 	NvFrag *f;
 	ulong i;
+	int collecting;
 
 	memset(m, 0, sizeof *m);
 	m->tablebytes = (uvlong)s->runtime.nalloc*sizeof(NvProcess);
@@ -305,6 +321,27 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 		e = p->exec;
 		if(e == nil)
 			continue;
+		/*
+		 * D074 "Diagnostics", coordinator-review fix: a collector proc
+		 * may be actively rewriting e->heap.cur/full/adopted right
+		 * now; skip this exec entirely rather than read it racily.
+		 * The owner check itself must be taken under the heap's Lock,
+		 * not read raw -- an unlocked read here has the same ordering
+		 * gap the dispatch path's gcfold exists to close (see gcfold's
+		 * comment): only a scheduler proc ever launches a NEW
+		 * collection, so no collector can start between this lock and
+		 * unlock, but observing NvHeapIdle without the lock does not
+		 * guarantee the collector's chunk rewrites are visible yet.
+		 * Once observed idle under this lock, the collector is
+		 * provably done and the chunk reads below are safe.
+		 */
+		lock(&e->heap.lock);
+		collecting = e->heap.owner == NvHeapCollecting;
+		unlock(&e->heap.lock);
+		if(collecting){
+			m->ncollecting++;
+			continue;
+		}
 		m->nexec++;
 		m->execbytes += sizeof *e;
 		m->stackbytes += (uvlong)e->nstack*sizeof(NvTerm);
@@ -329,17 +366,77 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 		m->adoptedbytes + m->mailboxbytes + m->reportbytes;
 }
 
+/* Forward declaration: gcfoldall is defined later (it calls gcfold,
+ * which needs collect()'s helpers in between), but gcdrain above it
+ * needs to call it. */
+static void gcfoldall(NvScheduler *);
+
+/*
+ * Coordinator-review fix: gcdrain previously decremented gcoutstanding
+ * once per successful tsemacquire, treating the semaphore's count as a
+ * 1:1 proxy for "one more completion has been folded". That invariant
+ * is false: gcfold (below) decrements gcoutstanding whenever it
+ * observes an exec's heap go idle, entirely independent of whether
+ * anyone ever consumed that exec's semrelease -- a completion folded
+ * via the ordinary dispatch path (finddispatchable) leaves its
+ * semrelease uncollected, a stale credit sitting in the semaphore's
+ * count. A later gcdrain tsemacquire can consume that STALE credit
+ * (semaphores are fungible integers, not tagged per-completion) and
+ * decrement gcoutstanding to 0 while a DIFFERENT, still-running
+ * collector proc is genuinely still rewriting memory nvschedfree is
+ * about to free -- a real use-after-free. The semaphore is now used
+ * purely as a wakeup/sleep primitive here, never as a completion
+ * counter: every iteration re-derives the true outstanding count via
+ * gcfoldall, which is the same locked-owner-check source of truth
+ * dispatch already relies on.
+ */
+enum {
+	NvGcdrainwaitms = 20,
+	NvGcdrainmax = 5000,	/* 5000 * 20ms = 100s worst case before giving up */
+};
+
+static void
+gcdrain(NvScheduler *s)
+{
+	uvlong tries;
+
+	tries = 0;
+	gcfoldall(s);
+	while(s->gcoutstanding > 0 && tries < NvGcdrainmax){
+		tsemacquire(s->gcsem, NvGcdrainwaitms);
+		gcfoldall(s);
+		tries++;
+	}
+	if(s->gcoutstanding > 0)
+		sysfatal("nervous: nvschedfree: %llud collector(s) never completed", s->gcoutstanding);
+}
+
 void
 nvschedfree(NvScheduler *s)
 {
 	if(s == nil)
 		return;
+	gcdrain(s);
 	nvruntimefree(&s->runtime);
 	if(s->lastexit != nil)
 		nvfragfree(s->lastexit);
 	if(s->rootvalue != nil)
 		nvfragfree(s->rootvalue);
+	free(s->gcsem);
+	free(s->gchold);
 	memset(s, 0, sizeof *s);
+}
+
+/*
+ * D074 "Test determinism": nil-safe test hook, a no-op unless a test has
+ * called it. See the declaration in nvsched.h for the full contract.
+ */
+void
+nvschedgchold(NvScheduler *s, int hold)
+{
+	if(s == nil || s->gchold == nil)
+		return;
+	*s->gchold = hold != 0;
 }
 
 static int
@@ -420,28 +517,322 @@ gcsample(NvScheduler *s, NvExec *e, int ok)
 		s->maxlivewords = e->livewords;
 }
 
-static void
-collect(NvScheduler *s, NvExec *e, int demand)
+/* D074 "gcoffload polarity": 0 means never off-process; a threshold N
+ * means a collection scanning at least N used+adopted words goes
+ * off-process. Every real execution heap holds at least its argument
+ * tuple (>=1 word) after nvexecinit, so a threshold of 1 already means
+ * "always off-process", the distinct force-all-off-process test/stress
+ * setting D068 originally spelled as gcoffload==0. */
+static int
+shouldoffload(NvScheduler *s, NvExec *e)
 {
-	uvlong start;
+	uvlong limit;
+
+	limit = s->runtime.limits.gcoffload;
+	return limit != 0 && e->heap.words >= limit;
+}
+
+/*
+ * D074 "Collector child argument scope": this function's only parameters
+ * are the one NvExec to collect and the malloc'd pointers it must touch
+ * to signal completion and honor the test hold point. It has no path to
+ * NvRuntime, NvProcess, or NvScheduler -- not because RFMEM fails to
+ * share that memory (it shares all of it), but so that the restriction
+ * is visible from the function signature alone, matching D068's
+ * ownership split as a source-level discipline in the collector's own
+ * code, not merely a runtime property. Runs in the forked collector proc
+ * only; never called directly by the scheduler proc.
+ */
+enum {
+	NvGcholdpollms = 5,
+};
+
+static void
+collectorchild(NvExec *e, long *gcsem, long *gchold)
+{
+	nvexecgc(e);
+	/* D074 "Test determinism": absent/no-op unless a test engaged it. */
+	if(gchold != nil)
+		while(*gchold != 0)
+			sleep(NvGcholdpollms);
+	lock(&e->heap.lock);
+	e->heap.owner = NvHeapIdle;
+	unlock(&e->heap.lock);
+	semrelease(gcsem, 1);
+	_exits(nil);
+}
+
+/*
+ * D074 "Locked completion fold" and "gcoffload polarity"/"Launch". Runs
+ * only in the scheduler proc. ok/demand collection bookkeeping shared by
+ * the ordinary inline path and by an off-process launch that failed
+ * (rfork) and fell back to collecting immediately in the parent.
+ */
+static void
+doinline(NvScheduler *s, NvExec *e, int demand)
+{
 	int ok;
 
-	start = s->profile ? uptime() : 0;
-	s->gcinputwords += e->heap.words;
 	if(demand){
-		s->gcdemand++;
 		nvexecgc(e);
 		ok = e->gcretry == 1;
-	}else{
-		s->gcidle++;
+	}else
 		ok = nvexeccollect(e, 0) == 0;
-	}
-	if(s->profile)
-		s->gcns += uptime()-start;
 	if(ok)
 		s->gcoutputwords += e->livewords;
 	gcsample(s, e, ok);
 }
+
+/*
+ * demand/idle collection dispatch. allowoffload lets a capped idle sweep
+ * (D074 "Idle-sweep concurrency is bounded") force an otherwise-eligible
+ * collection inline once its per-sweep fork budget is spent, without
+ * skipping it outright.
+ */
+static void
+collect(NvScheduler *s, NvExec *e, int demand, int allowoffload)
+{
+	uvlong start;
+	int pid;
+
+	s->gcinputwords += e->heap.words;
+	if(demand)
+		s->gcdemand++;
+	else
+		s->gcidle++;
+	if(allowoffload && shouldoffload(s, e)){
+		/*
+		 * D074 "Launch". Precondition (assert rather than merely
+		 * trust): the heap must be idle and the process runnable or
+		 * waiting, never running -- true here by construction, since
+		 * this is called only from the demand path right after
+		 * nvprocyield and from the idle sweep over Prwaiting slots.
+		 */
+		lock(&e->heap.lock);
+		e->heap.owner = NvHeapCollecting;
+		unlock(&e->heap.lock);
+		e->offlaunched = 1;
+		s->gcoutstanding++;
+		pid = rfork(RFPROC|RFMEM|RFNOWAIT);
+		if(pid < 0){
+			/* Launch failed: fall back to inline, counted separately
+			 * from a deliberate policy choice to collect inline. */
+			s->gcofffallback++;
+			s->gcoutstanding--;
+			e->offlaunched = 0;
+			lock(&e->heap.lock);
+			e->heap.owner = NvHeapIdle;
+			unlock(&e->heap.lock);
+			doinline(s, e, demand);
+			return;
+		}
+		if(pid == 0)
+			collectorchild(e, s->gcsem, s->gchold);	/* never returns */
+		/* Parent: completion is discovered lazily by gcfold. */
+		return;
+	}
+	start = s->profile ? uptime() : 0;
+	doinline(s, e, demand);
+	if(s->profile)
+		s->gcns += uptime()-start;
+}
+
+/*
+ * D074 "Locked completion fold": read owner and, only if idle with
+ * offlaunched still set, gcretry/livewords, all while holding the heap's
+ * Lock -- an unlocked read after observing owner==idle is not guaranteed
+ * to see the collector child's earlier writes on every architecture
+ * (this project builds with 7c, i.e. arm64). One lock acquisition per
+ * dispatch attempt of a slot with offlaunched set, not per dispatch in
+ * general, so it costs nothing on the common path. A no-op until the
+ * collector has actually published completion.
+ */
+/*
+ * Returns 1 if this exec is safe to dispatch (never launched off-process,
+ * or its collector has completed and been folded), 0 if a collector is
+ * still holding this heap. This is the ONLY read of e->heap.owner that
+ * may decide a dispatch outcome; callers must not re-read owner
+ * unlocked afterward and treat it as authoritative. An exec that was
+ * never launched off-process (offlaunched==0) is idle by the invariant
+ * that owner is set to NvHeapCollecting only in the same critical
+ * section that sets offlaunched=1 (see collect()), and reset to
+ * NvHeapIdle together with offlaunched=0 on every path that clears one
+ * (the rfork-failure fallback, and the fold below) -- so no lock is
+ * needed to know an unlaunched exec's heap is not collecting.
+ *
+ * The locked read here is what the rest of nvexecrun's retry logic
+ * (prepare()'s unlocked `retry = e->gcretry`) depends on for its memory
+ * ordering: once this function has synchronized via the lock and
+ * observed NvHeapIdle, the collector proc is provably dead (it never
+ * writes gcretry/livewords again after publishing idle), so every
+ * later unlocked read of those fields by this same scheduler proc, in
+ * its own program order after this point, is safe -- there is no
+ * remaining concurrent writer left to race against. Skipping this
+ * synchronized witness and instead re-reading owner unlocked (as an
+ * earlier draft of this function did) would let the interpreter's
+ * first observation of the collector's writes be an unlocked one,
+ * which is not ordering-safe on architectures without strong store
+ * ordering (7c/arm64).
+ */
+static int
+gcfold(NvScheduler *s, NvExec *e)
+{
+	int idle, ok;
+	uvlong live;
+	int retry;
+
+	if(!e->offlaunched)
+		return 1;
+	retry = 0;
+	live = 0;
+	lock(&e->heap.lock);
+	idle = e->heap.owner == NvHeapIdle;
+	if(idle){
+		retry = e->gcretry;
+		live = e->livewords;
+	}
+	unlock(&e->heap.lock);
+	if(!idle)
+		return 0;
+	e->offlaunched = 0;
+	s->gcoutstanding--;
+	ok = retry == 1;
+	if(!ok){
+		s->gcfailed++;
+		return 1;
+	}
+	s->gcoutputwords += live;
+	s->collections++;
+	s->lastlivewords = live;
+	if(live > s->maxlivewords)
+		s->maxlivewords = live;
+	return 1;
+}
+
+/*
+ * Coordinator-review fix: gcfold is otherwise reached only through
+ * finddispatchable, which examines only Prrunnable slots. A collection
+ * launched by the opportunistic idle sweep (D067) targets a Prwaiting
+ * process, which stays Prwaiting for as long as no message or deadline
+ * wakes it -- possibly forever, in a genuinely deadlocked program. Its
+ * completion would then never be folded, offlaunched would never clear,
+ * and gcoutstanding would never return to zero, permanently disabling
+ * the D046 idle/deadlock report (the "never falsely report idle"
+ * corollary would be trivially true only because idle could never be
+ * reported again at all). This walks every initialized slot -- runnable
+ * or waiting, dispatched or not -- and gives every offlaunched exec a
+ * chance to fold, restoring gcoutstanding to an accurate count
+ * regardless of run-queue membership.
+ */
+static void
+gcfoldall(NvScheduler *s)
+{
+	NvRuntime *r;
+	NvExec *e;
+	ulong i;
+
+	r = &s->runtime;
+	for(i = 0; i < r->nslot; i++){
+		e = r->process[i].exec;
+		if(e != nil && e->offlaunched)
+			gcfold(s, e);
+	}
+}
+
+/*
+ * D074 "Completion"/"Never spin". Finds the head-most runnable slot
+ * whose heap is not currently under off-process collection, folding any
+ * just-completed off-process collection's stats along the way and
+ * requeuing a still-collecting slot to the tail instead of dispatching
+ * or blocking on it. Bounded by the run queue's own length, so a queue
+ * that is entirely collecting is discovered in exactly nrunnable tries,
+ * never spun on. Returns 0 if nothing is currently dispatchable (queue
+ * empty, or every runnable slot is collecting).
+ */
+static int
+finddispatchable(NvScheduler *s, ulong *outslot)
+{
+	NvRuntime *r;
+	NvProcess *p;
+	NvExec *e;
+	ulong slot, tries, bound;
+
+	r = &s->runtime;
+	bound = r->nrunnable;
+	for(tries = 0; tries < bound; tries++){
+		if(!nvprocrunhead(r, &slot))
+			return 0;
+		p = &r->process[slot];
+		e = p->exec;
+		if(e == nil){
+			/* Let the caller's existing nil-exec error check fire. */
+			*outslot = slot;
+			return 1;
+		}
+		/*
+		 * gcfold's own locked determination is authoritative; do not
+		 * re-read e->heap.owner unlocked afterward (see gcfold's
+		 * comment for why that would reopen the ordering gap this
+		 * function exists to close).
+		 */
+		if(!gcfold(s, e)){
+			nvprocrequeue(r, slot);
+			continue;
+		}
+		*outslot = slot;
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * D074 "Never spin": convert an armed deadline to a bounded millisecond
+ * wait for tsemacquire, using the installed clock's own now() (whose
+ * contract, D050, is always nanoseconds, real or simulated) rather than
+ * a raw OS clock -- consistent whether the installed clock is production
+ * or a deterministic test clock. Clamped so this is always a bounded
+ * wait, never "forever": at least 1ms, at most a generous ceiling so a
+ * far-future deadline does not starve a check for collector progress.
+ */
+enum {
+	NvGcwaitmaxms = 60000,
+};
+
+static ulong
+deadlinems(NvScheduler *s, uvlong earliest)
+{
+	uvlong now, diff, ms;
+
+	now = s->clock.now(s->clock.aux);
+	if(earliest <= now)
+		return 1;
+	diff = earliest-now;
+	ms = (diff+999999)/1000000;
+	if(ms < 1)
+		ms = 1;
+	if(ms > NvGcwaitmaxms)
+		ms = NvGcwaitmaxms;
+	return (ulong)ms;
+}
+
+/* D074: bound on off-process collectors launched by one idle-sweep pass
+ * (a demand-path collection never bursts, since only one process yields
+ * NvCollect per dispatch). Beyond the cap, a qualifying waiter is still
+ * collected this pass, just inline rather than forked, so the sweep
+ * always makes progress -- the cap bounds worst-case Plan 9 process-table
+ * pressure, not how much garbage gets reclaimed. Implementer's choice
+ * (flagged in the handoff): a compile-time constant rather than a new
+ * NvLimits field. */
+enum {
+	NvGcsweepcap = 8,
+};
+
+/* D074 "Never spin": bounded wait granularity when nothing armed a
+ * deadline but a collector is outstanding (or a runnable slot is
+ * blocked on one); never "forever". */
+enum {
+	NvGcwaitms = 20,
+};
 
 int
 nvschedstep(NvScheduler *s, char *err, int nerr)
@@ -462,15 +853,18 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		return NvSchedError;
 	}
 	/*
-	 * D059: dispatch is the head of the runtime's FIFO run queue, O(1) no
-	 * matter how many processes are waiting. Order is "runnable longest
-	 * first": spawn, quantum yield, and every wakeup append at the tail.
-	 * The slot scans below run only when nothing is runnable at all.
+	 * D059/D074: dispatch is the head of the runtime's FIFO run queue,
+	 * discovered in O(runnable) even under off-process collection
+	 * (finddispatchable requeues a collecting slot to the tail and folds
+	 * any just-completed collection's stats along the way, but never
+	 * dispatches or blocks on one). The scans below run only when
+	 * nothing is currently dispatchable: the queue is empty, or every
+	 * runnable slot is collecting.
 	 */
-	if(!nvprocrunhead(r, &slot)){
-		uvlong earliest;
-		ulong nwake;
-		int havedeadline;
+	if(!finddispatchable(s, &slot)){
+		uvlong earliest, now;
+		ulong nwake, sweeplaunched;
+		int havedeadline, allow;
 
 		for(i = 0; i < r->nslot; i++)
 			if(r->process[i].state == Prrunning){
@@ -478,13 +872,41 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 				return NvSchedError;
 			}
 		/* Reclaim waiting-process garbage without touching mailbox state.
-		 * The live watermark prevents recollecting an unchanged live set. */
+		 * The live watermark prevents recollecting an unchanged live set.
+		 * D074: cap how many of these launch off-process in one sweep;
+		 * beyond the cap, still collect, just inline.
+		 *
+		 * Coordinator-review fix: eligibility is gated on
+		 * `!e->offlaunched`, not an unlocked `e->heap.owner !=
+		 * NvHeapCollecting` read (the earlier draft of this loop).
+		 * offlaunched is scheduler-proc-only state -- only this proc
+		 * ever sets or clears it (collect() sets it, gcfold clears it
+		 * after a locked, synchronized check) -- so it needs no lock
+		 * and is authoritative in a way a raw read of collector-written
+		 * `owner` is not. This matters because `owner` alone can read
+		 * NvHeapIdle for an exec whose completion this scheduler has
+		 * not yet folded (the collector already published idle, but
+		 * gcfoldall has not run since): launching a SECOND collector
+		 * for that exec before its first completion is folded would
+		 * double-increment gcoutstanding, silently discard the first
+		 * collection's gcretry/livewords, and -- far worse -- could run
+		 * two collector procs concurrently against the same heap if the
+		 * timing were ever unlucky enough. Gating on offlaunched instead
+		 * makes "a launch/fold cycle is already in flight for this exec"
+		 * the single authoritative reason to skip, matching gcfold's own
+		 * treatment of the same flag. */
+		sweeplaunched = 0;
 		for(i = 0; i < r->nslot; i++){
 			p = &r->process[i];
 			e = p->exec;
 			if(p->state == Prwaiting && e != nil && e->heap.cur != nil &&
-			   e->heap.words > e->livewords && e->heap.words > e->heap.cur->cap/2)
-				collect(s, e, 0);
+			   !e->offlaunched &&
+			   e->heap.words > e->livewords && e->heap.words > e->heap.cur->cap/2){
+				allow = sweeplaunched < NvGcsweepcap;
+				if(allow && shouldoffload(s, e))
+					sweeplaunched++;
+				collect(s, e, 0, allow);
+			}
 		}
 		/*
 		 * D050: idle with an armed deadline is progress, not deadlock.
@@ -504,29 +926,105 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 				havedeadline = 1;
 			}
 		}
-		if(!havedeadline)
-			return NvSchedIdle;
-		if(s->clock.now == nil || s->clock.wait == nil){
-			snprint(err, nerr, "scheduler has an armed deadline but no clock installed");
-			return NvSchedError;
-		}
-		s->clock.wait(s->clock.aux, earliest);
-		nwake = 0;
-		for(i = 0; i < r->nslot; i++){
-			p = &r->process[i];
-			if(p->state == Prwaiting && p->hasdeadline && p->deadline <= earliest){
-				if(nvprocwake(r, i) < 0){
-					snprint(err, nerr, "deadline wake of a non-waiting process");
-					return NvSchedError;
-				}
-				nwake++;
+		/*
+		 * Coordinator-review fix: a collection launched by the sweep
+		 * above (or an earlier idle pass) may target a Prwaiting
+		 * process that never reaches finddispatchable on its own --
+		 * that path is the ONLY other place gcfold runs, and it only
+		 * ever sees Prrunnable slots. Fold any such already-completed
+		 * collection now, so the gcoutstanding check immediately below
+		 * reflects reality instead of a count that can only ever have
+		 * been incremented, never decremented, for a waiting process
+		 * that stays waiting (see gcfoldall's comment).
+		 */
+		gcfoldall(s);
+		if(s->gcoutstanding == 0){
+			/*
+			 * D074 corollary: with no collector a factor, behave
+			 * exactly as before off-process collection existed.
+			 */
+			if(!havedeadline)
+				return NvSchedIdle;
+			if(s->clock.now == nil || s->clock.wait == nil){
+				snprint(err, nerr, "scheduler has an armed deadline but no clock installed");
+				return NvSchedError;
 			}
+			s->clock.wait(s->clock.aux, earliest);
+			nwake = 0;
+			for(i = 0; i < r->nslot; i++){
+				p = &r->process[i];
+				if(p->state == Prwaiting && p->hasdeadline && p->deadline <= earliest){
+					if(nvprocwake(r, i) < 0){
+						snprint(err, nerr, "deadline wake of a non-waiting process");
+						return NvSchedError;
+					}
+					nwake++;
+				}
+			}
+			if(nwake == 0){
+				snprint(err, nerr, "clock did not advance past the earliest deadline");
+				return NvSchedError;
+			}
+			s->timerwakes += nwake;
+			return NvSchedProgress;
 		}
-		if(nwake == 0){
-			snprint(err, nerr, "clock did not advance past the earliest deadline");
-			return NvSchedError;
-		}
-		s->timerwakes += nwake;
+		/*
+		 * Coordinator-review fix: drain any stale completion credits
+		 * before blocking. gcfold, when reached through the ordinary
+		 * dispatch path (finddispatchable), decrements gcoutstanding
+		 * without ever consuming that exec's semrelease -- the credit
+		 * is left sitting in gcsem's count. Left undrained, the
+		 * tsemacquire below would return immediately on that stale
+		 * credit on every single idle pass for the rest of this
+		 * scheduler's life, turning this "never spin" wait into
+		 * exactly the busy loop it exists to prevent (gcfoldall still
+		 * keeps gcoutstanding correct regardless, so this was never a
+		 * correctness bug, only a performance one -- but an unbounded
+		 * one). Draining and re-folding here also closes the narrow
+		 * lost-wakeup window between the gcfoldall above and this
+		 * point: a completion landing in that window is caught by the
+		 * immediate recheck below instead of costing a full wait
+		 * period.
+		 */
+		while(tsemacquire(s->gcsem, 0) > 0)
+			;
+		gcfoldall(s);
+		if(s->gcoutstanding == 0)
+			return NvSchedProgress;
+		/*
+		 * D074 "Never spin"/corollary: a collector is outstanding (which
+		 * is also true whenever a runnable slot is blocked collecting).
+		 * NvSchedIdle/deadlock may never be reported here. If the
+		 * installed clock already shows the earliest deadline expired,
+		 * wake it directly rather than waiting behind an unrelated
+		 * collector; otherwise block on the completion semaphore,
+		 * bounded by the deadline (converted to milliseconds) if one is
+		 * armed, or by NvGcwaitms if not. tsemacquire returning 0
+		 * (timeout) or -1 (interrupted) just costs another recheck on
+		 * the caller's next call, never a lost wakeup, because
+		 * semrelease's count persists.
+		 */
+		if(havedeadline && s->clock.now != nil){
+			now = s->clock.now(s->clock.aux);
+			if(now >= earliest){
+				nwake = 0;
+				for(i = 0; i < r->nslot; i++){
+					p = &r->process[i];
+					if(p->state == Prwaiting && p->hasdeadline && p->deadline <= now){
+						if(nvprocwake(r, i) < 0){
+							snprint(err, nerr, "deadline wake of a non-waiting process");
+							return NvSchedError;
+						}
+						nwake++;
+					}
+				}
+				if(nwake != 0)
+					s->timerwakes += nwake;
+				return NvSchedProgress;
+			}
+			tsemacquire(s->gcsem, deadlinems(s, earliest));
+		}else
+			tsemacquire(s->gcsem, NvGcwaitms);
 		return NvSchedProgress;
 	}
 	p = &r->process[slot];
@@ -554,8 +1052,9 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	if(state == NvCollect){
 		if(p->state != Prrunning || nvprocyield(r, pid, err, nerr) < 0)
 			return NvSchedError;
-		/* Inline only: stopped owner, enqueued once, no host callback active. */
-		collect(s, e, 1);
+		/* D074: stopped owner, enqueued once, no host callback active;
+		 * decides inline vs. off-process from gcoffload. */
+		collect(s, e, 1, 1);
 		return NvSchedProgress;
 	}
 	if(state == NvYield){

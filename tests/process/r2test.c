@@ -118,6 +118,7 @@ h1regression(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	memset(&tc, 0, sizeof tc);
 	tc.now = 1000;
@@ -194,6 +195,7 @@ crossreceiveleak(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	memset(&tc, 0, sizeof tc);
 	tc.now = 2000;
@@ -275,6 +277,7 @@ midscanappend(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	arg = nvtuple(&hostheap, nil, 0);
 	check(nvtermkind(arg) == Vtuple, "midscan: argument tuple");
@@ -353,6 +356,7 @@ sendthenexit(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	arg = nvtuple(&hostheap, nil, 0);
 	check(nvtermkind(arg) == Vtuple, "sendexit: empty argument tuple");
@@ -440,6 +444,7 @@ belowcursorfairness(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	arg = nvtuple(&hostheap, nil, 0);
 	check(nvtermkind(arg) == Vtuple, "belowcursor: argument tuple");
@@ -516,6 +521,7 @@ tinylimits(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 	check(nvruntimeinit(&r, &limits, 50, err, sizeof err) == 0, err);
 	check(nvprocspawn(&r, &pid1, err, sizeof err) == 0, "tiny: spawn 1 of 2");
 	check(nvprocspawn(&r, &pid2, err, sizeof err) == 0, "tiny: spawn 2 of 2 (at the limit)");
@@ -547,6 +553,7 @@ tinylimits(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 	check(nvruntimeinit(&r, &limits, 51, err, sizeof err) == 0, err);
 	check(nvprocspawn(&r, &pid1, err, sizeof err) == 0, "tiny: spawn mailbox-boundary process");
 	v = nvint(nil, 7);
@@ -614,6 +621,7 @@ tinylimits(void)
 		lim2.gcstress = 0;
 		lim2.maxduration = NvMaxduration;
 		lim2.maxatom = 65536;
+		lim2.gcoffload = 0;
 		check(nvruntimeinit(&r2, &lim2, 52, err2, sizeof err2) == 0, err2);
 		check(nvprocspawn(&r2, &pid, err2, sizeof err2) == 0, "tiny: spawn maxtermdepth=2 process");
 		check(nvprocsend(&r2, pid, depth2, err2, sizeof err2) == 1,
@@ -662,6 +670,7 @@ receiveguard(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	arg = nvtuple(&hostheap, nil, 0);
 	check(nvtermkind(arg) == Vtuple, "recvguard: argument tuple");
@@ -754,6 +763,7 @@ guardboundaries(void)
 	limits.maxheap = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 	quantum[0] = 1;
 	quantum[1] = 1000;
 	arg = nvtuple(&hostheap, nil, 0);

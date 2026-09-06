@@ -483,3 +483,110 @@ For the common small collection, up to eight frame-root views and 64 rollback so
 Performance diagnostics are explicitly separated from scheduling policy. Requested-storage snapshots traverse initialized slots, chunks and fragments only when a host asks between dispatches with exclusive access. They distinguish retained capacity from used words and exclude allocator/module/atom storage and transient collection scratch. Optional real-monotonic timing is off by default; it measures execution (including host callbacks), collection and spawn, with nested spawn time documented as overlapping execution. It does not use or alter the injected deadline clock or reduction accounting. No snapshot scan or profiling clock read is added to the default dispatch path.
 
 The T04p phase benchmark is a diagnostic control, not a replacement for the original whole-program benchmark. It separates host-driven waiter setup, blocking, ping-pong traffic and draining, and can pre-size only the two busy heaps via explicit setup collection requests. This experiments with frequency/space tradeoffs without selecting a new default. Source inspection establishes the eliminated quadratic append costs and allocator calls; runtime effects, the remaining waiter high-water gap, and any offload threshold still require user-run measurements.
+
+## D074 - Off-process collection: ownership protocol, scheduler wait, and teardown
+
+Settles the concrete mechanism D068 named but did not specify. Every D068 invariant stands unchanged: heap, frame stack, and adopted-fragment list are touched by exactly one party at a time; the mailbox remains scheduler/sender territory a collector never reads; `nvheapcollect` and `nvexecgc`/`nvexeccollect` are expected to need no change -- they are already scheduler- and exec-agnostic pure functions operating only on a stopped process's own heap and stack, which is exactly what makes them callable from a forked proc.
+
+### Owner state
+
+`NvHeap` (`include/nvvm.h`) gains an owner field with three values, matching D068 exactly: `NvHeapIdle`, `NvHeapRunning`, `NvHeapCollecting`, plus a `Lock` (spinlock, not `QLock`: the critical section is one word, and a queueing lock is the wrong tool for it, matching D070's "locks in shared memory") guarding transitions into and out of `NvHeapCollecting`. Reads that only decide dispatch order (skip a collecting heap vs. dispatch it) do not need the lock; only the read-modify-write transitions do.
+
+In single-scheduler milestone 8, `NvHeapRunning` is set only for the duration of `nvexecrun` on the currently dispatched process. It is a defensive invariant today (a `running` heap can never legally be handed to a collector) rather than a load-bearing dispatch state, because dispatch already implies `idle -> running -> idle` and D067 already forbids collecting a running process. It becomes load-bearing once milestone 10 has more than one interpreter proc.
+
+### Launch (performed by the scheduler proc only)
+
+Both trigger sites in `nvschedstep` -- the demand path (the `NvCollect` outcome) and the opportunistic idle sweep (D067) -- choose inline or off-process from `NvLimits.gcoffload` (new field, word units matching the existing `e->heap.words`+adopted charge): below the threshold, call `nvexecgc` inline exactly as today; at or above it, launch a collector:
+
+1. Precondition, assert rather than merely trust: heap owner is `NvHeapIdle` and the process is `Prrunnable` or `Prwaiting`, never `Prrunning`.
+2. Under the heap's Lock, set owner to `NvHeapCollecting`.
+3. Record `gcinputwords` and `gcdemand`/`gcidle` exactly as the inline path does today; these are known before collection runs and need not wait for completion.
+4. `rfork(RFPROC|RFMEM|RFNOWAIT)`. The child calls `nvexecgc(e)` unchanged, takes the heap's Lock, sets owner to `NvHeapIdle`, releases the Lock, `semrelease`s the scheduler's completion semaphore by 1, and `_exits(0)` (not `exits`, so no runtime atexit handler runs twice). The child touches only this `NvExec`'s heap, frame stack, and the bookkeeping fields `nvexecgc` already writes (`gcpending`, `gcretry`, `livewords`, `collections`); it never touches `NvScheduler`, the mailbox, or any other process's state, matching D068's ownership split exactly.
+5. `s->gcoutstanding` (new counter) is incremented at launch and decremented at the completion fold below; it is the only new cross-cutting state a collector's existence adds to the scheduler struct.
+6. `rfork` failure is not a condition to hide: fall back to an inline `nvexecgc(e)` immediately in the parent, and count it separately (`s->gcofffallback`, new counter) from ordinary inline collections, so a measurement run can see how often launch actually failed without conflating it with a deliberate policy choice to collect inline.
+
+### Completion (folded lazily, scheduler proc only)
+
+A collector signals only that some collection finished, via the semaphore count; it never says which process. The scheduler discovers completion by re-examining a slot, in exactly one place: whenever it is about to dispatch a `Prrunnable` slot whose heap owner is `NvHeapCollecting`, it does not dispatch. It requeues that slot to the run-queue tail (preserving the D059 invariant that the queue holds exactly the runnable slots) and tries the next slot instead, never blocking as long as some other runnable slot's heap is not collecting. The first time a slot's heap owner reads `NvHeapIdle` while `NvExec.offlaunched` (new bit, set at launch, matching the existing `gcpending` style in `nvexec.h`) is still set, the scheduler folds `e->gcretry`/`e->livewords` into `s->collections`/`s->gcoutputwords`/`s->gcfailed`/`s->lastlivewords`/`s->maxlivewords` -- the same accounting `gcsample()` already performs for the inline path -- clears `offlaunched`, and decrements `gcoutstanding`. Nothing else changes: `nvexecrun`'s existing retry logic (`prepare()`'s `retry = e->gcretry`) already resumes the pending instruction whether the collection that resolved it ran inline or off-process, because both paths converge on the same `NvExec` fields (D072). No `exec.c` change should be needed for this.
+
+### Never spin, never falsely report idle or deadlock
+
+Requeuing a collecting slot must not become a tight loop when every runnable slot is collecting. The scheduler must treat "no runnable slot is currently dispatchable" as a condition distinct from "no runnable slot exists" (today's only test, `!nvprocrunhead`). When every runnable slot is collecting, or the runnable queue is empty but `gcoutstanding > 0`, the scheduler computes the earliest armed deadline exactly as today and blocks in `tsemacquire` on the completion semaphore, bounded by that deadline if one exists, or by a bounded repeated wait if none does (`tsemacquire` takes a millisecond count, not "forever"; looping on a spurious return costs only a re-check, never a lost wakeup, because `semrelease`'s count persists exactly as D011 already relies on). This is exactly why the completion signal reuses `semrelease`'s counting behavior rather than `rendezvous`: a wakeup issued before the sleeper commits to sleeping must never be lost.
+
+Corollary, which must be true and should be asserted rather than merely assumed: `NvSchedIdle` (D046's deadlock report) is returned only when `nrunnable == 0`, no deadline is armed, *and* `gcoutstanding == 0`. A background collection in flight for a blocked receiver is progress, not deadlock, and must never surface as one.
+
+### Idle-sweep concurrency is bounded
+
+D067's opportunistic idle sweep can now examine many waiting processes in one pass and choose off-process for several of them; unlike the demand path this can fork a burst of collectors in a single scheduler step. Cap the number of collectors launched in one sweep (a new small constant or `NvLimits` field, implementer's choice, recorded in the handoff) rather than forking one per qualifying waiter unconditionally. The cap exists to bound worst-case Plan 9 process-table pressure, not because concurrent collection of unrelated heaps is unsafe -- it is exactly the case D068 exists for.
+
+### Diagnostics
+
+`nvschedmemory` (D073) must not read `e->heap.cur`/`full`/`adopted` while a collector may be rewriting them. It skips any process whose heap owner is `NvHeapCollecting`, reports how many were skipped (`NvMemstats.ncollecting`, new field), and remains what D073 already calls it: an explicit, low-frequency diagnostic snapshot -- now honestly partial during heavy offload, rather than racing.
+
+### Teardown
+
+A process cannot exit while its own heap is collecting: dispatch already requires `NvHeapIdle` (above), and `NvDone`/`NvFault`/`NvExit` are only ever produced by `nvexecrun` running the currently dispatched process, which by construction started from an idle heap and touched nothing else in between. `nvprocexit` therefore needs no new synchronization. `nvschedfree` does: it must drain `s->gcoutstanding` to zero -- blocking on the completion semaphore and discarding or harmlessly performing each wakeup's stats fold, either is fine since the runtime is being freed either way -- before freeing any process, heap, or stack memory a collector might still hold a pointer into.
+
+### Test determinism
+
+Timing-dependent behavior -- send during collection, a deadline firing during collection, teardown with a collector in flight, every runnable process collecting at once -- must be testable without relying on real scheduling races. The implementation must expose a deterministic hold point a test can use to park a launched collector before it publishes completion (before it sets owner idle / releases the semaphore) until the test explicitly releases it; absent or a no-op in production. The exact shape (a callback, a semaphore address installed on the scheduler, a counted gate) is the implementer's choice, but it is a new field on `NvScheduler` and must be reported in the handoff as a semantic/interface decision per `COORDINATION.md`, since it is the kind of addition normally reserved to the coordinator.
+
+### Shared-memory placement (load-bearing; verify before trusting any test)
+
+`rfork(RFPROC|RFMEM)` shares only the data and bss segments between parent and child; per `fork(2)`, "other segment types, in particular stack segments, will be unaffected." `NvScheduler` is caller-allocated and is a plain stack local in every existing call site (`cmd/nervous/main.c`'s `main`, and every test's `main`). Any word a collector child writes to, or `semrelease`s, must therefore live in malloc'd (or static) storage, never as a field embedded directly in a caller's `NvScheduler` -- if it is, the child's writes land in its own private copy of the parent's stack and the parent never observes them, while `tsemacquire`'s timeout still eventually expires, so a test can pass by timeout polling with the wakeup mechanism silently dead the whole time. Concretely: the completion semaphore is a `long *gcsem`, allocated with `mallocz(sizeof(long), 1)` in `nvschedinit` and freed in `nvschedfree`; the test hold point, if it needs a word the collector child reads or writes, is allocated the same way. `NvHeap.owner`/`Lock` need no such care because `NvHeap` lives embedded in `NvExec`, and every `NvExec` is already `mallocz`'d (`lib/sched.c`'s `spawn`); `e` is the only pointer the collector child may receive (see "Collector child argument scope" below).
+
+### `gcoffload` default and every existing call site (must be fixed together)
+
+`gcoffload == 0` means *never* off-process, matching this codebase's existing convention that a zero-valued limit is always the safe/inert default (`maxheap` 0 is unlimited, `gcstress` 0 is off). This supersedes D068's original "0 forces every collection off-process" spelling; record the force-all-off-process test setting as a distinct value instead (a threshold of 1 word already achieves it, since every real collection scans at least one word, or a separate boolean field if that reads better -- implementer's choice, report which).
+
+This polarity choice does not by itself make existing code safe: `NvLimits` is a plain struct, and every one of the following call sites builds one by individual field assignment *without* zeroing the struct first, so an added field they do not explicitly set is indeterminate stack garbage, not 0, regardless of which polarity was chosen. Every one of these must gain an explicit `.gcoffload = 0;` (or equivalent) alongside its other field assignments, as part of this task's write set (not optional, not deferred to T04d):
+
+- `cmd/nervous/main.c` (one `NvLimits limits;` construction)
+- `tests/process/ptest.c` (`mailboxlimits`, `timeouts`, and `main` -- three constructions)
+- `tests/process/schedtest.c` (one construction)
+- `tests/process/iotest.c` (one construction)
+- `tests/process/r2test.c` (`h1regression`, `crossreceiveleak`, `midscanappend`, `sendthenexit`, `belowcursorfairness`, `tinylimits` (three separate constructions inside it), `receiveguard`, `guardboundaries` -- roughly nine constructions)
+
+`tests/memory/autotest.c`'s `limits()` helper and `bench/perftest.c` already `memset` the struct to zero before assigning fields, so they are safe as-is regardless of polarity, but add the explicit line there too for consistency with every other field. `tests/memory/gctest.c` and `tests/process/exectest.c` construct no `NvLimits` at all and need no change. This list was produced by reading every file in `tests/`, `bench/`, and `cmd/`; grep the tree for `NvLimits` before starting to confirm nothing else constructs one, and report the final confirmed list in the handoff.
+
+Because this change touches files outside `lib/` and `include/`, the exclusive write set for this task (see `STATUS.md`'s M08-T04c section) includes exactly the files listed above, for this purpose only -- do not make unrelated edits to them.
+
+### Locked completion fold (arm64/7c ordering)
+
+Dispatch-order reads of heap owner that only decide "skip this collecting slot" do not need the Lock -- a stale `Collecting` costs only a wasted requeue. But the completion fold reads `e->gcretry`/`e->livewords`, words the collector child wrote before its `unlock`, and `unlock` only guarantees release ordering, not acquire ordering, for a reader that never takes the lock. On an architecture without strong store ordering (this project builds with `7c`, i.e. arm64), an unlocked read of those fields after observing `owner == NvHeapIdle` is not guaranteed to see the child's writes. The fold must take the heap's Lock (lock, read/consume `owner` and, if idle with `offlaunched` set, the fields, unlock) before trusting `e->gcretry`/`e->livewords`. This is one lock acquisition per dispatch attempt of a slot with `offlaunched` set, not per dispatch in general, so it costs nothing on the common path.
+
+### Wait and drain robustness
+
+`tsemacquire` returns -1 on interrupt (a note delivered to the note group), which the collector-wait loop must treat as "recheck and retry," not as a hard scheduler error. `nvschedfree`'s drain of `gcoutstanding` to zero must be a bounded loop (a generous but finite number of wait iterations) that fails loudly -- an assertion or a reported error, implementer's choice, but not silent and not an unbounded `semacquire` -- if outstanding collectors never reach zero (for example, a collector proc that was killed), rather than hanging teardown forever on a single lost wakeup.
+
+### Collector child argument scope
+
+The collector child launched in step 4 of "Launch" above must receive only the one `NvExec *e` it is to collect (and the malloc'd `gcsem` pointer needed to signal completion). It must not receive, retain, or be able to reach `NvRuntime *`, `NvProcess *`, or `NvScheduler *` -- not because Plan 9 fails to share the memory (`RFMEM` shares all of it), but because D068's ownership split is a source-level discipline the collector's own code must visibly respect: if the collector function's arguments are just `e` and `gcsem`, there is no path by which it could accidentally touch the mailbox, the process table, or scheduler stats, and a reviewer can see that from the function signature alone.
+
+### Folding a waiting process's completion (amendment; found in coordinator review, M08-T04c)
+
+The completion fold above is reached only through the dispatch path, which examines only `Prrunnable` slots. A collection launched by the opportunistic idle sweep (D067) targets a `Prwaiting` process, which by definition is not in the run queue and may never become runnable again on its own -- exactly the case of a genuinely deadlocked program. Left unaddressed, such a process's completion is never folded: `offlaunched` never clears, `gcoutstanding` never returns to zero, and the "never falsely report idle" corollary above degenerates into "never report idle again at all", permanently disabling D046 deadlock detection from the first such completion onward.
+
+The fix is a second fold path, `gcfoldall`, that walks every initialized process slot -- runnable or waiting, dispatched or not -- and gives every `offlaunched` exec a chance to fold via the same locked check `gcfold` already performs. It is called once per idle-branch pass, before the `gcoutstanding == 0` decision, and at the start of every `nvschedfree` teardown iteration (see below): both call sites need an accurate count precisely at the moment they are about to act on it, whether that action is reporting idle or deciding whether teardown may proceed.
+
+### Teardown must not treat the semaphore as a completion counter (amendment; found in coordinator review)
+
+An earlier draft of "Wait and drain robustness" above decremented `gcoutstanding` once per successful `tsemacquire`, treating the semaphore's count as a 1:1 proxy for "one more completion is now foldable". That invariant does not hold: `gcfold` (via the ordinary dispatch path, or via `gcfoldall`) decrements `gcoutstanding` whenever it observes an exec go idle, entirely independent of whether anyone has consumed that exec's `semrelease`. A completion folded through ordinary dispatch therefore leaves a stale, uncollected credit sitting in the semaphore's count. Semaphores are fungible integers, not tagged per-completion tokens, so a later `tsemacquire` in `gcdrain` can consume that stale credit and decrement `gcoutstanding` to zero while a *different*, genuinely still-running collector proc is still rewriting memory `nvschedfree` is about to free -- a real use-after-free, not a theoretical one.
+
+The semaphore must be used purely as a sleep/wakeup primitive in this drain, never as a count of outstanding work: `gcdrain` calls `gcfoldall` to (re-)establish the true `gcoutstanding` value on every iteration, both before the wait loop starts and after every `tsemacquire` (whether it timed out, was interrupted, or succeeded on a stale or fresh credit makes no difference, since `gcfoldall` re-derives the truth from the locked owner check regardless).
+
+### The idle sweep must gate on `offlaunched`, not a raw owner read (amendment; found in coordinator review)
+
+D067's opportunistic sweep decides whether a waiting process is eligible for a *new* collection launch. An earlier draft gated this on `e->heap.owner != NvHeapCollecting`, read without the heap's Lock. Unlike the diagnostic and dispatch-decision cases above, this one is not merely an ordering hazard: if the collector has already published `NvHeapIdle` for an exec whose completion this scheduler has not yet folded (because `gcfoldall` has not run since), the sweep would see "not collecting" and could launch a *second* collector for the same exec while its first completion is still unfolded -- double-incrementing `gcoutstanding`, silently discarding the first collection's `gcretry`/`livewords`, and risking two collector procs genuinely running against the same heap concurrently if timing were ever unlucky enough.
+
+The correct gate is `!e->offlaunched`. Unlike `owner`, `offlaunched` is touched only by the scheduler proc itself (set by `collect()`, cleared only by `gcfold` after its own locked, synchronized check), so it needs no lock and is authoritative: it is true exactly when a launch/fold cycle is already in flight for that exec, which is precisely the condition under which no new launch may be considered, independent of what `owner` currently reads.
+
+### The wait must drain stale semaphore credits before blocking (amendment; found in coordinator review)
+
+Because `gcfold`'s ordinary dispatch-path fold decrements `gcoutstanding` without ever consuming the corresponding exec's `semrelease` (see the previous two amendments), every completion folded that way leaves an uncollected credit sitting in `gcsem`'s count. Left undrained, the bounded `tsemacquire` wait in the "collector outstanding" branch would return immediately on a stale credit on every subsequent idle pass for the rest of the scheduler's life -- not a correctness bug (`gcfoldall` still keeps `gcoutstanding` accurate regardless of what the semaphore reads), but it turns the "never spin" wait into exactly the busy loop this design exists to prevent.
+
+Before the bounded wait, drain the semaphore to zero with a non-blocking `tsemacquire(gcsem, 0)` loop, then call `gcfoldall` again and recheck `gcoutstanding == 0`. This recheck is also the lost-wakeup guard for a completion landing in the narrow window between the earlier `gcfoldall` (used for the `gcoutstanding == 0` idle/deadlock decision) and this point: it is caught here and reported as progress immediately, rather than costing a full wait period before the next call notices it.
+
+### What this does not settle
+
+The actual `gcoffload` default *value* (T04d, measurement-driven); whether a CLI flag exposes it before T04d (optional, implementer's call, not required for this task's acceptance); work stealing, migration, or any milestone-10 concern (D070 already separates these). This decision is scoped to one scheduler proc launching and reaping collector procs for its own processes' heaps.

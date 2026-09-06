@@ -122,6 +122,24 @@ nvprocwake(NvRuntime *r, ulong slot)
 	return 0;
 }
 
+/*
+ * D074/D059: move an already-Prrunnable slot to the run-queue tail. Used
+ * by the scheduler to skip a runnable slot whose heap is under
+ * off-process collection without dispatching it or disturbing the
+ * FIFO order of every other runnable slot.
+ */
+int
+nvprocrequeue(NvRuntime *r, ulong slot)
+{
+	if(slot >= r->nslot)
+		return -1;
+	if(r->process[slot].state != Prrunnable)
+		return -1;
+	runrm(r, slot);
+	runenq(r, slot);
+	return 0;
+}
+
 static void
 execfree(NvProcess *p)
 {

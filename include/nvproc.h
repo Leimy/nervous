@@ -38,6 +38,25 @@ struct NvLimits {
 	 * non-zero like the other limits above.
 	 */
 	ulong maxatom;
+	/*
+	 * D074: word threshold (same units as e->heap.words, used plus
+	 * adopted) at or above which a collection is launched off-process
+	 * instead of run inline. Polarity is the opposite of gcstress and
+	 * easy to get backwards: 0 means NEVER off-process, matching this
+	 * codebase's convention that a zero-valued limit is the safe/inert
+	 * default (maxheap 0 is unlimited, gcstress 0 is off) -- this is the
+	 * corrected polarity from D068's original text, which said 0 forced
+	 * every collection off-process; see D074's amendment for why. Every
+	 * NvLimits construction site in this tree assigns fields
+	 * individually without zeroing the struct first, so this field must
+	 * be explicitly set to 0 at each one (D074 lists them) rather than
+	 * relying on this being a safe default by accident. A threshold of 1
+	 * forces every real collection off-process (every execution heap
+	 * has at least one live word, its argument tuple, so 1 is never
+	 * accidentally unreachable) -- this is the distinct "always
+	 * off-process" test/stress setting D068 originally assigned to 0.
+	 */
+	uvlong gcoffload;
 };
 
 enum {
@@ -124,6 +143,14 @@ int nvprocexit(NvRuntime *, NvTerm pid);
  */
 int nvprocrunhead(NvRuntime *, ulong *);
 int nvprocwake(NvRuntime *, ulong);
+/*
+ * D074: move one Prrunnable slot to the run-queue tail, wherever it
+ * currently sits (in practice always called on the current head, right
+ * after nvprocrunhead, to skip a slot whose heap is under off-process
+ * collection). Preserves the D059 invariant that the queue holds exactly
+ * the Prrunnable slots; -1 if the slot is not Prrunnable.
+ */
+int nvprocrequeue(NvRuntime *, ulong);
 int nvprocalive(NvRuntime *, NvTerm pid);
 /* nvprocref allocates the new ref in the given heap (the calling process's). */
 int nvprocref(NvRuntime *, NvHeap *, NvTerm *ref, char *, int);

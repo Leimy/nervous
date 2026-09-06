@@ -95,6 +95,22 @@ enum {
 	Bint = 3,
 };
 
+/*
+ * D074: heap owner state, orthogonal to the D041 process lifecycle.
+ * NvHeapIdle is 0 so a zeroed NvHeap (nvheapinit) starts idle. Dispatch
+ * only ever runs a process whose heap is NvHeapIdle; NvHeapRunning is set
+ * only for the duration of nvexecrun on the currently dispatched process
+ * (defensive today under one scheduler proc, load-bearing once milestone
+ * 10 has more than one). NvHeapCollecting marks a heap a launched
+ * off-process collector owns; the owning proc, the scheduler, and a
+ * collector are never more than one at a time (D068).
+ */
+enum {
+	NvHeapIdle,
+	NvHeapRunning,
+	NvHeapCollecting,
+};
+
 #define NvHdr(kind, n) ((NvTerm)(kind) | (NvTerm)(n)<<8)
 #define NvHdrkind(h) ((int)((h)&7))
 #define NvHdrlen(h) ((ulong)((h)>>8))
@@ -126,6 +142,21 @@ struct NvHeap {
 	uvlong stackwords;	/* retained frame capacity charged with heap words */
 	int managed;		/* execution heap: no unreserved chunk growth */
 	int exhausted;		/* why the last refusal happened: 1 budget, 0 host allocator; read by nvheapexhausted */
+	/*
+	 * D074: owner state and the spinlock guarding transitions into and
+	 * out of NvHeapCollecting. A read that only decides dispatch order
+	 * (skip a collecting heap vs. dispatch it) needs no lock -- a stale
+	 * NvHeapCollecting costs only a wasted requeue. A read-modify-write
+	 * transition, and any read that then trusts fields the collector
+	 * wrote (gcretry/livewords on NvExec), must hold this lock: unlock
+	 * only guarantees release ordering, not acquire ordering, for a
+	 * reader that never takes the lock, which matters on an
+	 * architecture without strong store ordering (this project builds
+	 * with 7c, i.e. arm64). A spinlock, not QLock, because the critical
+	 * section is one word (D070: "locks in shared memory").
+	 */
+	int owner;
+	Lock lock;
 };
 
 /*

@@ -302,6 +302,7 @@ main(void)
 	limits.maxheap = 0;
 	limits.gcstress = 0;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	insn[0].a = 99;
 	check(nvschedinit(&sched, &module, &limits, 1, 1, err, sizeof err) < 0, "scheduler rejects invalid module");

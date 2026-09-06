@@ -117,6 +117,7 @@ main(void)
 	limits.gcstress = 0;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
+	limits.gcoffload = 0;
 
 	devnull = Bopen("/dev/null", OWRITE);
 	check(devnull != nil, "open /dev/null for the print sink");
