@@ -50,6 +50,58 @@ limits(NvLimits *l, uvlong maxheap, int stress)
 }
 
 static void
+tablegrowth(void)
+{
+	NvRuntime r;
+	NvLimits l;
+	NvTerm pid[200], p, q;
+	NvFrag *msg;
+	char err[128];
+	ulong i, slot;
+
+	limits(&l, 0, 0);
+	l.maxprocess = nelem(pid);
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) == 0, err);
+	for(i = 0; i < nelem(pid); i++){
+		check(nvprocspawn(&r, &pid[i], err, sizeof err) == 0, err);
+		check(nvpidslot(pid[i]) == i, "append order changed");
+		if(i == 3)
+			check(nvprocsend(&r, pid[3], nvint(nil, 42), err, sizeof err) == 1, "growth message");
+	}
+	check(r.nslot == 200 && r.nalloc == 256 && r.tablegrows == 5 && r.slotprobes == 0, "table growth/search is not amortized");
+	check(r.nrunnable == 200 && r.runhead == 0 && r.runtail == 199, "growth damaged queue");
+	check(nvprocspawn(&r, &p, err, sizeof err) < 0 && r.nslot == 200, "spare capacity bypassed live limit");
+	check(nvprocpop(&r, pid[3], &msg, err, sizeof err) == 1 && nvtermint(msg->root) == 42, "growth damaged mailbox");
+	nvfragfree(msg);
+	check(nvprocexit(&r, pid[150]) == 1 && nvprocexit(&r, pid[3]) == 1, "reuse setup");
+	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 3, "lowest-free hint skipped slot");
+	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 150, "next lowest-free slot");
+	check(!nvprocalive(&r, pid[3]) && !nvprocalive(&r, pid[150]), "reused stale generation");
+	check(r.runtail == 150 && r.process[150].runprev == 3 && r.nrunnable == 200, "reuse queue order");
+	r.process[3].generation = NvMaxgeneration;
+	p = nvpid(3, NvMaxgeneration);
+	check(nvprocexit(&r, p) == 1, "retirement setup");
+	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 200 && r.nslot == 201 && r.nalloc == 256 && r.process[3].state == Prretired, "retired slot confused capacity/live limits");
+	/* Queue links survive both growth and removal from the middle. */
+	for(i = 0; i < 200; i++){
+		check(nvprocrunhead(&r, &slot), "missing queue member");
+		p = nvpid(slot, r.process[slot].generation);
+		check(nvprocexit(&r, p) == 1, "queue drain");
+	}
+	check(r.nlive == 0 && r.nrunnable == 0 && r.freehint == 0, "drain/hint state");
+	nvruntimefree(&r);
+	/* A retired slot can also force growth above a one-process limit. */
+	l.maxprocess = 1;
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) == 0, err);
+	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && r.nalloc == 1, "tiny table capacity");
+	r.process[0].generation = NvMaxgeneration;
+	check(nvprocexit(&r, nvpid(0, NvMaxgeneration)) == 1, "tiny retirement");
+	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 1 && r.nalloc == 2, "tiny retired-table growth");
+	nvruntimefree(&r);
+	print("ok - geometric table growth and free hints preserve limits, retirement, queues and mailboxes\n");
+}
+
+static void
 loops(void)
 {
 	char *src =
@@ -80,6 +132,7 @@ loops(void)
 		for(q = 0; q < 2; q++){
 			limits(&l, 1024, stress);
 			check(nvschedinit(&s, m, &l, 1, q ? 1000 : 1, err, sizeof err) == 0, err);
+			s.profile = q; /* timing must not affect reductions or side effects */
 			check(nvschedspawnroot(&s, "main", arg, &pid, err, sizeof err) == 0, err);
 			state = NvSchedProgress;
 			peak = cap = 0;
@@ -211,6 +264,7 @@ receivetake(void)
 	NvTerm arg, pid;
 	NvProcess *p;
 	NvFrag *candidate;
+	NvMemstats mem;
 	char err[128];
 	int pass;
 
@@ -229,16 +283,27 @@ receivetake(void)
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"begin scan");
 		p=&s.runtime.process[nvpidslot(pid)]; candidate=p->scan;
 		check(candidate!=nil && p->mailboxwords==2,"candidate setup");
+		nvschedmemory(&s, &mem);
+		check(mem.tablebytes == (uvlong)s.runtime.nalloc*sizeof(NvProcess) && mem.nexec == 1 && mem.execbytes == sizeof(NvExec), "snapshot table/exec accounting");
+		check(mem.nmailbox == 1 && mem.mailboxbytes == sizeof(NvFrag)+sizeof(NvTerm) && mem.nadopted == 0, "snapshot queued fragment accounting");
+		check(mem.stackbytes == 64*sizeof(NvTerm) && mem.heapused == sizeof(NvTerm) && mem.heapbytes == sizeof(NvChunk)+64*sizeof(NvTerm), "snapshot capacity versus used");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"take reservation");
 		check(p->scan==candidate && p->head==candidate && p->mailboxwords==2 && p->exec->heap.adopted==nil,"reservation consumed candidate");
 		check(p->exec->reductions==1 && p->state==Prrunnable && s.runtime.nrunnable==1,"request charged or duplicate queue insertion");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"take retry");
 		if(pass){
 			check(p->head==nil && p->mailboxwords==0 && p->exec->heap.adopted==candidate,"successful take not adopted exactly once");
+			nvschedmemory(&s, &mem);
+			check(mem.mailboxbytes == 0 && mem.nadopted == 1 && mem.adoptedbytes == sizeof(NvFrag)+sizeof(NvTerm), "snapshot adopted fragment accounting");
+			check(mem.totalbytes == mem.tablebytes+mem.execbytes+mem.heapbytes+mem.stackbytes+mem.adoptedbytes, "snapshot total double-counted used words");
 			check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.rootstate==NvRootDone && nvtuplelen(s.rootvalue->root)==0,"taken value did not survive");
 		}else
 			check(s.rootstate==NvRootFault && strcmp(s.rootfault,"system_limit")==0,"take budget fault");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedDone,"receive completion");
+		check(s.gcdemand == 1 && s.gcidle == 0 && s.gcinputwords == 1 && s.execns == 0 && s.gcns == 0 && s.spawnns == 0, "collection counters or default-off timing");
+		nvschedmemory(&s, &mem);
+		check(mem.nexec == 0 && mem.heapbytes == 0 && mem.stackbytes == 0 && mem.mailboxbytes == 0 && mem.adoptedbytes == 0, "snapshot retains exited process storage");
+		check(mem.reportbytes == (pass ? sizeof(NvFrag)+sizeof(NvTerm) : 0), "snapshot result fragment");
 		nvschedfree(&s);
 	}
 	nvheapfree(&h);
@@ -282,6 +347,7 @@ idlecollect(void)
 void
 main(void)
 {
+	tablegrowth();
 	requests();
 	guardlimit();
 	receivetake();

@@ -1,6 +1,25 @@
 typedef struct NvScheduler NvScheduler;
 typedef struct NvClock NvClock;
 typedef struct NvIO NvIO;
+typedef struct NvMemstats NvMemstats;
+
+/* Requested storage at an explicit quiescent snapshot, NOT allocator or
+ * OS resident bytes. Used counts are diagnostic subsets, not extra storage. */
+struct NvMemstats {
+	uvlong tablebytes;
+	uvlong execbytes;
+	uvlong heapbytes;    /* chunk descriptors plus reserved word capacity */
+	uvlong heapused;     /* used chunk words in bytes, excludes adoption */
+	uvlong stackbytes;   /* retained capacity */
+	uvlong stackused;
+	uvlong adoptedbytes;
+	uvlong mailboxbytes;
+	uvlong reportbytes;  /* rootvalue/lastexit fragments */
+	uvlong totalbytes;
+	uvlong nexec;
+	uvlong nadopted;
+	uvlong nmailbox;
+};
 
 /*
  * D050: the scheduler reads time only through this interface, never a
@@ -66,6 +85,14 @@ struct NvScheduler {
 	uvlong gcfailed;
 	uvlong lastlivewords;	/* heap words in the most recently collected process */
 	uvlong maxlivewords;	/* largest successful per-process live sample */
+	uvlong gcinputwords;	/* used/adopted words presented to all attempts */
+	uvlong gcoutputwords;	/* live words from successful collections */
+	uvlong gcdemand;
+	uvlong gcidle;
+	int profile;		/* opt-in real monotonic elapsed timing, default off */
+	uvlong execns;		/* includes host callbacks and nested spawn time */
+	uvlong gcns;		/* demand + idle collection, excludes startup */
+	uvlong spawnns;		/* all spawn attempts; overlaps execns for bytecode spawn */
 	uvlong completed;
 	uvlong faulted;
 	uvlong exited;
@@ -99,3 +126,6 @@ void nvschedfree(NvScheduler *);
 int nvschedspawn(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedspawnroot(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedstep(NvScheduler *, char *, int);
+/* O(slots + fragments), explicitly called between dispatches with exclusive
+ * access. Never called by the ordinary scheduler or collection path. */
+void nvschedmemory(NvScheduler *, NvMemstats *);

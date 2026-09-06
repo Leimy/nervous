@@ -16,7 +16,9 @@
  * destination cannot be allocated. Roots are committed only after the
  * complete copy and sizing succeed. No heap pointer escapes a failure.
  * A larger trial starts over after restoration; no realloc ever moves
- * an in-progress to-space. Scratch storage is proportional to capacity.
+ * an in-progress to-space. Scratch storage is proportional to capacity;
+ * small trials use bounded C-stack scratch, larger trials malloc it.
+ * The current chunk descriptor is reused, but modified only at commit.
  *
  * From-space includes host/startup chunks plus adopted fragments.
  * The result is one contiguous chunk; managed execution heaps refuse
@@ -191,7 +193,7 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 	NvChunk *dest, *old, *next;
 	NvFrag *f, *fn;
 	NvRoot *r;
-	NvTerm t;
+	NvTerm t, *small[Minspace];
 	ulong cap, bigger, i;
 	uvlong limit;
 	int rc;
@@ -212,9 +214,14 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 	cap = h->cur == nil ? 0 : h->cur->cap;
 	if(spacecap(need, cap, &cap) < 0)
 		goto limited;
-	dest = malloc(sizeof *dest);
-	if(dest == nil)
-		return NvTermerror;
+	/* Keep the descriptor, not the old words. Commit below is infallible;
+	 * no descriptor field is changed during a trial or on failure. */
+	dest = h->cur;
+	if(dest == nil){
+		dest = malloc(sizeof *dest);
+		if(dest == nil)
+			return NvTermerror;
+	}
 	memset(&c, 0, sizeof c);
 	c.heap = h;
 	c.limit = limit;
@@ -222,7 +229,11 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 		c.cap = cap;
 		c.top = 0;
 		c.word = malloc(cap*sizeof(NvTerm));
-		c.source = mallocz(cap*sizeof(NvTerm*), 1);
+		if(cap <= nelem(small)){
+			memset(small, 0, sizeof small);
+			c.source = small;
+		}else
+			c.source = mallocz(cap*sizeof(NvTerm*), 1);
 		if(c.word == nil || c.source == nil){
 			rc = NvTermerror;
 			break;
@@ -245,13 +256,16 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 		if(rc != Retry)
 			break;
 		free(c.word);
-		free(c.source);
+		if(c.source != small)
+			free(c.source);
 		cap = bigger;
 	}
 	if(rc != 0){
 		free(c.word);
-		free(c.source);
-		free(dest);
+		if(c.source != small)
+			free(c.source);
+		if(dest != h->cur)
+			free(dest);
 		h->exhausted = rc == NvTermlimit;
 		return rc;
 	}
@@ -262,15 +276,9 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 			if(NvBoxed(t) && owned(h, t) != 0)
 				r->word[i] = (NvTerm)(uintptr)(c.word+(NvBoxptr(t)[0]>>4));
 		}
-	dest->word = c.word;
-	dest->cap = cap;
-	dest->top = c.top;
-	dest->next = nil;
 	old = h->cur;
-	if(old != nil){
-		free(old->word);
-		free(old);
-	}
+	if(old != nil)
+		free(old->word); /* old == dest: keep its descriptor for commit */
 	for(old = h->full; old != nil; old = next){
 		next = old->next;
 		free(old->word);
@@ -280,11 +288,16 @@ nvheapcollect(NvHeap *h, NvRoot *roots, uvlong stackwords, uvlong need)
 		fn = f->next;
 		free(f);
 	}
+	dest->word = c.word;
+	dest->cap = cap;
+	dest->top = c.top;
+	dest->next = nil;
 	h->cur = dest;
 	h->full = nil;
 	h->adopted = nil;
 	h->words = c.top;
-	free(c.source);
+	if(c.source != small)
+		free(c.source);
 	return 0;
 limited:
 	h->exhausted = 1;

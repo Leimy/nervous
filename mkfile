@@ -28,6 +28,14 @@ HFILES=include/nervous.h include/nvalloc.h include/nvbc.h include/nvvm.h include
 
 all:V: $TARG
 
+benchmarks:V: all perftest
+
+perftest: bench/perftest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o bench/perftest $prereq
+
+bench/perftest.$O: bench/perftest.c include/nervous.h include/nvbc.h include/nvvm.h include/nvexec.h include/nvproc.h include/nvsched.h include/nvcompile.h
+	$CC $CFLAGS -o bench/perftest.$O bench/perftest.c
+
 tests:V: all patterntest parsepatterntest patternbctest patterncompiletest processtest exectest schedtest iotest r2test memorytest automatictest
 
 automatictest: tests/memory/autotest.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
@@ -157,7 +165,7 @@ lib/vm.$O: lib/vm.c include/nvbc.h include/nvvm.h include/nvexec.h
 	$CC $CFLAGS -o lib/vm.$O lib/vm.c
 
 clean:V:
-	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test tests/memory/*.[$OS] tests/memory/gctest tests/memory/autotest $TARG
+	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test tests/memory/*.[$OS] tests/memory/gctest tests/memory/autotest bench/perftest.$O bench/perftest $TARG
 
 install:V: $TARG
 	cp $TARG $BIN/

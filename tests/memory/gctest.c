@@ -318,6 +318,58 @@ guards(void)
 	print("ok - explicit GC at every instruction preserves guard state and fault transfer\n");
 }
 
+static void
+scratchpaths(void)
+{
+	NvHeap h, source;
+	NvRoot r;
+	NvFrag *f;
+	NvTerm roots[2], elem[80], arg, old;
+	NvChunk *desc;
+	NvModule m;
+	NvFunc fun;
+	NvInsn code[2];
+	NvConst k;
+	NvExec e;
+	char err[128];
+	int i;
+
+	/* A 64-word trial forwards one root, then must restore it and
+	 * promote rollback scratch to malloc for the large adopted root. */
+	nvheapinit(&h, 0); nvheapinit(&source, 0);
+	roots[0] = tuple(&h, nil, 0);
+	for(i = 0; i < nelem(elem); i++) elem[i] = nvint(nil, i);
+	arg = tuple(&source, elem, nelem(elem));
+	check(nvfragcopy(arg, ~0ULL, &f) == 0 && nvheapadopt(&h, f) == 0, "scratch promotion setup");
+	roots[1] = f->root;
+	r.word = roots; r.nword = 2; r.next = nil;
+	desc = h.cur; old = roots[0];
+	check(nvheapcollect(&h, &r, 0, 0) == 0 && h.cur == desc && h.cur->cap == 256 && h.words == 82, "scratch promotion or descriptor reuse");
+	check(roots[0] != old && nvtuplelen(roots[0]) == 0 && nvtuplelen(roots[1]) == 80 && nvtermint(nvtupleelem(roots[1], 79)) == 79, "promotion root restoration");
+	nvheapfree(&h); nvheapfree(&source);
+
+	/* More than eight frames takes the malloc-backed root-view path. */
+	memset(&m,0,sizeof m); memset(&fun,0,sizeof fun);
+	memset(code,0,sizeof code); memset(&k,0,sizeof k);
+	m.nfunc=1; m.func=&fun; m.nconst=1; m.konst=&k;
+	fun.name="recurse"; fun.nreg=2; fun.ninsn=2; fun.insn=code;
+	k.kind=Kfunc; k.text="recurse";
+	code[0].op=Ocall; code[0].a=1; code[0].b=0; code[0].c=0;
+	code[1].op=Oreturn; code[1].a=1;
+	nvheapinit(&h,0); arg=tuple(&h,nil,0);
+	check(nvexecinit(&e,&m,"recurse",arg,0,nil,0,err,sizeof err)==0,"many-frame init");
+	check(nvexecruninline(&e,9)==NvYield && e.nframe==10,"many-frame setup");
+	old=e.stack[NvFramehdr];
+	e.heap.maxwords=e.nstack;
+	check(nvexeccollect(&e,0)==NvTermlimit && e.stack[NvFramehdr]==old,"large root-view failure");
+	e.heap.maxwords=0;
+	check(nvexeccollect(&e,0)==0 && e.heap.words==1 && e.stack[NvFramehdr]!=old,"large root-view copy");
+	code[0].op=Oreturn; code[0].a=0;
+	check(nvexecruninline(&e,10)==NvDone && nvtuplelen(e.result->root)==0,"large root-view resume");
+	nvexecfree(&e); nvheapfree(&h);
+	print("ok - small GC scratch promotes safely, descriptors are reused, and deep frame views fall back\n");
+}
+
 void
 main(void)
 {
@@ -327,6 +379,7 @@ main(void)
 	failures();
 	frames();
 	guards();
+	scratchpaths();
 	print("all memory collector tests passed\n");
 	exits(nil);
 }

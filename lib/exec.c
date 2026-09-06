@@ -696,12 +696,14 @@ nvexecrun(NvExec *e, uvlong quantum)
  * Build a view of the complete D065 register root set before invoking
  * the collector. It sees neither NvExec nor module/frame metadata.
  * Capacity, rather than just sp, is charged: popped stack storage stays
- * allocated. Inactive slots are not roots. The owner must be stopped.
+ * allocated. Inactive slots are not roots. Up to eight frame views use
+ * bounded C-stack scratch; deeper stacks malloc the views. The owner
+ * must be stopped.
  */
 int
 nvexeccollect(NvExec *e, uvlong need)
 {
-	NvRoot *roots;
+	NvRoot *roots, local[8];
 	NvTerm idx, caller;
 	ulong fp, end, n, i;
 	int rc;
@@ -713,9 +715,12 @@ nvexeccollect(NvExec *e, uvlong need)
 	   e->stack == nil || e->nframe == 0 || e->sp > e->nstack ||
 	   e->nframe > (~0UL)/sizeof(NvRoot))
 		return NvTermerror;
-	roots = malloc(e->nframe*sizeof(NvRoot));
-	if(roots == nil)
-		return NvTermerror;
+	roots = local;
+	if(e->nframe > nelem(local)){
+		roots = malloc(e->nframe*sizeof(NvRoot));
+		if(roots == nil)
+			return NvTermerror;
+	}
 	fp = e->fp;
 	end = e->sp;
 	rc = NvTermerror;
@@ -746,7 +751,8 @@ nvexeccollect(NvExec *e, uvlong need)
 		e->livewords = e->heap.words;
 	}
 out:
-	free(roots);
+	if(roots != local)
+		free(roots);
 	return rc;
 }
 

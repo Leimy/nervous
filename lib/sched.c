@@ -276,6 +276,59 @@ nvschedinit(NvScheduler *s, NvModule *m, NvLimits *limits, uvlong incarnation, u
 	return 0;
 }
 
+static uvlong
+fragmentbytes(NvFrag *f)
+{
+	return f == nil ? 0 : sizeof *f + (uvlong)f->nword*sizeof(NvTerm);
+}
+
+/* Explicit diagnostic snapshot only. The normal dispatch path never scans
+ * the process table for statistics. Excludes allocator/module/atom storage,
+ * transient GC scratch and the caller-owned scheduler struct itself. */
+void
+nvschedmemory(NvScheduler *s, NvMemstats *m)
+{
+	NvProcess *p;
+	NvExec *e;
+	NvChunk *c;
+	NvFrag *f;
+	ulong i;
+
+	memset(m, 0, sizeof *m);
+	m->tablebytes = (uvlong)s->runtime.nalloc*sizeof(NvProcess);
+	for(i = 0; i < s->runtime.nslot; i++){
+		p = &s->runtime.process[i];
+		for(f = p->head; f != nil; f = f->next){
+			m->nmailbox++;
+			m->mailboxbytes += fragmentbytes(f);
+		}
+		e = p->exec;
+		if(e == nil)
+			continue;
+		m->nexec++;
+		m->execbytes += sizeof *e;
+		m->stackbytes += (uvlong)e->nstack*sizeof(NvTerm);
+		m->stackused += (uvlong)e->sp*sizeof(NvTerm);
+		c = e->heap.cur;
+		if(c != nil){
+			m->heapbytes += sizeof *c + (uvlong)c->cap*sizeof(NvTerm);
+			m->heapused += (uvlong)c->top*sizeof(NvTerm);
+		}
+		for(c = e->heap.full; c != nil; c = c->next){
+			m->heapbytes += sizeof *c + (uvlong)c->cap*sizeof(NvTerm);
+			m->heapused += (uvlong)c->top*sizeof(NvTerm);
+		}
+		for(f = e->heap.adopted; f != nil; f = f->next){
+			m->nadopted++;
+			m->adoptedbytes += fragmentbytes(f);
+		}
+		m->reportbytes += fragmentbytes(e->result) + fragmentbytes(e->exitreason);
+	}
+	m->reportbytes += fragmentbytes(s->rootvalue) + fragmentbytes(s->lastexit);
+	m->totalbytes = m->tablebytes + m->execbytes + m->heapbytes + m->stackbytes +
+		m->adoptedbytes + m->mailboxbytes + m->reportbytes;
+}
+
 void
 nvschedfree(NvScheduler *s)
 {
@@ -289,8 +342,8 @@ nvschedfree(NvScheduler *s)
 	memset(s, 0, sizeof *s);
 }
 
-int
-nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+static int
+spawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 {
 	NvExec *e;
 
@@ -326,6 +379,19 @@ nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, in
 }
 
 int
+nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+{
+	uvlong start;
+	int rc;
+
+	start = s->profile ? uptime() : 0;
+	rc = spawn(s, entry, arg, pid, err, nerr);
+	if(s->profile)
+		s->spawnns += uptime()-start;
+	return rc;
+}
+
+int
 nvschedspawnroot(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 {
 	if(s->rootvalid){
@@ -354,6 +420,29 @@ gcsample(NvScheduler *s, NvExec *e, int ok)
 		s->maxlivewords = e->livewords;
 }
 
+static void
+collect(NvScheduler *s, NvExec *e, int demand)
+{
+	uvlong start;
+	int ok;
+
+	start = s->profile ? uptime() : 0;
+	s->gcinputwords += e->heap.words;
+	if(demand){
+		s->gcdemand++;
+		nvexecgc(e);
+		ok = e->gcretry == 1;
+	}else{
+		s->gcidle++;
+		ok = nvexeccollect(e, 0) == 0;
+	}
+	if(s->profile)
+		s->gcns += uptime()-start;
+	if(ok)
+		s->gcoutputwords += e->livewords;
+	gcsample(s, e, ok);
+}
+
 int
 nvschedstep(NvScheduler *s, char *err, int nerr)
 {
@@ -362,7 +451,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	NvExec *e;
 	NvTerm pid;
 	ulong i, slot;
-	uvlong before;
+	uvlong before, start;
 	int state, isroot;
 
 	r = &s->runtime;
@@ -395,7 +484,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 			e = p->exec;
 			if(p->state == Prwaiting && e != nil && e->heap.cur != nil &&
 			   e->heap.words > e->livewords && e->heap.words > e->heap.cur->cap/2)
-				gcsample(s, e, nvexeccollect(e, 0) == 0);
+				collect(s, e, 0);
 		}
 		/*
 		 * D050: idle with an armed deadline is progress, not deadlock.
@@ -454,7 +543,10 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 	s->currentgeneration = p->generation;
 	s->currentvalid = 1;
 	before = e->reductions;
+	start = s->profile ? uptime() : 0;
 	state = nvexecrun(e, s->quantum);
+	if(s->profile)
+		s->execns += uptime()-start;
 	s->reductions += e->reductions - before;
 	s->currentvalid = 0;
 	/* Process operations may grow the slot table; never retain its old address. */
@@ -463,8 +555,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		if(p->state != Prrunning || nvprocyield(r, pid, err, nerr) < 0)
 			return NvSchedError;
 		/* Inline only: stopped owner, enqueued once, no host callback active. */
-		nvexecgc(e);
-		gcsample(s, e, e->gcretry == 1);
+		collect(s, e, 1);
 		return NvSchedProgress;
 	}
 	if(state == NvYield){

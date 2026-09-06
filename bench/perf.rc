@@ -1,0 +1,39 @@
+#!/bin/rc
+# Phase-separated diagnostics. Run from any directory after mk benchmarks.
+# Each command is a fresh host process. No runtime defaults are changed.
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+if(! test -x $benchdir/perftest){
+	echo $0: build with '''mk benchmarks''' first >[1=2]
+	exit no-binary
+}
+
+fn measure {
+	echo '== perftest waiters pings busy-headroom profile:' $*
+	$benchdir/perftest $* || exit perf
+	echo
+}
+
+# The unprofiled traffic phase isolates busy-process cost from creating
+# and draining waiters. Headroom is an explicit setup-only collection
+# request on the TWO busy heaps; zero leaves their normal initial sizes.
+measure 0 100000 0 0
+measure 1000 100000 0 0
+measure 10000 100000 0 0
+measure 10000 100000 32 0
+measure 10000 100000 128 0
+
+# Timed regions partition exec (including host calls), GC, and spawn.
+# Profiling perturbs throughput; compare these only to the matching
+# unprofiled case, not directly to the historical run.rc timing.
+measure 10000 100000 0 1
+measure 10000 100000 128 1
+exit ''

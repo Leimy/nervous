@@ -87,8 +87,14 @@ struct NvProcess {
 struct NvRuntime {
 	NvLimits limits;
 	NvProcess *process;
-	ulong nslot;
+	ulong nslot;		/* initialized slots, including exited/retired */
+	ulong nalloc;		/* allocated capacity; tail is not initialized */
+	ulong freehint;		/* no reusable slot below this index */
 	ulong nlive;
+	uvlong slotprobes;	/* slots examined while searching for reuse */
+	uvlong tablegrows;	/* successful allocation/growth calls */
+	uvlong tablemoves;	/* growth calls that changed the base address */
+	uvlong tablemovebytes;	/* old requested capacity bytes on moved growths */
 	/* D059: FIFO of Prrunnable slots; NvNoslot when empty. */
 	ulong runhead;
 	ulong runtail;

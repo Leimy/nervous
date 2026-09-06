@@ -167,13 +167,17 @@ int
 nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 {
 	NvProcess *p, *q;
-	ulong slot;
+	ulong slot, cap, max;
+	uintptr oldbase;
 
 	if(r->nlive >= r->limits.maxprocess){
 		snprint(err, nerr, "system_limit");
 		return -1;
 	}
-	for(slot = 0; slot < r->nslot; slot++){
+	/* Exits lower freehint; successful spawns advance it. Lowest-slot
+	 * reuse is unchanged, but append-only creation does not rescan live slots. */
+	for(slot = r->freehint; slot < r->nslot; slot++){
+		r->slotprobes++;
 		p = &r->process[slot];
 		if(p->state == Prexited && p->generation == NvMaxgeneration){
 			p->state = Prretired;
@@ -183,13 +187,34 @@ nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 			break;
 	}
 	if(slot == r->nslot){
-		if(r->nslot == ~0UL || r->nslot+1 > ~0UL/sizeof *q){
+		max = (~0UL)/sizeof *q;
+		if(max > NvMaxslot+1)
+			max = NvMaxslot+1;
+		if(r->nslot >= max){
 			snprint(err, nerr, "system_limit");
 			return -1;
 		}
-		q = realloc(r->process, (r->nslot+1)*sizeof *q);
-		if(q == nil){ snprint(err,nerr,"system_limit"); return -1; }
-		r->process = q;
+		if(r->nslot == r->nalloc){
+			cap = r->nalloc;
+			if(cap == 0){
+				cap = 16;
+				if(cap > r->limits.maxprocess) cap = r->limits.maxprocess;
+			}else
+				cap = cap > max/2 ? max : cap*2;
+			if(cap > max) cap = max;
+			oldbase = (uintptr)r->process;
+			q = realloc(r->process, cap*sizeof *q);
+			if(q == nil){ snprint(err,nerr,"system_limit"); return -1; }
+			r->tablegrows++;
+			if(oldbase != 0 && oldbase != (uintptr)q){
+				r->tablemoves++;
+				r->tablemovebytes += (uvlong)r->nalloc*sizeof *q;
+			}
+			r->process = q;
+			r->nalloc = cap;
+		}
+		/* Spare capacity is not a slot until initialized here. Retired
+		 * slots may require capacity beyond maxprocess (a LIVE limit). */
 		p = &r->process[r->nslot++];
 		memset(p, 0, sizeof *p);
 	}else{
@@ -207,6 +232,7 @@ nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 		p->hasdeadline = 0;
 		p->deadline = 0;
 	}
+	r->freehint = slot+1;
 	p->generation++;
 	if(p->generation == 0)
 		p->generation++;
@@ -286,6 +312,8 @@ nvprocexit(NvRuntime *r, NvTerm pid)
 	p->hasdeadline = 0;
 	p->deadline = 0;
 	p->state = Prexited;
+	if(nvpidslot(pid) < r->freehint)
+		r->freehint = nvpidslot(pid);
 	if(r->nlive > 0)
 		r->nlive--;
 	return 1;

@@ -1,0 +1,69 @@
+First M08-T04b automatic inline GC benchmark.
+User-supplied output read from /dev/snarf after reporting all requested tests pass.
+Command: rc bench/run.rc
+No agent-executed benchmark; no commit identity independently established.
+
+== /usr/dave/work/nervous/examples/ring.nv main 10 200000
+stats: wall 1.695s
+stats: processes 11 spawned, 11 peak live, 11 completed, 0 faulted, 0 exited
+stats: dispatches 2547711, reductions 55000381 (21 per dispatch), timer wakes 0
+stats: messages 2200011 sent, 0 dropped to dead pids, 770 ns per message
+stats: host allocation 24816 bytes high-water, 2256 per peak live process
+stats: GC 347690 collections, 0 failed; per-process live heap 8 words last, 8 words largest collected
+stats: atoms 8 interned
+2000000
+1.69u 0.01s 1.71r
+
+== /usr/dave/work/nervous/examples/ring.nv main 1000 2000
+stats: wall 1.436s
+stats: processes 1001 spawned, 1001 peak live, 1001 completed, 0 faulted, 0 exited
+stats: dispatches 2311492, reductions 48104044 (20 per dispatch), timer wakes 0
+stats: messages 2003001 sent, 0 dropped to dead pids, 717 ns per message
+stats: host allocation 3335248 bytes high-water, 3331 per peak live process
+stats: GC 307490 collections, 0 failed; per-process live heap 7 words last, 11 words largest collected
+stats: atoms 8 interned
+2000000
+1.44u 0.00s 1.44r
+
+== /usr/dave/work/nervous/bench/ring-up.nv main 1000 2000
+stats: wall 1.482s
+stats: processes 1001 spawned, 1001 peak live, 1001 completed, 0 faulted, 0 exited
+stats: dispatches 2311159, reductions 48125134 (20 per dispatch), timer wakes 0
+stats: messages 2004001 sent, 0 dropped to dead pids, 739 ns per message
+stats: host allocation 2764096 bytes high-water, 2761 per peak live process
+stats: GC 307123 collections, 0 failed; per-process live heap 10 words last, 16 words largest collected
+stats: atoms 9 interned
+2000000
+1.49u 0.00s 1.50r
+
+== /usr/dave/work/nervous/bench/waiters.nv main 1000 100000
+stats: wall 0.132s
+stats: processes 1002 spawned, 1002 peak live, 1002 completed, 0 faulted, 0 exited
+stats: dispatches 213769, reductions 5038063 (23 per dispatch), timer wakes 0
+stats: messages 201001 sent, 0 dropped to dead pids, 659 ns per message
+stats: host allocation 3115088 bytes high-water, 3108 per peak live process
+stats: GC 11766 collections, 0 failed; per-process live heap 1 words last, 18 words largest collected
+stats: atoms 10 interned
+100000
+0.14u 0.00s 0.15r
+
+== /usr/dave/work/nervous/bench/waiters.nv main 10000 100000
+stats: wall 0.238s
+stats: processes 10002 spawned, 10002 peak live, 10002 completed, 0 faulted, 0 exited
+stats: dispatches 232669, reductions 5380063 (23 per dispatch), timer wakes 0
+stats: messages 210001 sent, 0 dropped to dead pids, 1136 ns per message
+stats: host allocation 89391824 bytes high-water, 8937 per peak live process
+stats: GC 12666 collections, 0 failed; per-process live heap 1 words last, 18 words largest collected
+stats: atoms 10 interned
+100000
+0.21u 0.03s 0.27r
+
+== /usr/dave/work/nervous/examples/sieve.nv main 5000
+stats: wall 0.239s
+stats: processes 670 spawned, 335 peak live, 1 completed, 0 faulted, 669 exited
+stats: dispatches 200985, reductions 11052682 (54 per dispatch), timer wakes 0
+stats: messages 234091 sent, 0 dropped to dead pids, 1022 ns per message
+stats: host allocation 694080 bytes high-water, 2071 per peak live process
+stats: GC 39129 collections, 0 failed; per-process live heap 3 words last, 9 words largest collected
+stats: atoms 9 interned
+0.24u 0.00s 0.25r

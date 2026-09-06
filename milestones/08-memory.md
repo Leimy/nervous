@@ -8,7 +8,7 @@ Milestones 05 and 06 and Review R2 must complete before process-local heap integ
 
 PR2-T01 is accepted: the user reports the bytecode and full regression suites passing with D071's guard-boundary verification. post-R2-F01 is closed and M08-T04 may resume. See `../docs/review-findings.md` and `../STATUS.md`. This bounded prerequisite does not change the collector design or declare R3 open or complete.
 
-M08-T04a (collector core and frame-root adapter) is user-accepted: memory and full regression suites passed. M08-T04b adds automatic inline collection (D072): pre-instruction reservation/retry, startup/stack/fragment accounting, idle reclamation, CLI limits and stress, and integration tests. Build evidence and pending user-run acceptance are in STATUS. Off-process collection (D068), both-mode stress acceptance, and benchmark-based policy tuning remain outstanding; this is not milestone-08 completion.
+M08-T04a (collector core and frame-root adapter) is user-accepted: memory and full regression suites passed. M08-T04b adds automatic inline collection (D072): pre-instruction reservation/retry, startup/stack/fragment accounting, idle reclamation, CLI limits and stress, and integration tests. The user reports all requested T04b tests passing; correctness is accepted. The first benchmark is recorded in bench/README.md and motivates a separate inline performance investigation. Evidence and next assignments are in STATUS. Off-process collection (D068), both-mode stress acceptance, and benchmark-based policy tuning remain outstanding; this is not milestone-08 completion.
 
 ## Goal
 

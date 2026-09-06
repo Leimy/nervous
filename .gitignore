@@ -13,3 +13,4 @@
 /tests/process/r2test
 /tests/memory/gctest
 /tests/memory/autotest
+/bench/perftest
