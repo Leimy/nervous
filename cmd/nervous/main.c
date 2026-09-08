@@ -14,7 +14,7 @@ static char *version = "nervous frontend 4";
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-sG] [-H heapwords] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-sG] [-H heapwords] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
 	exits("usage");
 }
 
@@ -178,6 +178,128 @@ printroot(Biobuf *b, NvFrag *f)
 		nvtermprint(b, f->root);
 }
 
+/*
+ * Runs an already-verified module under the full process scheduler,
+ * exactly as -r does once nvcompile has produced a module: argv[0] is
+ * the entry function, argv[1:] its argument tuple, matching -r's own
+ * convention. Shared by -r (module built from source by nvcompile) and
+ * -X (module loaded from a saved bytecode file by nvread/nvverify), so
+ * a bytecode artifact produced by -c and executed by -X gets the same
+ * host callback table, IO streams and statistics as -r, unlike -x/-t
+ * (lib/vm.c's nvexecutelimits), which install no host at all and so
+ * cannot run any program that spawns, sends, receives or does I/O.
+ * Always exits(); takes ownership of m (frees it on every path) and
+ * never returns.
+ */
+static void
+runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, int stats)
+{
+	Biobuf bout, berr;
+	NvHeap h;
+	NvTerm args, rootpid;
+	NvLimits limits;
+	NvScheduler sched;
+	NvIO io;
+	char err[256], *entry;
+	int rc, state;
+	vlong start;
+	uintptr brk0;
+
+	start = 0;
+	brk0 = 0;
+	entry = argv[0];
+	nvheapinit(&h, 0);
+	Binit(&bout, 1, OWRITE);
+	if(makeargs(&h, argc-1, argv+1, &args, err, sizeof err) < 0){
+		nvheapfree(&h);
+		Bterm(&bout);
+		fprint(2, "%s\n", err);
+		nvmodulefree(m);
+		exits("argument");
+	}
+	/* See D066/D074 commentary in main() for these constants. */
+	limits.maxprocess = 65536;
+	limits.maxmailbox = 2*1024*1024;
+	limits.maxmessage = 128*1024;
+	limits.maxheap = heaplimit;
+	limits.gcstress = gcstress;
+	limits.maxframe = 1024;
+	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxduration = NvMaxduration;
+	limits.maxatom = 65536;
+	limits.gcoffload = 0;
+	if(stats){
+		start = nsec();
+		brk0 = (uintptr)sbrk(0);
+	}
+	if(nvschedinit(&sched, m, &limits, 1, 1000, err, sizeof err) < 0){
+		nvheapfree(&h);
+		Bterm(&bout);
+		fprint(2, "%s\n", err);
+		nvmodulefree(m);
+		exits("run");
+	}
+	Binit(&berr, 2, OWRITE);
+	io.out = &bout;
+	io.err = &berr;
+	nvschedsetio(&sched, &io);
+	rc = nvschedspawnroot(&sched, entry, args, &rootpid, err, sizeof err);
+	nvheapfree(&h);
+	if(rc < 0){
+		Bterm(&bout);
+		Bterm(&berr);
+		fprint(2, "%s\n", err);
+		nvschedfree(&sched);
+		nvmodulefree(m);
+		exits("run");
+	}
+	for(;;){
+		state = nvschedstep(&sched, err, sizeof err);
+		if(state != NvSchedProgress)
+			break;
+	}
+	if(stats){
+		Bflush(&bout);
+		Bflush(&berr);
+		printstats(&sched, start, brk0);
+	}
+	if(state == NvSchedError || sched.rootstate == NvRootFault || sched.rootstate == NvRootExit){
+		Bterm(&bout);
+		Bterm(&berr);
+		if(state == NvSchedError)
+			fprint(2, "scheduler: %s\n", err);
+		else if(sched.rootstate == NvRootFault)
+			fprint(2, "fault %s\n", sched.rootfault);
+		else{
+			fprint(2, "exit ");
+			Binit(&bout, 2, OWRITE);
+			printroot(&bout, sched.rootvalue);
+			Bputc(&bout, '\n');
+			Bterm(&bout);
+		}
+		if(state == NvSchedIdle)
+			fprint(2, "deadlock: %lud live process(es) orphaned by the root, none runnable\n", sched.runtime.nlive);
+		nvschedfree(&sched);
+		nvmodulefree(m);
+		exits("run");
+	}
+	if(state == NvSchedIdle){
+		Bterm(&bout);
+		Bterm(&berr);
+		fprint(2, "deadlock: %lud live process(es), none runnable\n", sched.runtime.nlive);
+		nvschedfree(&sched);
+		nvmodulefree(m);
+		exits("deadlock");
+	}
+	printroot(&bout, sched.rootvalue);
+	Bputc(&bout, '\n');
+	Bterm(&bout);
+	Bterm(&berr);
+	nvschedfree(&sched);
+	nvmodulefree(m);
+	exits(nil);
+}
+
 void
 main(int argc, char **argv)
 {
@@ -187,24 +309,17 @@ main(int argc, char **argv)
 	long n;
 	Parser p;
 	Program *pr;
-	Biobuf bout, bin, berr;
+	Biobuf bout, bin;
 	NvModule *m;
 	NvHeap h;
-	NvTerm args, rootpid;
+	NvTerm args;
 	NvFrag *result;
-	NvLimits limits;
-	NvScheduler sched;
-	NvIO io;
 	char err[256], *entry;
-	int fd, rc, state, stats;
-	vlong start;
-	uintptr brk0;
+	int fd, rc, stats;
 
 	file = nil;
 	mode = 0;
 	stats = 0;
-	start = 0;
-	brk0 = 0;
 	heaplimit = 0;
 	gcstress = 0;
 	/* rc may export an unset/restored variable as an empty /env file. */
@@ -235,6 +350,7 @@ main(int argc, char **argv)
 	case 'r': mode = 'r'; file = EARGF(usage()); break;
 	case 'x': mode = 'x'; file = EARGF(usage()); break;
 	case 't': mode = 't'; file = EARGF(usage()); break;
+	case 'X': mode = 'X'; file = EARGF(usage()); break;
 	default: usage();
 	}ARGEND
 	if(file == nil){
@@ -242,10 +358,10 @@ main(int argc, char **argv)
 		print("%s\n", version);
 		exits(nil);
 	}
-	if(mode != 'x' && mode != 't' && mode != 'r' && argc != 0) usage();
+	if(mode != 'x' && mode != 't' && mode != 'r' && mode != 'X' && argc != 0) usage();
 	if(mode == 'r' && argc < 1) usage();
-	if(mode == 'b' || mode == 'x' || mode == 't'){
-		if((mode == 'x' || mode == 't') && argc < 1)
+	if(mode == 'b' || mode == 'x' || mode == 't' || mode == 'X'){
+		if((mode == 'x' || mode == 't' || mode == 'X') && argc < 1)
 			usage();
 		fd = open(file, OREAD);
 		if(fd < 0)
@@ -263,6 +379,8 @@ main(int argc, char **argv)
 			nvmodulefree(m);
 			exits("verify");
 		}
+		if(mode == 'X')
+			runscheduled(m, argc, argv, heaplimit, gcstress, stats);
 		Binit(&bout, 1, OWRITE);
 		if(mode == 'b'){
 			nvdisasm(&bout, m);
@@ -321,137 +439,13 @@ main(int argc, char **argv)
 			nvdisasm(&bout, m);
 			nvmodulefree(m);
 		}else{
-			entry = argv[0];
-			nvheapinit(&h, 0);
-			if(makeargs(&h, argc-1, argv+1, &args, err, sizeof err) < 0){
-				nvheapfree(&h);
-				Bterm(&bout);
-				fprint(2, "%s\n", err);
-				nvmodulefree(m);
-				programfree(pr);
-				exits("argument");
-			}
 			/*
-			 * D066: mailbox and message limits are now word counts of
-			 * fragments including their root word, not bytes of the old
-			 * recursive NvValue representation (D040 is superseded).
-			 * maxheap is the enforced per-process word budget (-H);
-			 * 0 is unlimited, but collection still bounds garbage.
-			 * gcstress (-G) collects at every reservation. A process slot itself
-			 * remains small (NvProcess plus one NvExec and its frame
-			 * stack, a few hundred words at minimum), so maxprocess
-			 * below is still a sanity bound against runaway spawn loops,
-			 * not a capacity plan; 1000-node rings run fine. Exceeding
-			 * it faults the spawning process with system_limit (D039).
+			 * runscheduled always exits(); the AST is fully consumed by
+			 * nvcompile already, so free it before handing m off, since
+			 * control never returns here to reach the shared tail below.
 			 */
-			limits.maxprocess = 65536;
-			limits.maxmailbox = 2*1024*1024;
-			limits.maxmessage = 128*1024;
-			limits.maxheap = heaplimit;
-			limits.gcstress = gcstress;
-			limits.maxframe = 1024;
-			limits.maxtermdepth = NvMaxtermdepth;
-			limits.maxduration = NvMaxduration;
-			limits.maxatom = 65536;
-			/* D074: 0 = never off-process; no CLI option exists yet. */
-			limits.gcoffload = 0;
-			if(stats){
-				start = nsec();
-				brk0 = (uintptr)sbrk(0);
-			}
-			if(nvschedinit(&sched, m, &limits, 1, 1000, err, sizeof err) < 0){
-				nvheapfree(&h);
-				Bterm(&bout);
-				fprint(2, "%s\n", err);
-				nvmodulefree(m);
-				programfree(pr);
-				exits("run");
-			}
-			/*
-			 * D054-D057: install real stdout/stderr as the print/eprint
-			 * sinks before spawning the root, since nvschedspawn snapshots
-			 * the installed NvIO at spawn time (see nvsched.h). stdout
-			 * reuses the same Biobuf the CLI already uses for the final
-			 * root-value report, so printed output and that report share
-			 * one buffered stream in the order they actually happen.
-			 */
-			Binit(&berr, 2, OWRITE);
-			io.out = &bout;
-			io.err = &berr;
-			nvschedsetio(&sched, &io);
-			rc = nvschedspawnroot(&sched, entry, args, &rootpid, err, sizeof err);
-			/*
-			 * The scheduler copies the argument into the root process's
-			 * own heap at spawn (successful or not; on failure nothing
-			 * is retained either way), so the host-owned argument heap
-			 * can be freed as soon as this call returns.
-			 */
-			nvheapfree(&h);
-			if(rc < 0){
-				Bterm(&bout);
-				Bterm(&berr);
-				fprint(2, "%s\n", err);
-				nvschedfree(&sched);
-				nvmodulefree(m);
-				programfree(pr);
-				exits("run");
-			}
-			for(;;){
-				state = nvschedstep(&sched, err, sizeof err);
-				if(state != NvSchedProgress)
-					break;
-			}
-			if(stats){
-				Bflush(&bout);
-				Bflush(&berr);
-				printstats(&sched, start, brk0);
-			}
-			/*
-			 * A root fault or exit is reported before an idle scheduler
-			 * is. The scheduler keeps stepping after the root dies so the
-			 * remaining processes can finish; if instead they all block
-			 * forever (say, waiting for a message the dead root was going
-			 * to send), the run ends NvSchedIdle. That idleness is a
-			 * consequence of the root's failure, not the cause, so the
-			 * root diagnostic comes first and the orphaned processes are a
-			 * secondary line. Checking NvSchedIdle first here used to
-			 * swallow the root fault entirely and print only "deadlock".
-			 */
-			if(state == NvSchedError || sched.rootstate == NvRootFault || sched.rootstate == NvRootExit){
-				Bterm(&bout);
-				Bterm(&berr);
-				if(state == NvSchedError)
-					fprint(2, "scheduler: %s\n", err);
-				else if(sched.rootstate == NvRootFault)
-					fprint(2, "fault %s\n", sched.rootfault);
-				else{
-					fprint(2, "exit ");
-					Binit(&bout, 2, OWRITE);
-					printroot(&bout, sched.rootvalue);
-					Bputc(&bout, '\n');
-					Bterm(&bout);
-				}
-				if(state == NvSchedIdle)
-					fprint(2, "deadlock: %lud live process(es) orphaned by the root, none runnable\n", sched.runtime.nlive);
-				nvschedfree(&sched);
-				nvmodulefree(m);
-				programfree(pr);
-				exits("run");
-			}
-			if(state == NvSchedIdle){
-				Bterm(&bout);
-				Bterm(&berr);
-				fprint(2, "deadlock: %lud live process(es), none runnable\n", sched.runtime.nlive);
-				nvschedfree(&sched);
-				nvmodulefree(m);
-				programfree(pr);
-				exits("deadlock");
-			}
-			printroot(&bout, sched.rootvalue);
-			Bputc(&bout, '\n');
-			Bterm(&berr);
-			nvschedfree(&sched);
-			nvmodulefree(m);
+			programfree(pr);
+			runscheduled(m, argc, argv, heaplimit, gcstress, stats);
 		}
 	}else if(mode == 'a' || mode == 'A')
 		programprint(&bout, pr);
