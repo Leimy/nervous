@@ -866,6 +866,15 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		ulong nwake, sweeplaunched;
 		int havedeadline, allow;
 
+		/*
+		 * D074 amendment/M08-T04d "Test determinism": see the field
+		 * comment in nvsched.h. nil in production; called exactly once
+		 * per idle-branch entry, before anything else in this branch
+		 * runs.
+		 */
+		if(s->gcidlestep != nil)
+			s->gcidlestep(s);
+
 		for(i = 0; i < r->nslot; i++)
 			if(r->process[i].state == Prrunning){
 				snprint(err, nerr, "process left running outside scheduler dispatch");

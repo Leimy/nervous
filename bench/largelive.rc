@@ -3,7 +3,19 @@
 # mk benchmarks. Each command is a fresh host process. No runtime default
 # is changed by running this: gcoffload stays 0 (never off-process)
 # everywhere else in the tree until T04d chooses a value from this data.
+#
+# Usage: rc bench/largelive.rc [repeat]
+# repeat (default 3) is how many times each shape/gcoffload row runs, back
+# to back, so one invocation gives repeated-run data instead of a single
+# sample -- M08-T04d's own record of the first run's results (bench/
+# README.md) found off-process collection's effect went in OPPOSITE
+# directions at two different shapes and explicitly asked for repetition
+# before treating either direction as real rather than single-run noise.
 rfork E
+
+repeat=3
+if(! ~ $#* 0)
+	repeat=$1
 
 script=$0
 switch($script){
@@ -19,9 +31,11 @@ if(! test -x $benchdir/largelive){
 }
 
 fn measure {
-	echo '== largelive retainwords churn iterations peers rounds gcoffload:' $*
-	$benchdir/largelive $* || exit largelive
-	echo
+	for(i in `{seq 1 $repeat}){
+		echo '== largelive run' $i/$repeat 'retainwords churn iterations peers rounds gcoffload:' $*
+		$benchdir/largelive $* || exit largelive
+		echo
+	}
 }
 
 # Fixed shape: 50000-word live set (roughly a 400KB tuple), moderate churn

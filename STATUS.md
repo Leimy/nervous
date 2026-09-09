@@ -5,24 +5,27 @@ Operational source of truth. Settled design is in `docs/decisions.md`; benchmark
 ## Checkpoint and authorization
 
 ```text
-milestone: 08 - Memory, active but not complete
-checkpoint: PR2-T01, M08-T04a, M08-T04b, M08-T04p, M08-T04e, M08-T04c and M08-T04r
-  accepted; CLI-T01 (bytecode-under-scheduler mode + man page) accepted, outside
-  milestone 08
-implementation: PAUSED at user's request (session budget); no task is
-  in-flight, no write set is held by anyone
+milestone: 08 - Memory, COMPLETE; 09 - Binaries, not started
+checkpoint: PR2-T01, M08-T04a, M08-T04b, M08-T04p, M08-T04e, M08-T04c, M08-T04r
+  and M08-T04d accepted -- milestone 08 (Memory) is COMPLETE; CLI-T01
+  (bytecode-under-scheduler mode + man page) accepted, outside milestone 08
+implementation: no task in-flight, no write set held by anyone. Milestone 08
+  closed this session (T04d); milestone 09 has not been started or assigned
 coordinator: nervous-memory-coordinator (role label, not a discovered session identity)
 active source assignment: none
-next: T04r is done (fixture built, a real scheduler bug found and fixed along
-  the way, both `rc bench/largelive.rc` and both regression suites confirmed
-  passing, first results recorded in `bench/README.md`). Those results are
-  single-run and flagged not yet decision-grade -- see "M08-T04r" below for
-  the specific open question (off-process collection's tail was WORSE than
-  inline at one shape measured, better at another; needs repetition, not yet
-  explained). Next task is T04d: either gather more repeated-run data first,
-  or the user may choose to proceed with what exists. Requires the user's
-  go-ahead and an exact write-set assignment per the Resumption checklist,
-  same as always.
+next: Milestone 08 (Memory) is COMPLETE. T04d closed this session: `-o`/
+  `$nervous_gcoffload` CLI plumbing added, a deterministic regression for the
+  D074 false-idle amendment added (`gcidlestep` hook, `holdfalseidle`), and
+  three repeated `bench/largelive.rc` runs per shape/threshold confirmed a
+  real, repeatable crossover -- off-process collection hurts the tail
+  (~2.2x) at a 50000-word live set and helps (~2x) at 500000 words, bracketed
+  not located. `gcoffload` default stays 0 (D075); `NvGcsweepcap=8` stays
+  unmeasured/provisional. All four batch commands (both regression suites
+  under three environment combinations, plus the repeated benchmark run)
+  passed. Write set released. Milestone 09 (Binaries) and the mandatory R3
+  review are next; neither is started, and both require the user's go-ahead
+  and a fresh task/write-set assignment per the Resumption checklist, same
+  as always.
 source control: user requested a combined commit message; message supplied.
   No commit/push/staging performed or git status independently inspected by the coordinator.
   Do not assume the user has committed/pushed merely because this is an accepted save point.
@@ -30,11 +33,11 @@ source control: user requested a combined commit message; message supplied.
 
 M08-T04e and M08-T04c are both accepted: the user confirmed `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass on the current tree, the latter now also exercising `tests/memory/offloadtest`'s seven off-process lifecycle groups. This closes the last open acceptance gate for T04c (see the M08-T04c section below for the coordinator review and five fixes made before this confirmation).
 
-Milestone 08 remains open: T04d (policy measurement and milestone acceptance) is still outstanding, planned but unassigned. T04r (large-live-set latency baseline) is now done; its first results are recorded but flagged not yet decision-grade (see "M08-T04r" below). No formal review gate is active. R3 has not opened and is not complete. D074 (`docs/decisions.md`) settles the off-process ownership/wakeup/teardown protocol implemented and accepted in T04c, plus a scheduler false-idle bug found and fixed via T04r.
+**Milestone 08 (Memory) is complete.** T04d closed it this session: `gcoffload` stays 0 (D075, measurement-driven), the idle-sweep cap stays 8 (unmeasured, provisional, explicitly recorded as such), and every required test in `milestones/08-memory.md` is reconciled by the existing accepted suites (`gctest`, `autotest`, `offloadtest`) -- reread against that file's "Required tests"/"Exit criterion" before this closure, not merely assumed. No formal review gate is active; R3 (mandatory before milestone 10) has not opened. D074/D075 (`docs/decisions.md`) settle the off-process protocol, the false-idle fix found via T04r, and the final `gcoffload`/sweep-cap policy.
 
 CLI-T01 is accepted, independent of milestone 08 and not gating it: `cmd/nervous/main.c` gained `-X bytecode entry [args...]`, which loads a module saved by `-c` and runs it through the same scheduler, host callback table and `-s` statistics as `-r` (`-x`/`-t` still use the older hostless single-process executor and cannot run any program that spawns, sends, receives or does I/O). The scheduler-execution code is now shared via a new `runscheduled()` used by both `-r` and `-X`, so the two paths cannot drift apart. `man/1/nervous` is a new section-1 man page covering every flag, the argument convention, the bytecode file format, and every exit-status string. `mk tests benchmarks` builds clean. The user judged this did not need a `docs/decisions.md` entry. Write set (`cmd/nervous/main.c`, `README.md`, `man/1/nervous`) released.
 
-**Session paused here at the user's request** (out of budget for now). This is a clean stopping point: no task is assigned, no write set is held, the build is clean, and both regression suites pass. Resume by reading the Resumption checklist at the end of this file.
+**Milestone 08 is a clean stopping point**: no task is assigned, no write set is held, the build is clean, and every regression suite passes under every environment combination exercised so far (normal, CLI gcstress, and now CLI-forced-all-off-process). Resume by reading the Resumption checklist at the end of this file; the recommended next step is milestone 09, not a continuation of milestone 08.
 
 ## Accepted evidence
 
@@ -50,7 +53,7 @@ CLI-T01 is accepted, independent of milestone 08 and not gating it: `cmd/nervous
 
 | Milestone | State | Dependencies | Remaining scope |
 |---|---|---|---|
-| 08 Memory | active; T04d unassigned, paused | R2, 05, 06 | Final policy/acceptance (latency baseline done) |
+| 08 Memory | **complete** | R2, 05, 06 | none -- all tasks (T04a/b/p/e/c/r/d) accepted |
 | 09 Binaries | not-started | 04, 08 | Binary construction and matching |
 | R3 Memory review | not-started | 08, 09 | Root/fragment/representation/binary ownership gate |
 | 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement |
@@ -73,7 +76,7 @@ Every completed write set below is released. Planned tasks have no assignee or r
 | M08-T04q duplicate interpreter work | planned, optional, deferred | T04p | Time-boxed preflight/execution reuse; no safety or sizing-policy change; not a dependency of T04c |
 | M08-T04c off-process collection | done | T04e | D074 ownership protocol, collector procs, wakeup, failure and teardown correctness; five coordinator-applied correctness fixes during review (see M08-T04c section); `mk -a tests benchmarks` clean; `tests/memory/offloadtest.c` lifecycle suite; user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass |
 | M08-T04r large-live-set latency baseline | done | T04c | Fixture built and run; a real scheduler bug (false idle) found and fixed in `lib/sched.c`, recorded as a D074 amendment; user confirmed `rc bench/largelive.rc` runs clean and both `rc tests/run.rc`/`nervous_gcstress=1 rc tests/run.rc` still pass; first results recorded in `bench/README.md`, flagged single-run/not yet decision-grade. See "M08-T04r" section below |
-| M08-T04d policy and milestone acceptance | planned | T04c, T04r | Both-mode stress, representative latency/footprint measurements, recorded constants |
+| M08-T04d policy and milestone acceptance | done | T04c, T04r | `-o`/`$nervous_gcoffload` CLI plumbing added; `holdfalseidle` deterministic regression added (`gcidlestep` hook); three repeated runs per shape/threshold confirmed a real crossover (off-process hurts at 50000 words, helps at 500000, D075); `gcoffload` default stays 0, `NvGcsweepcap=8` stays unmeasured/provisional, both recorded with rationale; `mk tests benchmarks` clean; user confirmed all four batch invocations (`rc tests/run.rc`, `nervous_gcstress=1`, `nervous_gcstress=1 nervous_gcoffload=1`, `rc bench/largelive.rc 3`) passed. Write set released |
 | CLI-T01 bytecode-under-scheduler mode + man page | done | none (independent of milestone 08) | `-X` mode and shared `runscheduled()` in `cmd/nervous/main.c`; `README.md` `-X` docs; new `man/1/nervous`; `mk tests benchmarks` clean; no decision-record entry needed per user judgment |
 
 T04q is not a new milestone dependency gate and is not required before T04c; the user chose to proceed directly to off-process correctness. T04r was reordered after T04c: a threshold measurement needs the off-process mechanism to measure against, and current tiny-live-set benchmarks already show no existing workload would select a finite gcoffload value (see D074, "gcoffload default and every existing call site").
@@ -123,7 +126,7 @@ Accepted: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests
 
 ## Recommended next sequence
 
-T04c and T04r are both done. T04d is the one remaining item below; it is planned but unassigned, with no write set reserved.
+**Milestone 08 is complete.** T04c, T04r and T04d are all done (see their sections below for the accepted record). Milestone 09 (Binaries) is next, followed by the mandatory R3 review before milestone 10 -- neither is started, both are planned but unassigned, no write set reserved for either. Read `milestones/09-binaries.md` and `docs/questions.md`'s "Milestone 09 - Binaries" section before assigning that work.
 
 ### M08-T04r large-live-set latency baseline (done)
 
@@ -136,7 +139,7 @@ Built this session (self-executed by the coordinator, no sub-agent; the user gav
 
 **Write set expansion, same pattern as T04c's mkfile exception**: this session also touched `lib/sched.c` and `docs/decisions.md`, outside the fixture's originally-scoped `bench/`-only write set, because the bug found there could not otherwise be fixed or recorded. Also corrected: the "peers never allocate" claim in `bench/largelive.c`'s top comment and `bench/README.md` (both now describe the real, small allocation and why `gcoffload` must be chosen above peer heap sizes to isolate the owner); `bench/largelive.rc`'s off-process rows now use a threshold (1000) that catches only the owner instead of `gcoffload=1`; the owner-collections report in `bench/largelive.c` now reads the owner's own `NvExec` fields directly instead of a scheduler-wide aggregate that also counts every peer's own tiny collections; `measurerounds`' failure diagnostic now prints round/peer/step/nrunnable/gcoutstanding/err instead of a bare assertion. `mk tests benchmarks` builds clean after all of it.
 
-**Accepted.** User re-ran `rc bench/largelive.rc` after `mk tests benchmarks`: all five cases (50000/500000 retainwords, gcoffload 0/1000/25000) completed without error. User also confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass in full immediately after, reconfirming the `lib/sched.c` fix did not regress anything (it still has no deterministic regression test of its own -- would need a second test hold point to park multiple collectors and release them together; `rc bench/largelive.rc` plus the two full suites is the coverage today). Results recorded in `bench/README.md`'s "First real run" table. Write set released.
+**Accepted.** User re-ran `rc bench/largelive.rc` after `mk tests benchmarks`: all five cases (50000/500000 retainwords, gcoffload 0/1000/25000) completed without error. User also confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass in full immediately after, reconfirming the `lib/sched.c` fix did not regress anything. (At the time of this acceptance the fix still had no deterministic regression test of its own; T04d later added one -- `NvScheduler.gcidlestep` and `tests/memory/offloadtest.c`'s `holdfalseidle`, see that section below.) Results recorded in `bench/README.md`'s "First real run" table (superseded by T04d's repeated-run table). Write set released.
 
 **What the first run does and does not establish** (full detail and numbers in `bench/README.md`): the `baseline`-to-`loaded` p50 shift is present regardless of `gcoffload`, consistent with it being FIFO quantum-sharing with a continuously-runnable owner (D059), not GC. But the tail (p99.9/max) tells a genuinely mixed story: at retainwords=50000, off-process collection made the tail roughly *twice as bad* as inline in this run -- the opposite of D068's "fork cost is noise" assumption -- while at retainwords=500000 it *improved* p99.9 with `max` staying enormous (~4.1-4.3 ms) either way. The owner also completed fewer of its own collections under off-process than inline in the same wall-clock window at the smaller shape. All of this is single-run, one machine, not yet distinguishable from OS-scheduling noise now that off-process cases involve genuinely concurrent Plan 9 procs (inline has none) -- `bench/README.md` states plainly this is not yet a basis for choosing a default. Also recorded as a first data point in `docs/questions.md`'s persistent-collector-pool note: no longer purely hypothetical, still not confirmed.
 
@@ -150,14 +153,19 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Acceptance: forced build, normal/stress regressions, quanta 1/1000, and repeated unprofiled original/control benchmarks. Keep measured wins or a justified simplification; do not weaken checks to chase the stage-2 number.
 - Stopping rule: one bounded attempt, then proceed or defer.
 
-### Measure policy and close 08: T04d
+### Measure policy and close 08: T04d (done; milestone 08 complete)
 
-T04r's first run (above) found a mixed, not-yet-explained result (off-process worse at one shape, better at another) that is one run each on one machine -- repeating those `bench/largelive.rc` cases several times each, to separate a real effect from OS-scheduling noise now that off-process cases involve genuinely concurrent Plan 9 procs, is the natural first step of this task rather than a prerequisite blocking it.
+T04r's first run found a mixed, not-yet-explained result (off-process worse at one shape, better at another) that was one run each on one machine. Before that data could be trusted or acted on, two gaps had to close, both done this session:
 
-- Run full stress with inline-only and forced off-process collection. Rerun original and large-live-set benchmarks; choose gcoffload and any justified sizing/idle constants from results.
-- Current accepted defaults remain unchanged unless a separate measured decision replaces them. Record the chosen constants and evidence in decisions/questions/bench records.
-- Confirm bounded long-running memory and explain heap/message ownership without cross-heap dependencies. Reconcile all required tests in `milestones/08-memory.md` before marking it complete.
-- Then milestone 09 and the mandatory R3 review, in order. No new language features or multicore schedulers are part of this handoff.
+1. **Nothing could actually run "full stress with forced off-process collection."** `gcoffload` was `NvLimits`-only; every construction site and the CLI hardcoded 0. Added: `-o words` (mirrors `-H`/`-G` exactly) and `$nervous_gcoffload` (mirrors `$nervous_gcstress`, inherited by test runners the same way T04e's `rfork e` fix makes `nervous_gcstress` inherited) in `cmd/nervous/main.c`; documented in `man/1/nervous` (new `-o` entry, removed the now-stale "no CLI flag" BUGS note) and `README.md`. Applies only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler and therefore no off-process mechanism at all -- documented explicitly since this is an asymmetry with `-H`/`-G`, which do apply there). No existing test or benchmark's own `NvLimits.gcoffload = 0` construction is affected; this is a CLI-only default layered on top.
+2. **The D074 amendment (false idle) had no deterministic regression.** Reproducing the real race (every runnable slot's off-process collector completing between `finddispatchable`'s scan and the idle branch's `gcfoldall` call, two adjacent in-process calls with no syscall between them) is not practical by racing real collector procs -- confirmed by reading `nvschedstep` in full and checking with the advisor before committing to that conclusion. Added a second, structurally different test-only seam: `NvScheduler.gcidlestep` (`include/nvsched.h`), a plain function-pointer field (not malloc'd/shared like `gcsem`/`gchold`, since only the scheduler proc itself ever touches it), called once in `nvschedstep` right after `finddispatchable` reports nothing dispatchable and before the idle sweep/`gcfoldall` run; nil in production, zero cost outside the idle branch. `tests/memory/offloadtest.c` gained an eighth group, `holdfalseidle`: installs the hook to flip every outstanding exec's heap to idle-with-success directly (under its own lock, from the scheduler proc, so nothing races it) at exactly that point, forcing the precise interleaving the bug depends on, and asserts `NvSchedProgress` (not `NvSchedIdle`) plus `gcoutstanding == 0`. `tests/memory/README.md` updated (also fixed a pre-existing miscount: it said "six groups" and was missing `nooffloaddefault`'s bullet even before this session's addition; now correctly "eight groups" with both accounted for).
+3. `bench/largelive.rc` now takes an optional repeat-count argument (default 3), looping each shape/gcoffload row that many times so one invocation produces the repeated-run data T04r's own results said was needed, instead of the user re-running the whole script by hand.
+
+`mk tests benchmarks` builds clean. User ran, via `/dev/snarf`: `rc tests/run.rc`, `nervous_gcstress=1 rc tests/run.rc`, `nervous_gcstress=1 nervous_gcoffload=1 rc tests/run.rc` (genuinely new coverage: CLI-driven, forced-all-off-process stress across the entire existing test suite, not reachable before this session), and `rc bench/largelive.rc 3` (three repeated runs per shape/threshold). All passed, including the new `holdfalseidle` regression under every environment combination.
+
+**Decision made (not deferred): `gcoffload` stays 0.** The repeated data confirmed a real, repeatable crossover -- off-process collection hurts the tail (~2.2x) at a 50000-word owner live set and helps (~2x on p99.9/max) at 500000 words -- but only bracketed that crossover, not located it: the threshold value (1000 vs 25000) barely mattered at the small end, meaning no specific number in that bracket is supported by this evidence. Full reasoning, the repeated-run table, and the fixture duration-mismatch caveat found while writing this up (the 500000 rows' owner finishes early under inline but not under off-process, confounding their p50 comparison -- p99.9/max are unaffected) are in `bench/README.md`'s "Repeated runs (M08-T04d)" and `docs/decisions.md`'s D075. `docs/questions.md` records what would reopen this (a real >100k-word workload, or the persistent-collector-pool refinement). `NvGcsweepcap=8` is recorded as unmeasured and explicitly provisional -- this fixture's peers never grew large enough to trigger the idle-sweep path.
+
+Milestone 08's required tests and exit criterion (`milestones/08-memory.md`) are reconciled: reread that file's "Required tests"/"Exit criterion" against the accepted suites (`gctest`, `autotest`, `offloadtest`) before this closure, not assumed from memory. Write set released.
 
 ## Current implementation map
 
@@ -166,8 +174,8 @@ T04r's first run (above) found a mixed, not-yet-explained result (off-process wo
 - Roots/reservations: `include/nvexec.h`, `lib/exec.c`. Active registers only, retained stack capacity charged, small root-view scratch on the C stack, NvCollect request/retry and guard-aware failure. Standalone servicing in `lib/vm.c` preserves the reduction budget.
 - Processes: `include/nvproc.h`, `lib/process.c`. Fragment mailboxes, non-consuming recvneed before take, geometric slot capacity and lowest-free hint. Retired slots can outnumber the configured live-process limit; FIFO links use indices.
 - Scheduler: `include/nvsched.h`, `lib/sched.c`. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
-- CLI: `-H` word budget, `-G` stress, `-s` statistics. `nervous_gcstress=1` sets CLI stress default. `NvLimits.gcoffload` exists (M08-T04c); the CLI itself still hardcodes 0 (never off-process), matching D074's required safe default -- no CLI flag exposes it yet, deferred to T04d alongside the real threshold value.
-- Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (seven off-process lifecycle groups, M08-T04c), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest`.
+- CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-s` statistics. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
+- Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest` and `bench/largelive`.
 
 ## What the accepted measurements do and do not establish
 
@@ -180,7 +188,7 @@ T04r's first run (above) found a mixed, not-yet-explained result (off-process wo
 
 ## Remaining cautions
 
-- No offload default, adaptive sizing or heap shrinking has been implemented. D069 defers shrinking; `docs/questions.md` records the open policy measurements.
+- `gcoffload` default (0, D075) and the idle-sweep cap (`NvGcsweepcap=8`, still unmeasured/provisional) are recorded; adaptive sizing and heap shrinking remain unimplemented. D069 defers shrinking; `docs/questions.md` records the remaining open policy questions (what would reopen the `gcoffload` default, the persistent-collector-pool idea).
 - Collector cost includes classification/freeing of adopted fragments and scratch/trial work, not just copying live words. Transient old/new/scratch space is not the retained-data maxheap budget.
 - Host malloc failure paths have source review but no deterministic injection coverage. Root descriptors, C pointers and custom host callback contracts are trusted; verifier guarantees apply to bytecode, not arbitrary host metadata.
 - Global atom synchronization and multi-scheduler ownership remain milestone-10 obligations; do not quietly expand T04q into that work.
@@ -188,9 +196,9 @@ T04r's first run (above) found a mixed, not-yet-explained result (off-process wo
 
 ## Resumption checklist
 
-1. Obtain user go-ahead for the chosen next task. **T04r is done** (see "M08-T04r" under Recommended next sequence for its accepted results and open questions the data raised). The recommended next task is **T04d**, which per its own section above should start by repeating `bench/largelive.rc`'s cases to separate the mixed first-run result from noise before choosing constants from it. If resuming T04q instead, or anything not already scoped above, fall back to the fuller read list in step 3.
+1. Obtain user go-ahead for the chosen next task. **Milestone 08 is complete** (T04a through T04d, all accepted; see the "Recommended next sequence" sections above for the full record). The recommended next task is **milestone 09 (Binaries)** -- read `milestones/09-binaries.md` and `docs/questions.md`'s "Milestone 09 - Binaries" section first; nothing about it is scoped yet beyond that file. If resuming T04q instead (still optional, still deferred, not a dependency of anything), or anything not already scoped above, fall back to the fuller read list in step 3.
 2. Confirm actual source-control state with the user; preserve the accepted checkpoint before new edits. A commit message is not evidence of a commit. Nothing in this session committed or pushed anything.
 3. (Only if step 1's fast path doesn't apply) Read README, this status, milestone 08, D061-D074 (D074 especially, including its five coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
-4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. T04e, T04c, T04r and CLI-T01 are all done and their write sets released; T04d remains unassigned and needs a fresh task row plus an exact write set before any edit begins.
+4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d) and CLI-T01 are done and their write sets released; milestone 09 has no task rows yet and needs them created, with exact write sets, before any edit begins.
 5. Build with mk after edits. User runs behavioral tests/benchmarks; never execute scripts, cleaning, installation or source-control commands through the compilation-only mk tool.
 6. If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.

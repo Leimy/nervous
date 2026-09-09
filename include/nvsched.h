@@ -119,6 +119,31 @@ struct NvScheduler {
 	uvlong gcofffallback;
 	long *gcsem;
 	long *gchold;
+	/*
+	 * D074 amendment/M08-T04d "Test determinism": a second test-only
+	 * seam, nil (no-op) in production like gchold above but structurally
+	 * different from it -- this one is a plain function-pointer field,
+	 * not a malloc'd shared word, because it is called and only ever
+	 * touched by the scheduler proc itself, never by a forked collector
+	 * child (RFMEM sharing is irrelevant here). Called exactly once,
+	 * inside nvschedstep, immediately after finddispatchable reports
+	 * nothing currently dispatchable and before the idle sweep or
+	 * gcfoldall run. It exists because the false-idle bug this amendment
+	 * fixed (r->nrunnable != 0 check above gcoutstanding==0) depends on
+	 * every currently-outstanding off-process collector completing
+	 * between finddispatchable's per-slot scan and gcfoldall's scan --
+	 * two adjacent, fast, in-process calls with no syscall or existing
+	 * hold point between them, a window nvschedgchold's park-in-the-
+	 * child design cannot pin (releasing it only controls when a real
+	 * collector CHILD resumes, not this scheduler-side interleaving).
+	 * A test installs this hook to flip every outstanding exec's heap to
+	 * idle-with-success directly, under its own lock, from the
+	 * scheduler proc -- exactly what a real collector child would have
+	 * published, just done without needing one to actually race for it.
+	 * See tests/memory/offloadtest.c's holdfalseidle, the one test that
+	 * sets this field.
+	 */
+	void (*gcidlestep)(NvScheduler *);
 	int profile;		/* opt-in real monotonic elapsed timing, default off */
 	uvlong execns;		/* includes host callbacks and nested spawn time */
 	uvlong gcns;		/* demand + idle collection, excludes startup */

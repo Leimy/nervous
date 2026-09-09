@@ -14,7 +14,7 @@ static char *version = "nervous frontend 4";
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-sG] [-H heapwords] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-sG] [-H heapwords] [-o words] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
 	exits("usage");
 }
 
@@ -192,7 +192,7 @@ printroot(Biobuf *b, NvFrag *f)
  * never returns.
  */
 static void
-runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, int stats)
+runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, uvlong gcoffload, int stats)
 {
 	Biobuf bout, berr;
 	NvHeap h;
@@ -227,7 +227,7 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 	limits.maxtermdepth = NvMaxtermdepth;
 	limits.maxduration = NvMaxduration;
 	limits.maxatom = 65536;
-	limits.gcoffload = 0;
+	limits.gcoffload = gcoffload;
 	if(stats){
 		start = nsec();
 		brk0 = (uintptr)sbrk(0);
@@ -303,9 +303,9 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 void
 main(int argc, char **argv)
 {
-	char *file, *src, *stressenv;
+	char *file, *src, *stressenv, *offloadenv;
 	int mode, gcstress;
-	vlong heaplimit;
+	vlong heaplimit, gcoffload;
 	long n;
 	Parser p;
 	Program *pr;
@@ -322,6 +322,7 @@ main(int argc, char **argv)
 	stats = 0;
 	heaplimit = 0;
 	gcstress = 0;
+	gcoffload = 0;
 	/* rc may export an unset/restored variable as an empty /env file. */
 	stressenv = getenv("nervous_gcstress");
 	if(stressenv != nil){
@@ -334,11 +335,33 @@ main(int argc, char **argv)
 		}
 		free(stressenv);
 	}
+	/*
+	 * D074/M08-T04d: $nervous_gcoffload sets the default off-process
+	 * collection threshold (same word units and 0-means-never polarity
+	 * as NvLimits.gcoffload) the same way $nervous_gcstress sets the
+	 * gcstress default -- so test runners that already `rfork e` to
+	 * preserve nervous_gcstress (T04e) inherit this one too, letting a
+	 * whole rc script force off-process stress without touching every
+	 * individual invocation.
+	 */
+	offloadenv = getenv("nervous_gcoffload");
+	if(offloadenv != nil){
+		if(offloadenv[0] != 0 && (parseint(offloadenv, &gcoffload) < 0 || gcoffload < 0)){
+			fprint(2, "nervous: invalid nervous_gcoffload (expected empty or a non-negative decimal word count)\n");
+			free(offloadenv);
+			exits("environment");
+		}
+		free(offloadenv);
+	}
 	ARGBEGIN{
 	case 's': stats = 1; break;
 	case 'G': gcstress = 1; break;
 	case 'H':
 		if(parseint(EARGF(usage()), &heaplimit) < 0 || heaplimit < 0)
+			usage();
+		break;
+	case 'o':
+		if(parseint(EARGF(usage()), &gcoffload) < 0 || gcoffload < 0)
 			usage();
 		break;
 	case 'a': mode = 'a'; file = EARGF(usage()); break;
@@ -380,7 +403,7 @@ main(int argc, char **argv)
 			exits("verify");
 		}
 		if(mode == 'X')
-			runscheduled(m, argc, argv, heaplimit, gcstress, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, stats);
 		Binit(&bout, 1, OWRITE);
 		if(mode == 'b'){
 			nvdisasm(&bout, m);
@@ -445,7 +468,7 @@ main(int argc, char **argv)
 			 * control never returns here to reach the shared tail below.
 			 */
 			programfree(pr);
-			runscheduled(m, argc, argv, heaplimit, gcstress, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, stats);
 		}
 	}else if(mode == 'a' || mode == 'A')
 		programprint(&bout, pr);

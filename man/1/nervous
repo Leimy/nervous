@@ -11,6 +11,10 @@ nervous \- compile and run Nervous, a concurrent language and register virtual m
 .I heapwords
 ]
 [
+.B \-o
+.I words
+]
+[
 .B \-a
 .I file
 |
@@ -128,6 +132,53 @@ of
 regardless.  A process that cannot fit inside a non-zero budget after
 collecting faults
 .BR system_limit .
+.TP
+.BI \-o " words"
+Set the off-process collection threshold (D074): a process whose heap
+holds at least
+.I words
+used-plus-adopted words at collection time runs that collection in a
+separate forked proc instead of inline, so a large collection pauses
+only the process being collected, not the whole scheduler.
+.I words
+of
+.B 0
+(the default) means never off-process, matching every existing
+benchmark and this flag's absence before it existed; a
+.I words
+of
+.B 1
+forces every real collection off-process, since every execution heap
+holds at least one live word (its argument tuple).  Equivalent to
+setting
+.B $nervous_gcoffload
+to
+.I words
+in the environment, which
+.I nervous
+also honors as the default when
+.B \-o
+is absent, the same way
+.B $nervous_gcstress
+supplies
+.BR \-G 's
+default; an empty value means never off-process and any other
+malformed value is a usage error named
+.BR environment .
+Unlike
+.B \-H
+and
+.BR \-G ,
+this has no effect under
+.B \-x
+or
+.B \-t
+(the standalone single-process executor has no scheduler and
+therefore no off-process collection mechanism at all); it applies
+only under
+.B \-r
+and
+.BR \-X .
 .PP
 The mode flags:
 .TP
@@ -294,6 +345,8 @@ following short status strings, and a diagnostic on standard error:
 .BR environment
 (a malformed
 .B $nervous_gcstress
+or
+.B $nervous_gcoffload
 value),
 .BR parse ,
 .BR compile ,
@@ -361,5 +414,4 @@ or
 .BR eprint ;
 use
 .B \-X
-for those. There is no CLI flag to force off-process collection
-(D074); off-process behavior is currently a fixed internal default.
+for those.

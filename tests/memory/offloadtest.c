@@ -581,6 +581,125 @@ holddeadlock(void)
 }
 
 /*
+ * D074 amendment regression (M08-T04d), STATUS/decisions.md: finddispatchable
+ * can return 0 not because the run queue is empty but because every
+ * runnable slot's heap was NvHeapCollecting at the moment of the scan; if
+ * every one of those collectors completes before gcfoldall runs moments
+ * later in the SAME nvschedstep call, gcoutstanding reaches 0 while
+ * nrunnable is still nonzero -- a false idle, unless the r->nrunnable
+ * check added by the amendment catches it. Racing real collector procs
+ * for this exact interleaving is not practical: the window is between two
+ * adjacent, fast, in-process calls (finddispatchable's scan and
+ * gcfoldall) with no syscall or existing hold point between them, so
+ * nvschedgchold's park-in-the-child design (releasing controls only when
+ * a real child resumes) cannot pin it. This uses NvScheduler's gcidlestep
+ * test hook instead, to force the exact interleaving directly from the
+ * scheduler proc: flip every outstanding exec's heap to idle-with-success
+ * under its own lock -- exactly what a real collector child would have
+ * published -- at the one point in nvschedstep between finddispatchable's
+ * verdict and the idle branch's own gcfoldall call.
+ */
+static void
+gcidlestephook(NvScheduler *s)
+{
+	NvRuntime *r;
+	NvExec *e;
+	ulong i;
+
+	r = &s->runtime;
+	for(i = 0; i < r->nslot; i++){
+		e = r->process[i].exec;
+		if(e == nil || !e->offlaunched)
+			continue;
+		lock(&e->heap.lock);
+		e->heap.owner = NvHeapIdle;
+		e->gcretry = 1;
+		e->livewords = 1;
+		unlock(&e->heap.lock);
+	}
+}
+
+static void
+holdfalseidle(void)
+{
+	char *src =
+		"fn holder() {\n"
+		"	x = ${1, 2, 3};\n"
+		"	receive {\n"
+		"		'go => 'done;\n"
+		"	}\n"
+		"}\n";
+	enum { N = 4 };
+	NvModule *m;
+	NvLimits l;
+	NvScheduler s;
+	NvTerm pid[N];
+	NvExec *e[N];
+	char err[256];
+	int i;
+
+	m = compile("holdfalseidle", src);
+	limits(&l, 1);
+	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
+	for(i = 0; i < N; i++){
+		check(nvschedspawn(&s, "holder", nvtuple(&hostheap, nil, 0), &pid[i], err, sizeof err) == 0, err);
+		e[i] = s.runtime.process[nvpidslot(pid[i])].exec;
+		e[i]->gcstress = 1;
+	}
+
+	nvschedgchold(&s, 1);
+	/* One launch step per process, exactly like holdall: every process
+	 * ends up Prrunnable and NvHeapCollecting, held. */
+	for(i = 0; i < N; i++)
+		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "launch step");
+	for(i = 0; i < N; i++)
+		check(e[i]->heap.owner == NvHeapCollecting && e[i]->offlaunched, "a process did not launch its collector");
+	check(s.gcoutstanding == (uvlong)N, "not every process launched a collector");
+
+	/*
+	 * The bug under test: with the hold still engaged (so nothing a real
+	 * collector child does can interfere -- they remain parked the
+	 * entire time), the next nvschedstep call's finddispatchable finds
+	 * every runnable slot collecting and requeues all N (nothing
+	 * dispatchable this pass, nrunnable still N). Installing the hook
+	 * makes every one of those N collections complete inside THIS SAME
+	 * call, right before the idle sweep/gcfoldall run -- exactly the
+	 * interleaving enough concurrent real collectors could hit by chance
+	 * (bench/largelive.c did), pinned here instead of raced for.
+	 */
+	s.gcidlestep = gcidlestephook;
+	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress,
+		"reported idle/deadlock instead of progress when every runnable "
+		"process's collector completed in the same step it was found "
+		"undispatchable (the D074 amendment's false-idle bug)");
+	check(s.gcoutstanding == 0, "gcoutstanding did not drain to zero after the hook folded every collector");
+	for(i = 0; i < N; i++)
+		check(!e[i]->offlaunched && e[i]->heap.owner == NvHeapIdle, "a collector was not folded by the hook step");
+	s.gcidlestep = nil;
+
+	/*
+	 * The real collector children are still parked; releasing them now
+	 * just lets each wake, take the lock, write Idle over Idle
+	 * (idempotent) and semrelease once more (a stale credit the existing
+	 * drain/gcfoldall machinery already accounts for generically -- see
+	 * gcdrain's comment). reapflag's bound is not a real wait: offlaunched
+	 * already cleared above.
+	 */
+	nvschedgchold(&s, 0);
+	for(i = 0; i < N; i++)
+		reapflag(&s, &e[i]->offlaunched, err, sizeof err);
+
+	for(i = 0; i < N; i++)
+		check(nvprocsend(&s.runtime, pid[i], nvatom("go"), err, sizeof err) == 1, "wake message failed");
+	check(drive(&s, err, sizeof err) == NvSchedDone, "scheduler did not finish");
+	check(s.completed == (uvlong)N, "not every holder completed");
+
+	nvschedfree(&s);
+	nvmodulefree(m);
+	print("ok - a false idle report is not possible when every runnable process's collector completes in the same step it was found undispatchable (D074 amendment regression)\n");
+}
+
+/*
  * Regression safety for the corrected D074 polarity: gcoffload==0 must
  * never launch a collector, even under gcstress forcing many inline
  * collections back to back.
@@ -630,6 +749,7 @@ main(void)
 	holdall();
 	holdsweepcap();
 	holddeadlock();
+	holdfalseidle();
 	nooffloaddefault();
 	nvheapfree(&hostheap);
 	print("all off-process lifecycle tests passed\n");

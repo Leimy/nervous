@@ -55,15 +55,13 @@ Distribution, maps, floats, links, monitors, general FFI, code replacement, and 
 
 ## Current position
 
-CLI evidence correction (T04e): empty `nervous_gcstress` incorrectly caused usage, and test runners discarded inherited stress via `rfork E`. Both are now repaired and compile; fresh user-run normal/CLI-stress suites are pending. Earlier passes retain normal and explicit C stress evidence, not full CLI-stress coverage. Feature work remains paused; see STATUS.
+Milestones 00-08 and reviews R1-R2 are complete. Milestone 08 (process-local heaps and garbage collection, including off-process collection for large live sets) closed with M08-T04d: `docs/decisions.md`'s D061-D075 record the settled design, from tagged-term representation through the final `gcoffload` default (0, never off-process -- a real crossover was measured but only bracketed, not located, so no positive default is supported by the evidence; see D075 and `bench/README.md`). The latest benchmark evidence is in `bench/README.md`.
 
-Milestones 00-07 and reviews R1-R2 are complete. Milestone 08 is active: verified guard boundaries, automatic process-local inline GC, accounting/stress controls, and the first bounded performance pass are accepted on user-confirmed passing tests. The latest benchmark evidence is in `bench/README.md`; historical pre-GC numbers are not current performance claims.
-
-Implementation is paused at the accepted T04p save point at the user's request. Off-process GC, its ownership/wakeup/teardown tests, and final policy/acceptance measurements remain milestone-08 work. No review gate is currently active; R3 is still future work. `STATUS.md` is authoritative for current assignments and resumption.
+Milestone 09 (Binaries) is next, followed by the mandatory R3 review before milestone 10 (Multicore). Neither is started or assigned. `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md` and `milestones/08-memory.md`. D061-D073 record the current design; the status lists accepted evidence and planned, unassigned next tasks. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Commit/push status has not been independently established; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
+Read `STATUS.md` and `milestones/08-memory.md` (now closed) before starting milestone 09. D061-D075 record the settled milestone-08 design; the status lists accepted evidence and planned, unassigned next tasks. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Commit/push status has not been independently established; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
 
 ## Try it
 
@@ -84,7 +82,9 @@ rc tests/run.rc
 nervous_gcstress=1 rc tests/run.rc
 ```
 
-Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also enables it. Other nonempty environment values produce a diagnostic naming `nervous_gcstress`. The repaired runners use `rfork e` to preserve the inherited setting in a private environment. The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. This inline checkpoint is accepted; off-process collection and final memory-policy measurements remain future milestone-08 work. See STATUS for the implementation pause and planned continuation.
+Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also enables it. Other nonempty environment values produce a diagnostic naming `nervous_gcstress`. The repaired runners use `rfork e` to preserve the inherited setting in a private environment. The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. This inline checkpoint is accepted (D072); off-process collection (D074) is also implemented, accepted (M08-T04c), and policy-tuned (M08-T04d, D075).
+
+`-o words` (D074) sets the off-process collection threshold: a heap with at least `words` used-plus-adopted words collects in a separate forked proc instead of inline, so one large collection pauses only its own process. `0` (the default) never offloads; `1` forces every real collection off-process. Only `-r`/`-X` build a scheduler, so unlike `-H`/`-G` this has no effect under `-x`/`-t`. `$nervous_gcoffload` supplies the default the same way `$nervous_gcstress` does for `-G`. The default stays `0`: M08-T04d measured a real crossover (off-process hurts at a 50000-word live set, helps at 500000) but only bracketed it, not located it, so no positive default is supported by the evidence (D075, `bench/README.md`). Every test and benchmark in this tree hardcodes `gcoffload = 0` at its own `NvLimits` construction, independent of this CLI default either way.
 
 ## Working with multiple agents
 

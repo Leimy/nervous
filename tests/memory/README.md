@@ -74,7 +74,7 @@ Six groups, ending with `all automatic inline collector tests passed`:
 
 ## offloadtest: off-process collection lifecycle (M08-T04c, D074)
 
-Six groups, ending with `all off-process lifecycle tests passed`. Every
+Eight groups, ending with `all off-process lifecycle tests passed`. Every
 scenario uses `nvschedgchold` (a test-only hook, a no-op in production)
 to park a launched off-process collector deterministically just before
 it publishes completion, instead of racing real scheduling timing. The
@@ -106,6 +106,14 @@ observation happens, not the mechanism itself.
   opportunistic idle sweep at once; the sweep caps how many it forks,
   collecting the rest inline in the same pass, and the scheduler
   reports progress, never idle, while the capped collectors are held.
+- Regression safety for the D074 amendment (M08-T04d, found via
+  `bench/largelive.c`): a dedicated test-only scheduler hook
+  (`gcidlestep`, nil/no-op in production) forces every currently
+  outstanding off-process collector to complete in the same
+  `nvschedstep` call that found nothing dispatchable, reproducing the
+  exact interleaving that used to report a false idle -- not
+  practical to race real collector procs for, since the window is
+  between two adjacent in-process calls with no syscall between them.
 - Regression safety for the corrected D074 polarity: `gcoffload==0`
   never launches a collector, even under `gcstress` forcing many inline
   collections back to back.
