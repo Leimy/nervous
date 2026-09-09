@@ -1,0 +1,365 @@
+.TH NERVOUS 1
+.SH NAME
+nervous \- compile and run Nervous, a concurrent language and register virtual machine
+.SH SYNOPSIS
+.B nervous
+[
+.B \-sG
+]
+[
+.B \-H
+.I heapwords
+]
+[
+.B \-a
+.I file
+|
+.B \-A
+.I v2file
+|
+.B \-b
+.I bytecode
+|
+.B \-c
+.I source
+|
+.B \-f
+.I file
+|
+.B \-F
+.I v2file
+|
+.B \-r
+.I source entry
+[
+.I args ...
+]
+|
+.B \-x
+.I bytecode entry
+[
+.I args ...
+]
+|
+.B \-t
+.I bytecode entry
+[
+.I args ...
+]
+|
+.B \-X
+.I bytecode entry
+[
+.I args ...
+]
+]
+.PP
+.B nervous
+.SH DESCRIPTION
+.I Nervous
+is an experimental Erlang-like concurrent language and a portable
+64-bit register virtual machine.  Source files conventionally end in
+.BR .nv .
+Exactly one mode flag selects what
+.I nervous
+does; with no mode flag and no arguments it prints its version string
+and exits.  Every mode reads a single named file; only
+.BR \-r ,
+.BR \-x ,
+.BR \-t
+and
+.B \-X
+also take a trailing
+.I entry
+function name and, after it, an argument list for that function
+(see
+.B "ARGUMENTS"
+below). Passing trailing arguments to any other mode is a usage
+error.
+.PP
+The common flags, meaningful whenever a program actually executes
+(\fB\-r\fR, \fB\-x\fR, \fB\-t\fR, \fB\-X\fR), are:
+.TP
+.B \-s
+After the run, print scheduler statistics to standard error: wall
+time, processes spawned and peak live, dispatches and reductions,
+messages sent and nanoseconds per message, collection counts, and
+host allocation high-water bytes. The wall time is measured from
+just before the scheduler (or, for
+.BR \-x / \-t ,
+the standalone executor) is created, so it excludes lexing, parsing
+and compiling \(em only
+.B \-r
+and
+.B \-X
+build a scheduler, so
+.B \-s
+has no effect under
+.BR \-b ,
+.B \-x
+or
+.BR \-t .
+.TP
+.B \-G
+Force a garbage collection at every allocating instruction's
+reservation, instead of only when the process heap is under
+pressure. Intended for exercising the collector in testing; slower
+than the default. Equivalent to setting
+.B $nervous_gcstress
+to
+.B 1
+in the environment, which
+.I nervous
+also honors as the default when
+.B \-G
+is absent; an empty or
+.B 0
+value means normal execution, and any other value is a usage error
+named
+.BR environment .
+.TP
+.BI \-H " heapwords"
+Set the per-process live-object word budget (used heap objects,
+adopted fragments and retained frame-stack capacity).
+.I heapwords
+of
+.B 0
+(the default) means unlimited; collection still bounds garbage
+regardless.  A process that cannot fit inside a non-zero budget after
+collecting faults
+.BR system_limit .
+.PP
+The mode flags:
+.TP
+.BI \-f " file"
+Format
+.I file
+(current syntax) to standard output. Formatting is stdout-only and
+preserves comment text and order, though a trailing comment may move
+to a standalone line.
+.TP
+.BI \-F " v2file"
+Like
+.BR \-f ,
+but read
+.I v2file
+in the previous (v2) surface syntax
+.RI ( "fn name { ${..} => body; }" ,
+call-shaped
+.BR send / spawn )
+and rewrite it into current syntax. Use this once to migrate old
+source; do not depend on the v2 syntax otherwise.
+.TP
+.BI \-a " file"
+Parse
+.I file
+(current syntax) and print its abstract syntax tree to standard
+output. Diagnostic only.
+.TP
+.BI \-A " v2file"
+Like
+.BR \-a ,
+but parse
+.I v2file
+in the v2 compatibility syntax.
+.TP
+.BI \-c " source"
+Compile
+.I source
+to bytecode and print it, verified, in the "Symbolic Bytecode v0"
+text format to standard output (see
+.B "BYTECODE FILES"
+below). This performs the same lexing, parsing, code generation and
+verification
+.B \-r
+does, but stops before execution; save the output to a file to
+separate compilation from a later run.
+.TP
+.BI \-b " bytecode"
+Read
+.I bytecode
+(a file previously produced by
+.BR \-c ),
+verify it, and print its disassembly to standard output. Does not
+execute anything; a bare sanity check of a saved artifact.
+.TP
+.BI \-r " source entry " "[ args ... ]"
+Compile
+.I source
+and run it: spawn
+.I entry
+as the root process under the full cooperative scheduler, with
+process spawning, message passing, timers and host
+.BR print / eprint
+output all available, and step the scheduler until the root process
+and every process it can still affect have settled. Prints the
+root's final value (or, on an uncaught exit, that exit reason) to
+standard output.
+.TP
+.BI \-x " bytecode entry " "[ args ... ]"
+Read and verify
+.I bytecode
+(as
+.BR \-b ),
+then run
+.I entry
+directly with no process scheduler and no host callback table
+installed. This executes only straight-line, single-process
+computation: any instruction that needs a host \(em
+.BR self ,
+.BR spawn ,
+.BR send ,
+.BR receive ,
+.B print
+or
+.B eprint
+\(em faults
+.B bad_process_context
+immediately. Use
+.B \-X
+instead for a program that uses processes.
+.TP
+.BI \-t " bytecode entry " "[ args ... ]"
+Like
+.BR \-x ,
+but additionally trace every executed instruction (reduction count,
+function, program counter and opcode) to standard error, and prefix
+the final result with
+.BR "value " .
+Same single-process restriction as
+.BR \-x .
+.TP
+.BI \-X " bytecode entry " "[ args ... ]"
+Read and verify
+.I bytecode
+(as
+.BR \-b ),
+then run
+.I entry
+under the same full process scheduler
+.B \-r
+uses \(em the same host callbacks, I/O streams and
+.B \-s
+statistics \(em rather than the standalone executor
+.B \-x / \-t
+use. This is the pairing for
+.BR \-c :
+compile once, save the result, and run it as many times as needed
+without repeating lexing, parsing or code generation, while still
+supporting programs that spawn processes and pass messages (unlike
+.BR \-x / \-t ).
+.SH ARGUMENTS
+For
+.BR \-r ,
+.BR \-x ,
+.B \-t
+and
+.BR \-X ,
+each word after
+.I entry
+becomes one element of the tuple passed as
+.IR entry 's
+single argument, in order.  A word beginning with a quote
+.RI ( ' )
+followed by at least one more character becomes the atom named by
+the rest of the word (the same quoted-atom convention as source
+literals); any other word must be a valid signed 64-bit decimal
+integer (Nervous has no other literal argument forms), and is passed
+as an integer term.  Anything else is a usage error named
+.BR argument .
+.SH "BYTECODE FILES"
+The file
+.B \-c
+writes and
+\fB\-b\fR/\fB\-x\fR/\fB\-t\fR/\fB\-X\fR
+read is the "Symbolic Bytecode v0" module format documented in
+.B docs/bytecode.md
+in the Nervous source tree: a canonical, line-oriented, human-
+readable text encoding (module header, constant pool, then one
+function per
+.B func
+\&...
+.B end
+block, one instruction per line), not a packed binary format. It
+exists as a stable fixture and diagnostic aid, and to let compilation
+be timed and cached separately from execution; it is explicitly not
+the language's final portable encoding.
+.SH DIAGNOSTICS
+On success,
+.I nervous
+exits with the empty status. On failure it exits with one of the
+following short status strings, and a diagnostic on standard error:
+.BR usage
+(bad flags or arguments to the command itself),
+.BR environment
+(a malformed
+.B $nervous_gcstress
+value),
+.BR parse ,
+.BR compile ,
+.BR bytecode
+(a malformed
+\fB\-b\fR/\fB\-x\fR/\fB\-t\fR/\fB\-X\fR
+file),
+.BR verify
+(the loaded bytecode failed verification),
+.BR argument
+(a malformed entry argument, or out of memory building it),
+.BR fault
+(an uncaught process fault under
+.BR \-x / \-t ),
+.BR run
+(a scheduler or root-process failure under
+.BR \-r / \-X ),
+and
+.BR deadlock
+(every remaining process is blocked and none is runnable).
+.SH EXAMPLES
+Format and compile:
+.IP
+.EX
+nervous -f examples/arithmetic.nv
+nervous -c examples/arithmetic.nv
+.EE
+.PP
+Run a process-based program from source, with statistics:
+.IP
+.EX
+nervous -s -r examples/ring.nv main 1000 2000
+.EE
+.PP
+Compile once, then run the saved bytecode repeatedly without paying
+for lexing, parsing or code generation on each run:
+.IP
+.EX
+nervous -c examples/ring.nv > ring.nvbc
+nervous -s -X ring.nvbc main 1000 2000
+.EE
+.SH SOURCE
+.B cmd/nervous/main.c
+.br
+.B lib
+.SH SEE ALSO
+.B README.md
+and
+.B docs/bytecode.md ,
+.B docs/semantics.md ,
+.B docs/decisions.md
+in the Nervous source tree.
+.br
+.IR mk (1),
+.IR rc (1)
+.SH BUGS
+The
+.B \-x
+and
+.B \-t
+modes cannot run any program that spawns a process, sends or
+receives a message, or calls
+.B print
+or
+.BR eprint ;
+use
+.B \-X
+for those. There is no CLI flag to force off-process collection
+(D074); off-process behavior is currently a fixed internal default.

@@ -940,6 +940,21 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		gcfoldall(s);
 		if(s->gcoutstanding == 0){
 			/*
+			 * D074 amendment (found via bench/largelive.c during
+			 * M08-T04r): finddispatchable can return 0 not because the
+			 * runnable queue is empty but because every runnable slot's
+			 * heap was NvHeapCollecting at that moment. gcfoldall just
+			 * proved every offlaunched exec has completed and been
+			 * folded, so any such runnable slot is now genuinely
+			 * dispatchable -- the very next finddispatchable call would
+			 * find it immediately. Reporting NvSchedIdle here with
+			 * nrunnable != 0 would be exactly the false idle the "never
+			 * falsely report idle or deadlock" corollary above forbids.
+			 * Report progress instead and let the caller step again.
+			 */
+			if(r->nrunnable != 0)
+				return NvSchedProgress;
+			/*
 			 * D074 corollary: with no collector a factor, behave
 			 * exactly as before off-process collection existed.
 			 */

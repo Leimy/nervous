@@ -1,0 +1,55 @@
+#!/bin/rc
+# M08-T04r large-live-set latency baseline. Run from any directory after
+# mk benchmarks. Each command is a fresh host process. No runtime default
+# is changed by running this: gcoffload stays 0 (never off-process)
+# everywhere else in the tree until T04d chooses a value from this data.
+rfork E
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+if(! test -x $benchdir/largelive){
+	echo $0: build with '''mk benchmarks''' first >[1=2]
+	exit no-binary
+}
+
+fn measure {
+	echo '== largelive retainwords churn iterations peers rounds gcoffload:' $*
+	$benchdir/largelive $* || exit largelive
+	echo
+}
+
+# Fixed shape: 50000-word live set (roughly a 400KB tuple), moderate churn
+# so the owner's heap fills and collects repeatedly, 200 peers each ticked
+# 200 times (40000 round trips per phase). Compare "loaded" against
+# "baseline" within one run, then compare gcoffload values across runs.
+#
+# gcoffload=0: today's only reachable behavior (every CLI/bench call site
+# hardcodes this). This is the number to beat.
+measure 50000 200 20000 200 200 0
+
+# A threshold comfortably above any peer's own tiny heap (peers stay well
+# under a few hundred words even after many rounds -- each round adopts
+# one 1-word tick/tock fragment) and well below retainwords, so only the
+# OWNER's collections move off-process while peers stay inline in both
+# runs. This isolates the owner's choice, which is the actual comparison
+# T04d needs; gcoffload=1 ("always off-process", peers included) is
+# deliberately NOT used here -- see bench/largelive.c's top comment and
+# the D074 amendment in docs/decisions.md for why that confounds the
+# comparison (and found a real scheduler bug in the process).
+measure 50000 200 20000 200 200 1000
+
+# A second candidate threshold, roughly at the live-set size itself.
+measure 50000 200 20000 200 200 25000
+
+# Ten times the live set: same allocation pattern, an order of magnitude
+# more to copy per collection, same peer population. This is the shape
+# most likely to show a large, non-noise pause under gcoffload=0.
+measure 500000 200 4000 200 200 0
+measure 500000 200 4000 200 200 1000
+exit ''
