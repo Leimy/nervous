@@ -1,0 +1,6 @@
+// D077: a size variable must be bound somewhere before its segment.
+fn main() {
+	match <<1:8>> {
+		<<p:k/binary>> => p;
+	}
+}

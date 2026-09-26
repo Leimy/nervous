@@ -173,6 +173,8 @@ printclauses(Biobuf *b, Clause *c)
 static void
 printexpr(Biobuf *b, Expr *e)
 {
+	Exprs *xs;
+
 	if(e == nil){
 		Bprint(b, "nil");
 		return;
@@ -213,6 +215,28 @@ printexpr(Biobuf *b, Expr *e)
 		Bprint(b, "(unary %s ", e->text); printexpr(b, e->left); Bprint(b, ")"); break;
 	case Ebinary:
 		Bprint(b, "(binary %s ", e->text); printexpr(b, e->left); Bprint(b, " "); printexpr(b, e->right); Bprint(b, ")"); break;
+	case Ebinagg:
+		Bprint(b, "(bin");
+		for(xs = e->list; xs != nil; xs = xs->next){
+			Bprint(b, " (seg ");
+			switch(xs->expr->ival >> 8){
+			case Binsegsized:
+				Bprint(b, "sized "); printexpr(b, xs->expr->left); Bprint(b, " "); printexpr(b, xs->expr->right); break;
+			case Binsegrest:
+				Bprint(b, "rest "); printexpr(b, xs->expr->left); break;
+			default:
+				Bprint(b, "int %d", (int)(((xs->expr->ival >> 2) & 0x3f) * 8));
+				if((xs->expr->ival & 2) != 0)
+					Bprint(b, " signed");
+				if((xs->expr->ival & 1) != 0)
+					Bprint(b, " little");
+				Bprint(b, " "); printexpr(b, xs->expr->left);
+				break;
+			}
+			Bprint(b, ")");
+		}
+		Bprint(b, ")");
+		break;
 	default: Bprint(b, "(bad-expr %d)", e->kind); break;
 	}
 }

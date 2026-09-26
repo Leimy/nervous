@@ -215,8 +215,19 @@ patchtests(NvFunc *f, int start, int end, int target)
 
 	for(pc = start; pc < end; pc++){
 		i = &f->insn[pc];
-		if(i->op == Otestatom || i->op == Otestint || i->op == Otesteq || i->op == Otestarity)
+		switch(i->op){
+		case Otestatom: case Otestint: case Otesteq: case Otestarity:
+		case Obinbinget:
 			i->c = target;
+			break;
+		/* D077: the binary matching ops keep their fail target elsewhere. */
+		case Obintestbinary: case Obinintget:
+			i->b = target;
+			break;
+		case Obinend:
+			i->a = target;
+			break;
+		}
 	}
 }
 
@@ -643,6 +654,81 @@ typetest(char *name)
 	if(strcmp(name, "is_tuple") == 0) return Vtuple;
 	if(strcmp(name, "is_pid") == 0) return Vpid;
 	if(strcmp(name, "is_ref") == 0) return Vref;
+	if(strcmp(name, "is_binary") == 0) return Vbin;
+	return -1;
+}
+
+/*
+ * D077: `<<seg, ...>>` evaluates every segment value (and size) left to
+ * right first, then builds the binary as binalloc followed by one append
+ * per segment. Each append is its own GC-safe instruction writing a
+ * fresh register, so a collection before any of them re-executes it
+ * from a clean state (D079). Encoding faults (badarith, overflow,
+ * bad_binary) therefore come after every operand has been evaluated.
+ * guardok rejects Ebinagg, so construction never runs in a guard (D079).
+ */
+static int
+compilebinagg(Fcomp *f, Expr *e)
+{
+	Exprs *x;
+	Expr *s;
+	int n, i, cur, d, pc, *val, *size;
+
+	n = exprcount(e->list);
+	val = mallocz((n+1)*sizeof *val, 1);
+	size = mallocz((n+1)*sizeof *size, 1);
+	if(val == nil || size == nil){
+		free(val);
+		free(size);
+		return seterr(f, e, "out_of_memory");
+	}
+	for(i = 0, x = e->list; x != nil; i++, x = x->next){
+		s = x->expr;
+		val[i] = compileexpr(f, s->left, 0);
+		if(val[i] < 0)
+			goto err;
+		if((s->ival >> 8) == Binsegsized){
+			size[i] = compileexpr(f, s->right, 0);
+			if(size[i] < 0)
+				goto err;
+		}
+	}
+	cur = newreg(f, e);
+	if(cur < 0 || emit(f, Obinalloc, cur, 0, 0) < 0)
+		goto err;
+	for(i = 0, x = e->list; x != nil; i++, x = x->next){
+		s = x->expr;
+		d = newreg(f, e);
+		if(d < 0)
+			goto err;
+		switch(s->ival >> 8){
+		case Binsegint:
+			pc = emit(f, Obinappint, d, cur, val[i]);
+			if(pc < 0)
+				goto err;
+			/* the parser's width field is bytes; bit 1 signed, bit 0 little */
+			f->func->insn[pc].d = (((s->ival >> 2) & 0x3f) << 2) |
+				((s->ival & 2) ? 1 : 0) | ((s->ival & 1) ? 2 : 0);
+			break;
+		case Binsegsized:
+			pc = emit(f, Obinappbin, d, cur, val[i]);
+			if(pc < 0)
+				goto err;
+			f->func->insn[pc].d = size[i];
+			break;
+		default:
+			if(emit(f, Obinappend, d, cur, val[i]) < 0)
+				goto err;
+			break;
+		}
+		cur = d;
+	}
+	free(val);
+	free(size);
+	return cur;
+err:
+	free(val);
+	free(size);
 	return -1;
 }
 
@@ -1050,6 +1136,8 @@ compileexpr(Fcomp *f, Expr *e, int tail)
 		return compileunary(f, e);
 	case Ewild:
 		return seterr(f, e, "wildcard is not an expression");
+	case Ebinagg:
+		return compilebinagg(f, e);
 	}
 	return seterr(f, e, "unsupported expression");
 }
@@ -1060,7 +1148,10 @@ clausetuple(Clause *c)
 	Expr *e;
 	Span s;
 
+	/* Report head-pattern errors at the first parameter, not 0:0. */
 	memset(&s, 0, sizeof s);
+	if(c->patterns != nil)
+		s = c->patterns->expr->span;
 	e = mallocz(sizeof *e, 1);
 	if(e == nil)
 		return nil;

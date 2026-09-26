@@ -1,0 +1,12 @@
+// D079: doubling a binary past the -H word budget faults system_limit.
+fn grow(b, 0) {
+	b
+}
+
+fn grow(b, n) {
+	grow(<<b/binary, b/binary>>, n - 1)
+}
+
+fn main() {
+	grow(<<1:8>>, 20)
+}

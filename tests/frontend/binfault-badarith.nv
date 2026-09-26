@@ -1,0 +1,4 @@
+// D079: an integer segment's value must be an integer.
+fn main() {
+	<<'x:8>>
+}

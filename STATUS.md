@@ -5,30 +5,18 @@ Operational source of truth. Settled design is in `docs/decisions.md`; benchmark
 ## Checkpoint and authorization
 
 ```text
-milestone: 08 - Memory, COMPLETE; 09 - Binaries, not started
-checkpoint: PR2-T01, M08-T04a, M08-T04b, M08-T04p, M08-T04e, M08-T04c, M08-T04r
-  and M08-T04d accepted -- milestone 08 (Memory) is COMPLETE; CLI-T01
-  (bytecode-under-scheduler mode + man page) accepted, outside milestone 08
-implementation: no task in-flight, no write set held by anyone. Milestone 08
-  closed this session (T04d); milestone 09 has not been started or assigned
-coordinator: nervous-memory-coordinator (role label, not a discovered session identity)
-active source assignment: none
-next: Milestone 08 (Memory) is COMPLETE. T04d closed this session: `-o`/
-  `$nervous_gcoffload` CLI plumbing added, a deterministic regression for the
-  D074 false-idle amendment added (`gcidlestep` hook, `holdfalseidle`), and
-  three repeated `bench/largelive.rc` runs per shape/threshold confirmed a
-  real, repeatable crossover -- off-process collection hurts the tail
-  (~2.2x) at a 50000-word live set and helps (~2x) at 500000 words, bracketed
-  not located. `gcoffload` default stays 0 (D075); `NvGcsweepcap=8` stays
-  unmeasured/provisional. All four batch commands (both regression suites
-  under three environment combinations, plus the repeated benchmark run)
-  passed. Write set released. Milestone 09 (Binaries) and the mandatory R3
-  review are next; neither is started, and both require the user's go-ahead
-  and a fresh task/write-set assignment per the Resumption checklist, same
-  as always.
-source control: user requested a combined commit message; message supplied.
-  No commit/push/staging performed or git status independently inspected by the coordinator.
-  Do not assume the user has committed/pushed merely because this is an accepted save point.
+milestone: 08 - Memory, COMPLETE; 09 - Binaries, T01-T04 ACCEPTED, only
+  T05 (latency measurement) remains
+checkpoint: M09-T01..T04 accepted -- user confirmed `rc tests/run.rc`
+  passes with every binary fixture (binary-run, 8 binfault, 3 binreject,
+  protocol) under both -r and saved bytecode (-c + -X)
+implementation: none active.  Coordinator is Claude, with a local Qwen
+  model as sub-agent (driving notes: /usr/dave/qwen.md).
+active source assignment: none; all M09-T01..T04 write sets released
+next: M09-T05 (see its task row; a good Qwen task with Claude choosing
+  the measurements and reviewing).  Then close milestone 09 and open R3.
+source control: nothing committed by the coordinator; ask the user to
+  commit at a checkpoint.
 ```
 
 M08-T04e and M08-T04c are both accepted: the user confirmed `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass on the current tree, the latter now also exercising `tests/memory/offloadtest`'s seven off-process lifecycle groups. This closes the last open acceptance gate for T04c (see the M08-T04c section below for the coordinator review and five fixes made before this confirmation).
@@ -54,7 +42,7 @@ CLI-T01 is accepted, independent of milestone 08 and not gating it: `cmd/nervous
 | Milestone | State | Dependencies | Remaining scope |
 |---|---|---|---|
 | 08 Memory | **complete** | R2, 05, 06 | none -- all tasks (T04a/b/p/e/c/r/d) accepted |
-| 09 Binaries | not-started | 04, 08 | Binary construction and matching |
+| 09 Binaries | **in progress**: T01-T04 accepted | 04, 08 | T05 latency measurement only |
 | R3 Memory review | not-started | 08, 09 | Root/fragment/representation/binary ownership gate |
 | 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement |
 | R4 Multicore review | not-started | 10 | Mandatory multicore acceptance review |
@@ -80,6 +68,36 @@ Every completed write set below is released. Planned tasks have no assignee or r
 | CLI-T01 bytecode-under-scheduler mode + man page | done | none (independent of milestone 08) | `-X` mode and shared `runscheduled()` in `cmd/nervous/main.c`; `README.md` `-X` docs; new `man/1/nervous`; `mk tests benchmarks` clean; no decision-record entry needed per user judgment |
 
 T04q is not a new milestone dependency gate and is not required before T04c; the user chose to proceed directly to off-process correctness. T04r was reordered after T04c: a threshold measurement needs the off-process mechanism to measure against, and current tiny-live-set benchmarks already show no existing workload would select a finite gcoffload value (see D074, "gcoffload default and every existing call site").
+
+## M09-Tasks (in progress)
+
+### Progress (current)
+
+- **M09-T01 Bbin runtime: done.** A first draft came from a long Qwen run. Claude's review fixed: word-vs-byte arithmetic in `nvbinapp` (heap corruption); no D067 reservation for the new opcodes in `lib/exec.c`; verifier dataflow and guard edges for them in `lib/verify.c`; 32-bit `1L` shifts; the signed range check; zero padding; `lib/pattern.c` length types; D079 fault names. Nine opcodes: `binalloc`, `binappint`, `binappbin`, `binappend`, `bintestbinary`, `binintget`, `binbinget`, `binremget`, `binend`. Tests: construction/encoding checks in `tests/process/ptest.c`; VM opcode cases A-F in `tests/process/exectest.c` (construction, append, match, mismatch-to-fail-target, faults, remainder). `docs/bytecode.md` documents the opcodes. User-confirmed passing.
+- **M09-T02 frontend: mostly done.**
+  - Lexer tokens `<<`/`>>`/`:`, and parser (`lib/parse.c`) producing `Ebinagg` with one `Ebinseg` per segment. Encoding of a segment is `ival = (kind<<8) | (width<<2) | (signed<<1) | little`, kinds `Binsegint`/`Binsegsized`/`Binsegrest` (header `include/nervous.h`). Decisions made while implementing (within D076): `<<>>` is the empty binary; segment values and sizes are one primary or unary expression (parenthesize anything looser); `/binary` excludes int modifiers; a rest segment takes no modifiers and must be last; `patternok` accepts binaries with pattern-form values.
+  - AST printer (`lib/ast.c`), fixtures `tests/frontend/binary.nv/.ast`, `bad-binwidth`, `bad-binrest`.
+  - Formatter (`lib/format.c`, rules in `docs/format.md`), fixture `binary-fmt.nv/.fmt`.
+  - AST->`Pbin` conversion (`lib/patcompile.c`, `convertbin`), rejecting a size variable bound by the same or a later segment of that binary. Tests: nine cases in `tests/pattern/parsetest.c` (`binpatterns`), covering most of the milestone's required matching tests at the `nvpatternmatch` level.
+  - `lib/patbc.c` `compilebin`: `Pbin` -> `bintestbinary`, one get per segment, `binend` unless a rest segment ends it (a discarded rest emits nothing). A size variable must already be bound when its segment is lowered, which also rejects `${<<p:n/binary>>, n}`. Repeated names test equality like `Pvar`.
+  - `lib/compile.c` `patchtests` now repatches the binary ops' fail targets (field `b` for `bintestbinary`/`binintget`, `c` for `binbinget`, `a` for `binend`); without it every binary mismatch jumped to pc 0.
+- **M09-T03: mostly done.** `compilebinagg`: evaluates every segment value and size left to right, then `binalloc` plus one append per segment into fresh registers. `is_binary` type test (usable in guards); `guardok` already rejects construction in guards (D079).
+- **Also fixed:** `bintestbinary` was written and read with one operand instead of two (`lib/bytecode.c`, `lib/bcread.c`), so saved bytecode lost the fail target and a failing test looped at pc 0 under `-X`.
+- **End-to-end test:** `tests/frontend/binary-run.nv/.out`, run by the new `ran` helper in `tests/frontend/run.rc` both via `-r` and via `-c` + `-X`. `-r` output user-confirmed to match all 14 expected values.
+- **M09-T04: done, accepted (user-confirmed full suite).** Fault fixtures `tests/frontend/binfault-*.nv` (eight, via the new `faulted` helper), compile rejections `binreject-*.nv/.err` (three, via `rejected -c`), and the exit-criterion example `examples/protocol.nv` (via `ran`, expected output `tests/frontend/protocol.out`). All outputs were first produced by a user run and checked against predictions before being saved. Head-pattern compile errors now report the first parameter's position instead of 0:0 (`clausetuple`). Required tests reconciled in `milestones/09-binaries.md`, "Implementation state".
+- **Remaining:** T05 (latency measurement), after which milestone 09 can close and R3 opens.
+
+The original plan follows. Design settled in D076-D079 (representation, grammar/evaluation, width/alignment, sizing reservation and fault reasons). Write sets are reserved for the named task. T01 and T02 are disjoint behind the settled interfaces (the D076-D079 opcode operand meanings and the `Ebin`/`Ebinseg` AST shapes) and may run in parallel; T03 depends on both; T04 depends on T03. T05 is independent of T01-T04 (it measures the pre-existing term machinery, not binaries) and may run in parallel with any of them.
+
+| Task | State | Dependencies | Write set (canonical, exclusive) | Objective |
+|---|---|---|---|---|
+| M09-T01 Bbin runtime | planned | 08 | `include/nvvm.h`, `include/nvexec.h`, `lib/value.c`, `lib/gc.c`, `include/nvpat.h`, `lib/pattern.c`, `lib/exec.c`, `include/nvbc.h`, `lib/verify.c`, `lib/bytecode.c`, `docs/bytecode.md` | `Bbin` boxed kind and `Vbin`/`is_binary`; `nvbin`/`nvbinlen`/`nvbinbytes`; `nvbinbuild`/`nvbinbinget`/`nvbinremget` (self-contained byte copies, budget-aware); equality/print/heapcopy/fragcopy support; new opcodes `binalloc`, `binbinget`, `binremget` (D079 sizing reservation: allocate, retry from clean state, no mid-copy collection); verifier operand + guard-region rules (binaries excluded from guards, D060/D071); disassembly text for the new opcodes. |
+| M09-T02 Binary frontend | planned | 08 (independent of T01; builds on the coordinator-settled `include/nvpat.h` `Pbin` interface) | `include/nervous.h`, `lib/parse.c`, `lib/lex.c`, `lib/ast.c`, `lib/patcompile.c` (AST->`NvPattern` conversion, `nvpatternfromexpr`), `lib/patbc.c` (pattern->bytecode lowering, `nvpatterncode`), `lib/format.c`, `docs/format.md`, `tests/frontend/*` (new fixtures only) | `<< ... >>` aggregate with the D076 segment grammar (integer segments with literal widths {8,16,32,64} and `/signed`/`/unsigned`/`/big`/`/little` modifiers; `:size / binary` and `/binary` segments; final unsized remainder); `Ebin`/`Ebinseg` AST nodes (parser does not validate forward/backward references or pattern-mode legality; the compiler and pattern checker do); `patternok` accepts binaries; `nvpatternfromexpr` converts `Ebin` to the `Pbin` `NvPattern`; `nvpatterncode` lowers binary patterns to `binalloc`/`binbinget`/`binremget` with a byte-position register; guard check rejects binaries (D079); canonical formatting for the aggregate (D021, `docs/format.md`); lexer/AST plumbing (a `Tbinopen`/`Tbinclose` token pair is expected -- the exact token names are an implementer detail to report, as with any new token). |
+| M09-T03 Binary compiler lowering | planned | T01, T02 | `lib/compile.c`, `docs/decisions.md` (only if an implementation-level refinement is needed; report it) | Lower `Ebin` construction to `binalloc` (D077: evaluate operands left to right, compute total, single allocation, fill left to right) and the D079 construction faults (`bad_binary`, `overflow`, `badarith`); wire `is_binary` into `typetest` and the D060 guard/type-test surface; forward-reference size validation in patterns is already the pattern checker's (T02) -- this task is construction side and the intrinsic wiring only. |
+| M09-T04 Tests + exit-criterion example | planned | T03 | `tests/bytecode/*`, `tests/pattern/*`, `tests/vm/*`, `tests/process/*`, `tests/run.rc`, `examples/README.md`, new `examples/protocol.nv` (the milestone exit-criterion example: a small length-prefixed protocol), `milestones/09-binaries.md` (implementation-state section only) | Every "Required tests" item from `milestones/09-binaries.md`: exact match + trailing-byte rejection, empty/nonempty remainders, length-prefixed payload, endian + signed decoding, invalid forward size reference rejected by the frontend, late failure rolling back earlier segment bindings, allocation/size-limit failures controlled. Golden tests in the existing suites; the example demonstrates the exit criterion (length-prefixed protocol over process-heap-owned binaries). |
+| M09-T05 Latency-isolation measurement (R3 prep) | planned, independent of T01-T04 | 08 | `bench/latency.c` (new), `bench/latency.rc` (new), `bench/README.md`, `mkfile` (only the new target + `benchmarks`/`clean` entries, as T04r did) | First numbers for REVIEW-impressions.md's third isolation leg (now in R3's scope): structural equality and print cost on independently built shared graphs (`${x,x}` chains at increasing depth), copy of shared deep terms, and small-message hop latency measured with an expensive-term peer running concurrently on the same scheduler. Measurement only -- no mechanism changes (work-sensitive charging, resumable traversals, bounded exports, or I/O offloading are named there as possible later mechanisms; this task measures, it does not choose). |
+
+Notes on the write sets. The three pattern files do different things and are split to keep T01/T02 disjoint: `lib/patcompile.c` is the AST-to-`NvPattern` conversion (`nvpatternfromexpr`, T02), `lib/patbc.c` is the pattern-to-bytecode lowering (`nvpatterncode`, T02), and `lib/pattern.c` is the runtime matcher (`nvpatternmatch`, T01) that both the pattern harness and the source path use, where a `Pbin` pattern matches a `Bbin` term. The one genuinely shared surface, `include/nvpat.h` (the `Pbin` kind and `NvBinseg` struct), is settled centrally in `milestones/09-binaries.md`'s "Settled interfaces" section before either task starts, so T01 owns it and T02 builds to it without editing it -- this is the coordinator-settles-the-interface rule from COORDINATION.md's parallelism policy, not an exception. If a task finds it needs a file outside its set, it reports a blocker, it does not expand scope. `include/nvproc.h` is in no M09 set (no `NvLimits` field is added: D078/D079 deliberately reuse the heap word budget rather than a new binary byte limit, so there is no `.gcoffload`-style field to thread through the construction sites). The `mkfile` change in T05 follows the T04r precedent (new build target only, no behavior change to existing targets).
 
 ## M08-T04e CLI/environment defect repair (done)
 
@@ -126,7 +144,7 @@ Accepted: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests
 
 ## Recommended next sequence
 
-**Milestone 08 is complete.** T04c, T04r and T04d are all done (see their sections below for the accepted record). Milestone 09 (Binaries) is next, followed by the mandatory R3 review before milestone 10 -- neither is started, both are planned but unassigned, no write set reserved for either. Read `milestones/09-binaries.md` and `docs/questions.md`'s "Milestone 09 - Binaries" section before assigning that work.
+**Milestone 08 is complete.** **Milestone 09 (Binaries) is in progress**: see "M09-Tasks (in progress)" above. Next: T02's `lib/patbc.c` lowering, then T03, then T04; T05 runs independently. The mandatory R3 review (now including the latency-isolation measurement, see `milestones/R3-memory-review.md`) follows milestone 09 and gates milestone 10.
 
 ### M08-T04r large-live-set latency baseline (done)
 
@@ -196,9 +214,9 @@ Milestone 08's required tests and exit criterion (`milestones/08-memory.md`) are
 
 ## Resumption checklist
 
-1. Obtain user go-ahead for the chosen next task. **Milestone 08 is complete** (T04a through T04d, all accepted; see the "Recommended next sequence" sections above for the full record). The recommended next task is **milestone 09 (Binaries)** -- read `milestones/09-binaries.md` and `docs/questions.md`'s "Milestone 09 - Binaries" section first; nothing about it is scoped yet beyond that file. If resuming T04q instead (still optional, still deferred, not a dependency of anything), or anything not already scoped above, fall back to the fuller read list in step 3.
+1. Milestone 09 is in progress: read "M09-Tasks (in progress)" -> "Progress (current)" for what is done and what remains, then continue with the first remaining item. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
 2. Confirm actual source-control state with the user; preserve the accepted checkpoint before new edits. A commit message is not evidence of a commit. Nothing in this session committed or pushed anything.
 3. (Only if step 1's fast path doesn't apply) Read README, this status, milestone 08, D061-D074 (D074 especially, including its five coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
-4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d) and CLI-T01 are done and their write sets released; milestone 09 has no task rows yet and needs them created, with exact write sets, before any edit begins.
+4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d) and CLI-T01 are done and their write sets released. Milestone 09's task rows exist in the "M09-Tasks (planned)" section with exact write sets; assign one (or T01+T02 together) and start.
 5. Build with mk after edits. User runs behavioral tests/benchmarks; never execute scripts, cleaning, installation or source-control commands through the compilation-only mk tool.
-6. If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.
+6. For the local Qwen sub-agent, follow `/usr/dave/qwen.md` (session setup, the prompt recipe, what to delegate and what not to). If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.

@@ -4,32 +4,43 @@ Nervous is an experimental concurrent language and portable 64-bit virtual machi
 
 ## How to read this repository
 
-Minimum context for making progress, in order -- about 60 KB total, most of it `decisions.md`:
+Minimum context for making progress, in order -- about 30 KB total:
 
 1. `README.md` (this file).
 2. `STATUS.md` -- current state only, short by design.
-3. `docs/decisions.md` -- normative; the settled design. Skim the headings, read the decisions the current milestone touches.
-4. `docs/semantics.md` -- the compact language contract.
-5. `docs/questions.md` -- only the section for the milestone being worked.
-6. The active milestone file under `milestones/`.
-7. `docs/bytecode.md` if touching the compiler, verifier, or VM; `docs/format.md` if touching the parser or formatter.
+3. `docs/architecture.md` -- high-level overview and settled decisions summary.
+4. `docs/language-semantics.md` -- compact language contract.
+5. `docs/bytecode.md` -- instruction set and verification rules.
+6. `docs/runtime.md` -- 9front runtime strategy.
+7. `docs/distribution.md` -- wire encoding and protocol evolution.
+8. `docs/language-philosophy.md` -- parsing, static analysis, and first implementation.
+9. `docs/future-work.md` -- open questions and settled decisions (D001-D079).
+10. `docs/questions.md` -- unresolved semantic questions by owning milestone.
+11. The active milestone file under `milestones/`.
+12. `docs/format.md` if touching the parser or formatter.
 
-Read `COORDINATION.md` only when more than one agent is working. Do not read `STATUS-archive.md`, `docs/review-findings-archive.md`, `docs/review-05.md`, or `nervous_design.md` for forward work; they are historical records, kept for audit and for the rare regression investigation into closed work. `docs/review-findings.md` is short and worth a glance only if a review gate is open.
+Read `COORDINATION.md` only when more than one agent is working. Do not read `docs/review-findings-archive.md`, `docs/review-05.md`, or `nervous_design.md` for forward work; they are historical records, kept for audit and for the rare regression investigation into closed work. `docs/review-findings.md` is short and worth a glance only if a review gate is open.
 
 Full map:
 
 - `README.md`: project map and milestone order.
 - `COORDINATION.md`: multi-agent roles, ownership, handoff, and integration protocol.
 - `STATUS.md`: active coordinator, task assignments, write ownership, and milestone state.
-- `docs/semantics.md`: compact normative rules shared by early milestones.
+- `docs/architecture.md`: high-level architecture, design principles, and settled decisions summary.
+- `docs/language-semantics.md`: compact normative rules shared by early milestones.
+- `docs/runtime.md`: 9front runtime strategy (multicore, GC, I/O).
+- `docs/distribution.md`: wire encoding and protocol evolution.
+- `docs/language-philosophy.md`: parsing, static analysis, and first implementation milestone.
+- `docs/future-work.md`: open questions and consolidated settled decisions.
+- `docs/decisions.md`: compact decision records (D001-D079).
+- `docs/questions.md`: unresolved semantic questions by owning milestone.
 - `docs/format.md`: canonical formatting contract and current limitations.
-- `docs/decisions.md`: settled decisions and short decision records.
-- `docs/questions.md`: unresolved semantic questions, with the milestone that needs each answer.
+- `docs/bytecode.md`: instruction set, verification, and VM semantics.
 - `docs/review-findings.md`: persistent adversarial-review findings, severity, ownership, and disposition, for gates still open to new entries.
 - `docs/review-findings-archive.md`: findings from permanently closed gates (currently R1), relocated out of `review-findings.md` to keep it short. Read only when investigating a regression in already-closed work.
 - `docs/review-05.md`: completed milestone 05 adversarial-review record, code/evidence map, and scope boundaries.
 - `milestones/`: one bounded implementation context per file.
-- `nervous_design.md`: long-form design, rationale, and future direction. Read it only when a milestone document points to it or a design question needs the original rationale.
+- `nervous_design.md`: **deprecated** — historical reference only; read the files above for normative specifications.
 
 Implementation source lives under `cmd/`, `lib/`, and `include/`. Tests and examples live under `tests/` and `examples/`.
 

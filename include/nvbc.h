@@ -68,6 +68,21 @@ enum {
 	Oguard,
 	Oguardend,
 	Oistype,
+	/* D076-D079: binary construction and matching. Construction appends
+	 * (each opcode reads the running binary in src, reads the segment, and
+	 * allocates a fresh self-contained Bbin holding both). Matching walks
+	 * the subject binary (e->binsubj) at e->binpos; a fail-target is a
+	 * mismatch (select the next clause), never a fault -- allocation
+	 * failures fault the process instead. */
+	Obinalloc,		/* a=dst: dst = the empty binary */
+	Obinappint,		/* a=dst b=src c=value-reg d=(width<<2)|flags */
+	Obinappbin,		/* a=dst b=src c=bin-reg d=size-reg */
+	Obinappend,		/* a=dst b=src c=bin-reg: append all of bin's bytes */
+	Obintestbinary,	/* a=src b=fail-target: set subject/pos or mismatch */
+	Obinintget,		/* a=dst b=fail-target c=(width<<2)|flags */
+	Obinbinget,		/* a=dst b=size-reg c=fail-target */
+	Obinremget,		/* a=dst: extract remaining bytes (always succeeds) */
+	Obinend,		/* a=fail-target: require complete consumption */
 	Nopcode,
 };
 

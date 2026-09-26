@@ -1,0 +1,24 @@
+// binary aggregates (D076): construction and patterns
+fn main() {
+    empty = <<>>;
+    c = <<1:8, (2 + 3):16/signed, 255:32/little, -1:64/signed/little, 7:4/binary, r/binary>>;
+    n = 3;
+    d = <<n:2/binary, tail/binary>>;
+    hello
+}
+
+fn head(<<a:8, b:16/little, rest/binary>>) {
+    0
+}
+
+fn check(msg) {
+    match msg {
+        <<1:8, s:4/binary, r/binary>> => 1;
+        _ => 0
+    }
+}
+
+fn bind(p) {
+    <<2:8, n:16/signed, z/binary>> = p;
+    0
+}

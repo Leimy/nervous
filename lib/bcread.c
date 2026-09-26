@@ -186,14 +186,18 @@ noperand(int op)
 	case Onop: case Orecvtake: case Oguardend: return 0;
 	case Ojump: case Oreturn: case Ofail: case Oself: case Omakeref:
 	case Orecvwait: case Oexit: case Oguard:
-	case Orecvdeadline: case Orecvwaitdeadline: return 1;
+	case Orecvdeadline: case Orecvwaitdeadline:
+	case Obinalloc: case Obinremget: case Obinend:
+		return 1;
 	case Oloadk: case Omove: case Otailcall: case Orecvbegin: case Orecvnext:
-	case Oprint: case Oeprint: return 2;
+	case Oprint: case Oeprint: case Obintestbinary: return 2;
 	case Otuple: case Ocall: case Otestatom: case Otestint:
 	case Otesteq: case Otestarity: case Ogetelem:
 	case Oadd: case Osub: case Omul: case Odiv: case Orem:
 	case Olt: case Ole: case Ogt: case Oge:
-	case Osend: case Ospawn: case Oistype: return 3;
+	case Osend: case Ospawn: case Oistype:
+	case Obinappend: case Obinintget: case Obinbinget: return 3;
+	case Obinappint: case Obinappbin: return 4;
 	}
 	return -1;
 }

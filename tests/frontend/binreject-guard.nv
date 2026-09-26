@@ -1,0 +1,8 @@
+// D079: a guard cannot build a binary.
+fn f(x) when <<x:8>> == <<1:8>> {
+	1
+}
+
+fn main() {
+	f(1)
+}

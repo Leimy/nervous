@@ -13,6 +13,7 @@ Challenge process-local GC, message fragments, term representation, and binaries
 - Are deep/wide/cyclic host structures handled without C stack or size-accounting failure?
 - Do PID/Ref opacity and binary representation remain distinct?
 - Are all size arithmetic and allocation limits overflow-safe?
+- (Latency isolation, from REVIEW-impressions.md, not yet measured anywhere): can one process monopolize the scheduler or block host output through expensive term work (structural equality and printing on shared graphs built independently, e.g. `${x,x}` chains) or a blocking `print`/`eprint` write? This is the third isolation leg (fault, memory, latency) and the only one without a measurement; R3 owns producing the first numbers for shared-graph equality cost, copy/print of shared deep terms, and small-message hop latency with an expensive-term peer running concurrently, so that R4's multicore acceptance criteria have a defined latency property to preserve rather than an unmeasured impression.
 
 ## Required work
 

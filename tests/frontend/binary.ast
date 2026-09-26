@@ -1,0 +1,7 @@
+(program
+  (comment 1 1 " binary aggregates (D076): construction and patterns")
+  (fn main (clause (patterns) (block (bind (var empty) (bin)) (bind (var c) (bin (seg int 8 (int 1)) (seg int 16 signed (binary + (int 2) (int 3))) (seg int 32 little (int 255)) (seg int 64 signed little (unary - (int 1))) (seg sized (int 7) (int 4)) (seg rest (var r)))) (bind (var n) (int 3)) (bind (var d) (bin (seg sized (var n) (int 2)) (seg rest (var tail)))) (var hello))))
+  (fn head (clause (patterns (bin (seg int 8 (var a)) (seg int 16 little (var b)) (seg rest (var rest)))) (block (int 0))))
+  (fn check (clause (patterns (var msg)) (block (match (var msg) (clause (patterns (bin (seg int 8 (int 1)) (seg sized (var s) (int 4)) (seg rest (var r)))) (int 1)) (clause (patterns wild) (int 0))))))
+  (fn bind (clause (patterns (var p)) (block (bind (bin (seg int 8 (int 2)) (seg int 16 signed (var n)) (seg rest (var z))) (var p)) (int 0))))
+)

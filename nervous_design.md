@@ -1,4 +1,19 @@
-# Nervous
+# Nervous Design Document
+
+**NOTE:** This document is deprecated. For normative specifications, see the files in `docs/`:
+
+- `language-semantics.md` — language contract (terms, patterns, clauses, guards, processes)
+- `bytecode.md` — abstract machine, instruction families, verification rules
+- `runtime.md` — 9front runtime strategy (multicore, GC, I/O, message memory)
+- `distribution.md` — wire encoding and protocol evolution
+- `language-philosophy.md` — parsing, static analysis, first implementation milestone
+- `future-work.md` — open questions and consolidated settled decisions
+- `architecture.md` — high-level architecture and design principles
+- `decisions.md` — compact decision records (D001-D079)
+
+This file is kept only as historical reference. When this document conflicts with the compact sources above, the compact sources win. Do not copy a rule from here without checking its decision status in `docs/decisions.md`.
+
+---
 
 **Nervous is an experimental concurrent language and portable 64-bit virtual machine designed for 9front.** It combines Erlang-inspired lightweight processes, asynchronous message passing, selective pattern matching, process-local garbage collection, supervision, and a Plan 9-native multicore runtime built around `rfork`.
 

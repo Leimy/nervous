@@ -646,7 +646,7 @@ nvprocrecvwaitdeadline(NvRuntime *r, NvTerm pid, uvlong now, char *err, int nerr
 }
 
 int
-nvprocreceive(NvRuntime *r, NvTerm pid, NvPatClause *clause, int nclause, NvBindings *bindings, int *which, NvFrag **msg, char *err, int nerr)
+nvprocreceive(NvRuntime *r, NvHeap *h, NvTerm pid, NvPatClause *clause, int nclause, NvBindings *bindings, int *which, NvFrag **msg, char *err, int nerr)
 {
 	NvProcess *p;
 	NvFrag *f, *prev;
@@ -657,7 +657,7 @@ nvprocreceive(NvRuntime *r, NvTerm pid, NvPatClause *clause, int nclause, NvBind
 	if(p->state != Prrunning || p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
 	prev = nil;
 	for(f = p->head; f != nil; prev = f, f = f->next){
-		rc = nvclauseselect(clause, nclause, f->root, bindings, &selected, err, nerr);
+		rc = nvclauseselect(h, clause, nclause, f->root, bindings, &selected, err, nerr);
 		if(rc < 0)
 			return -1;
 		if(rc == 0)

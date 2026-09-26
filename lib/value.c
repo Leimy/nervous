@@ -246,6 +246,8 @@ nvtermkind(NvTerm t)
 		return Vref;
 	case Bint:
 		return Vint;
+	case Bbin:
+		return Vbin;
 	}
 	return Vnil;	/* unreachable for a verified program: unknown header kind */
 }
@@ -294,6 +296,157 @@ nvtupleelem(NvTerm t, int i)
 	return NvBoxptr(t)[1+i];
 }
 
+/* D076: a binary is a self-contained boxed kind; the body is a byte count
+ * (word 0) followed by the bytes, zero-padded to a whole word. */
+uvlong
+nvbinlen(NvTerm t)
+{
+	return (uvlong)NvBoxptr(t)[1];
+}
+
+void *
+nvbinbytes(NvTerm t)
+{
+	return (void*)(NvBoxptr(t)+2);
+}
+
+/*
+ * D076: a binary is 1 (header) + 1 (count) + ceil(nbytes/8) words. Returns
+ * 0 if nbytes is too large to be represented as a heap object, so the
+ * caller (a constructor or the D079 sizing reservation) reports
+ * system_limit/out_of_memory rather than overflowing the word arithmetic.
+ */
+uvlong
+nvbinwords(uvlong nbytes)
+{
+	uvlong w;
+
+	/* nvheapalloc takes a ulong word count (32 bits on Plan 9). */
+	if(nbytes > ~0ULL-7)
+		return 0;
+	w = (nbytes+7)/8;
+	if(w > (~0UL)/sizeof(NvTerm)-2)
+		return 0;
+	return w+2;
+}
+
+NvTerm
+nvbin(NvHeap *h, void *bytes, uvlong nbytes)
+{
+	NvTerm *w;
+	uvlong n;
+
+	n = nvbinwords(nbytes);
+	if(n == 0)
+		return NvNil;
+	w = nvheapalloc(h, (ulong)n);
+	if(w == nil)
+		return NvNil;
+	w[n-1] = 0;
+	w[0] = NvHdr(Bbin, n-1);
+	w[1] = (NvTerm)nbytes;
+	if(nbytes != 0 && bytes != nil)
+		memmove(w+2, bytes, nbytes);
+	return (NvTerm)(uintptr)w;
+}
+
+/*
+ * D077: allocate a fresh self-contained binary holding cur's bytes followed
+ * by addlen bytes from addbytes. One GC-safe append unit: the running
+ * binary is read before the allocation and the result written to the
+ * destination register after, so no C pointer into a heap survives the
+ * allocation (D063). Returns NvNil on overflow or allocation failure.
+ */
+NvTerm
+nvbinapp(NvHeap *h, NvTerm cur, void *add, uvlong addlen)
+{
+	uvlong clen, total;
+	NvTerm *w;
+	uvlong n;
+
+	clen = nvbinlen(cur);
+	if(clen > ~0ULL-addlen)
+		return NvNil;
+	total = clen+addlen;
+	n = nvbinwords(total);
+	if(n == 0)
+		return NvNil;
+	w = nvheapalloc(h, (ulong)n);
+	if(w == nil)
+		return NvNil;
+	w[n-1] = 0;
+	w[0] = NvHdr(Bbin, n-1);
+	w[1] = (NvTerm)total;
+	if(clen != 0)
+		memmove(w+2, nvbinbytes(cur), clen);
+	if(addlen != 0 && add != nil)
+		memmove((uchar*)(w+2)+clen, add, addlen);
+	return (NvTerm)(uintptr)w;
+}
+
+/*
+ * D078: encode val into width bytes (width in 1, 2, 4, 8) at out, per
+ * flags (bit 0 signed, bit 1 little-endian; the Bsegsigned/Bseglittle
+ * values in nvpat.h). The caller range-checks val with nvbinfits first.
+ */
+void
+nvbinenc(vlong val, int width, int flags, uchar *out)
+{
+	uchar b[8];
+	int i;
+
+	for(i = 0; i < width; i++){
+		if(flags & 2)
+			b[i] = (uchar)((val>>(i*8))&0xff);
+		else
+			b[width-1-i] = (uchar)((val>>(i*8))&0xff);
+	}
+	memmove(out, b, width);
+}
+
+/* D078: decode width bytes at src (bit 0 signed, bit 1 little) into out. */
+void
+nvbindec(uchar *src, int width, int flags, vlong *out)
+{
+	uchar b[8];
+	vlong v, mask;
+	int i;
+
+	for(i = 0; i < width; i++){
+		if(flags & 2)
+			b[width-1-i] = src[i];
+		else
+			b[i] = src[i];
+	}
+	v = 0;
+	for(i = 0; i < width; i++)
+		v = (v<<8) | b[i];
+	if((flags & 1) && width < 8){
+		mask = 1LL << (width*8-1);
+		if(v & mask)
+			v |= ~((1LL << (width*8))-1);
+	}
+	*out = v;
+}
+
+/* D078: 1 if val fits in width bytes signed (flags bit 0) or unsigned. */
+int
+nvbinfits(vlong val, int width, int flags)
+{
+	vlong hi, lo;
+
+	if(width == 8)
+		return (flags & 1) || val >= 0;
+	if(flags & 1){
+		lo = -(1LL<<(width*8-1));
+		hi = (1LL<<(width*8-1))-1;
+	}else{
+		lo = 0;
+		hi = (vlong)((1ULL<<(width*8))-1);
+	}
+	return val >= lo && val <= hi;
+}
+
 /*
  * D028/D061 equality. Identical words are the fast path (also covers two
  * NvNil words, which never happens in a verified program). Atoms and
@@ -326,6 +479,10 @@ termequal(NvTerm a, NvTerm b, ulong depth)
 		return nvtermint(a) == nvtermint(b);
 	case Vref:
 		return nvrefincarnation(a) == nvrefincarnation(b) && nvrefcounter(a) == nvrefcounter(b);
+	case Vbin:
+		/* D076/D028: byte-exact, no term depth (the bytes are not terms). */
+		return nvbinlen(a) == nvbinlen(b) &&
+			memcmp(nvbinbytes(a), nvbinbytes(b), nvbinlen(a)) == 0;
 	case Vtuple:
 		n = nvtuplelen(a);
 		if(n != nvtuplelen(b))
@@ -374,6 +531,22 @@ termprint(Biobuf *b, NvTerm t, ulong depth)
 	case Vref:
 		Bprint(b, "<ref:%llux:%llud>", nvrefincarnation(t), nvrefcounter(t));
 		return 0;
+	case Vbin: {
+		uvlong n, i;
+		uchar *p;
+
+		/* D076: <<b0, b1, ...>> with each byte a decimal 0-255. */
+		Bprint(b, "<<");
+		n = nvbinlen(t);
+		p = nvbinbytes(t);
+		for(i = 0; i < n; i++){
+			if(i != 0)
+				Bprint(b, ", ");
+			Bprint(b, "%ud", p[i]);
+		}
+		Bprint(b, ">>");
+		return 0;
+	}
 	case Vtuple:
 		n = nvtuplelen(t);
 		Bprint(b, "${");
@@ -571,6 +744,12 @@ heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth)
 			return -1;
 		*out = t;
 		return 0;
+	case Bbin:
+		t = nvbin(h, nvbinbytes(src), nvbinlen(src));
+		if(t == NvNil)
+			return -1;
+		*out = t;
+		return 0;
 	case Btuple:
 		n = nvtuplelen(src);
 		if(n == 0){
@@ -644,6 +823,16 @@ fragcount(NvTerm t, ulong depth, uvlong *count, uvlong maxwords)
 		if(*count+1 > maxwords)
 			return NvTermlimit;
 		return 0;
+	case Bbin:
+		/* D076: the bytes are not terms, so no depth is charged; the cost
+		 * is the object's whole word count, which may be large, so the
+		 * budget test is overflow-safe. */
+		if(nvbinlen(t) > ~0ULL-9)
+			return NvTermlimit;
+		*count += 2+(uvlong)(nvbinlen(t)+7)/8;
+		if(*count+1 > maxwords)
+			return NvTermlimit;
+		return 0;
 	case Btuple:
 		n = nvtuplelen(t);
 		*count += 1+n;
@@ -687,6 +876,18 @@ fragbuild(NvTerm t, NvTerm *word, uvlong *top, NvTerm *out)
 		word[pos] = NvHdr(Bref, 2);
 		word[pos+1] = nvrefincarnation(t);
 		word[pos+2] = nvrefcounter(t);
+		*out = (NvTerm)(uintptr)&word[pos];
+		return 0;
+	case Bbin:
+		/* D076: the count word and the zero-padded byte words. The object
+		 * was already validated and budgeted by pass 1 (fragcount). */
+		pos = *top;
+		*top += 2+(nvbinlen(t)+7)/8;
+		word[*top-1] = 0;	/* padding; before the count word for an empty binary */
+		word[pos] = NvHdr(Bbin, (ulong)(*top-pos)-1);
+		word[pos+1] = (NvTerm)nvbinlen(t);
+		if(nvbinlen(t) != 0)
+			memmove(word+pos+2, nvbinbytes(t), nvbinlen(t));
 		*out = (NvTerm)(uintptr)&word[pos];
 		return 0;
 	case Btuple:

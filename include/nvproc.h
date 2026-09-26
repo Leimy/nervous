@@ -185,4 +185,4 @@ int nvprocrecvwait(NvRuntime *, NvTerm pid, char *, int);
  */
 int nvprocarmdeadline(NvRuntime *, NvTerm pid, NvTerm duration, uvlong, char *, int);
 int nvprocrecvwaitdeadline(NvRuntime *, NvTerm pid, uvlong, char *, int);
-int nvprocreceive(NvRuntime *, NvTerm pid, NvPatClause *, int, NvBindings *, int *, NvFrag **msg, char *, int);
+int nvprocreceive(NvRuntime *, NvHeap *, NvTerm pid, NvPatClause *, int, NvBindings *, int *, NvFrag **msg, char *, int);

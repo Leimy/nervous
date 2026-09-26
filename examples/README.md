@@ -11,13 +11,13 @@ Current examples, roughly in reading order:
 - `sieve.nv` - processes as data: a prime sieve built from a chain of filter processes, each a tail-recursive receive loop whose three candidate cases are guarded receive clauses (`when`, D060). Sieves to 10000 by default (1229 primes); `main 1023` or any integer argument sets the limit.
 - `ring.nv` - message passing: a token circulates a ring of ten processes for 2000 laps; root value 20000. Every node handles 2000 messages in one frame. `main nodes laps` sets the size; `main 65535 2000` is the benchmark that motivated D059's run queue.
 - `isolation.nv` - fault isolation: one of three workers faults (`divide_by_zero`); its siblings and the root are unaffected, and the root detects the missing reply with `after`. Also shows why monitors will be wanted: the fault is otherwise silent.
+- `protocol.nv` - binaries (milestone 09 exit criterion): a length-prefixed protocol. Frames `<<length:16, payload/binary>>` are sent to a consumer in chunks that split frames; the consumer buffers and decodes every complete frame, waiting when one is incomplete. Root value `${<<104, 105>>, <<1, 2, 3>>, <<>>, 3}`.
 - `ioserver.nv` - I/O as messages: clients send Ref-correlated requests to a device process and receive completions, never calling `print` themselves. The client code would not change if the device lived on another scheduler or another node.
 
 Still wanted (in the order the language will be able to express them):
 
 - a receive-timeout example on its own;
 - a registry/key-value server (wants lists or maps to be interesting);
-- length-prefixed binary decoding (milestone 09);
 - multicore process fan-out (milestone 10).
 
-`sieve.nv`, `ring.nv`, `isolation.nv`, and `ioserver.nv` are run by `tests/run.rc` (the last two against goldens under `tests/process/cli/`), so changing their output means updating the check. Edge cases and malformed programs belong under `tests/` instead.
+`sieve.nv`, `ring.nv`, `isolation.nv`, `ioserver.nv`, and `protocol.nv` are run by `tests/run.rc` (`isolation`/`ioserver` against goldens under `tests/process/cli/`, `protocol` against `tests/frontend/protocol.out`, both from source and from saved bytecode), so changing their output means updating the check. Edge cases and malformed programs belong under `tests/` instead.

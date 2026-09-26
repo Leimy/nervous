@@ -1,0 +1,1 @@
+tests/frontend/bad-binwidth.nv:2:13: binary width must be the literal 8, 16, 32 or 64

@@ -109,6 +109,9 @@ forward(Copy *c, NvTerm t, NvTerm *out)
 	case Bref:
 		if(n != 2) return NvTermerror;
 		break;
+	case Bbin:
+		if(n < 1) return NvTermerror;
+		break;
 	default:
 		return NvTermerror;
 	}

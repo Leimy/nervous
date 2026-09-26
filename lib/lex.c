@@ -121,6 +121,13 @@ static struct {
 	{ "self", Tself, 1 },
 	{ "mkref", Tmkref, 1 },
 	{ "exit", Texit, 1 },
+	/*
+	 * D076-D078: the binary segment modifiers (signed, unsigned, big,
+	 * little, binary) are deliberately NOT keywords. They are ordinary
+	 * identifiers everywhere, so existing names like `big` keep working;
+	 * the parser recognises them by text only in modifier position,
+	 * after `/` inside `<< >>`.
+	 */
 };
 
 Token
@@ -198,6 +205,15 @@ lexnext(Lexer *l)
 	case '#':
 		if(peek(l) == '{'){ get(l); return tok(l, Tmapopen, line, col); }
 		break;
+	case '<':
+		/* D076: `<<` is a binary aggregate; a single `<` is a comparison. */
+		if(peek(l) == '<'){ get(l); return tok(l, Tbinopen, line, col); }
+		if(peek(l) == '='){ get(l); return tok(l, Tle, line, col); }
+		return tok(l, Tlt, line, col);
+	case '>':
+		if(peek(l) == '>'){ get(l); return tok(l, Tbinclose, line, col); }
+		if(peek(l) == '='){ get(l); return tok(l, Tge, line, col); }
+		return tok(l, Tgt, line, col);
 	case '{': return tok(l, Tlbrace, line, col);
 	case '}': return tok(l, Trbrace, line, col);
 	case '(': return tok(l, Tlparen, line, col);
@@ -209,6 +225,7 @@ lexnext(Lexer *l)
 	case '*': return tok(l, Tstar, line, col);
 	case '/': return tok(l, Tslash, line, col);
 	case '%': return tok(l, Tpercent, line, col);
+	case ':': return tok(l, Tcolon, line, col);
 	case '=':
 		if(peek(l) == '>'){ get(l); return tok(l, Tarrow, line, col); }
 		if(peek(l) == '='){ get(l); return tok(l, Teq, line, col); }
@@ -217,12 +234,6 @@ lexnext(Lexer *l)
 		/* `!=` is not-equal; a lone `!` is send. `a !=b` is therefore a comparison. */
 		if(peek(l) == '='){ get(l); return tok(l, Tne, line, col); }
 		return tok(l, Tbang, line, col);
-	case '<':
-		if(peek(l) == '='){ get(l); return tok(l, Tle, line, col); }
-		return tok(l, Tlt, line, col);
-	case '>':
-		if(peek(l) == '='){ get(l); return tok(l, Tge, line, col); }
-		return tok(l, Tgt, line, col);
 	}
 	snprint(l->err, sizeof l->err, "invalid character 0x%02x", c);
 	return tok(l, Tbad, line, col);
@@ -235,7 +246,8 @@ tokname(int k)
 		"end of file", "identifier", "atom", "integer",
 		"fn", "match", "receive", "after", "if", "else", "spawn", "self", "mkref", "exit",
 		"and", "or", "not", "when",
-		"{", "}", "(", ")", ",", ";", "=>", "=", "!", "==", "!=", "<", "<=", ">", ">=",
+		"<<", ">>",
+		"{", "}", "(", ")", ",", ";", ":", "=>", "=", "!", "==", "!=", "<", "<=", ">", ">=",
 		"+", "-", "*", "/", "%", "${", "#{", "comment",
 	};
 	if(k == Tbad) return "invalid token";

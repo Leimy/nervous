@@ -20,7 +20,8 @@
  * A boxed header is NvHdr(kind, n): kind in the low 3 bits, one reserved
  * bit (the stage-3 collector's forwarding mark), body length in words
  * from bit 8. Body layouts: Btuple n element terms; Bref 2 words
- * (incarnation, counter); Bint 1 word (the vlong).
+ * (incarnation, counter); Bint 1 word (the vlong); Bbin 1 + ceil(nbytes/8)
+ * words (a byte count, then the bytes, zero-padded to a whole word, D076).
  *
  * Terms are immutable. Within one heap a copy of a term is a copy of its
  * word; structure is shared. Deep copies happen only at a process
@@ -58,7 +59,7 @@ enum {
 #define NvMaxduration 1000000000000000000LL
 
 /*
- * Term kinds as reported by nvtermkind. The order Vint..Vref is part of
+ * Term kinds as reported by nvtermkind. The order Vint..Vbin is part of
  * the bytecode contract: Oistype's immediate operand is one of these
  * values (D060). Vnil is reported for NvNil only.
  */
@@ -68,6 +69,7 @@ enum {
 	Vtuple,
 	Vpid,
 	Vref,
+	Vbin,
 	Vnil = -1,
 };
 
@@ -93,6 +95,7 @@ enum {
 	Btuple = 1,
 	Bref = 2,
 	Bint = 3,
+	Bbin = 4,
 };
 
 /*
@@ -192,6 +195,12 @@ NvTerm nvpid(ulong slot, ulong generation);
 NvTerm nvint(NvHeap *, vlong);
 NvTerm nvref(NvHeap *, uvlong incarnation, uvlong counter);
 NvTerm nvtuple(NvHeap *, NvTerm *elem, int n);
+NvTerm nvbin(NvHeap *, void *bytes, uvlong nbytes);
+uvlong nvbinwords(uvlong nbytes);
+NvTerm nvbinapp(NvHeap *, NvTerm cur, void *add, uvlong addlen);
+void nvbinenc(vlong val, int width, int flags, uchar *out);
+void nvbindec(uchar *src, int width, int flags, vlong *out);
+int nvbinfits(vlong val, int width, int flags);
 
 /* Inspection. Valid on any term wherever its storage lives. Accessors assume the kind has been checked. */
 int nvtermkind(NvTerm);
@@ -204,6 +213,8 @@ uvlong nvrefcounter(NvTerm);
 int nvtuplelen(NvTerm);
 NvTerm nvtupleelem(NvTerm, int);
 NvTerm *nvtupleelems(NvTerm);
+uvlong nvbinlen(NvTerm);
+void *nvbinbytes(NvTerm);
 
 /*
  * nvtermequal: 1 equal, 0 unequal (D028, type-sensitive, identical words

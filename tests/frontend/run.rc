@@ -73,12 +73,86 @@ fn rejected {
 	echo ok - $name rejected
 }
 
+# Run `entry` from source (-r) and again through saved bytecode
+# (-c then -X), so a lossy bytecode writer or reader cannot hide.
+fn ran {
+	name=$1
+	input=$2
+	entry=$3
+	expect=$4
+	$bin -r $testdir/$input $entry >$tmp/out >[2]$tmp/err
+	if(! ~ $status '' || test -s $tmp/err){
+		cat $tmp/err >[1=2]
+		fail $name: -r failed
+	}
+	if(! cmp -s $tmp/out $testdir/$expect){
+		echo expected: $testdir/$expect >[1=2]
+		echo actual: >[1=2]
+		cat $tmp/out >[1=2]
+		fail $name: -r output differs
+	}
+	$bin -c $testdir/$input >$tmp/bc >[2]$tmp/err
+	if(! ~ $status '')
+		fail $name: -c failed
+	$bin -X $tmp/bc $entry >$tmp/out >[2]$tmp/err
+	if(! ~ $status '' || test -s $tmp/err || ! cmp -s $tmp/out $testdir/$expect){
+		cat $tmp/err >[1=2]
+		fail $name: -X of saved bytecode differs
+	}
+	echo ok - $name
+}
+
+# Run `entry` expecting the root process to fault with `reason`;
+# any further words are CLI flags placed before -r (e.g. -H 1000).
+fn faulted {
+	name=$1
+	input=$2
+	entry=$3
+	reason=$4
+	shift 4
+	$bin $* -r $testdir/$input $entry >$tmp/out >[2=1]
+	if(! ~ $status *run){
+		cat $tmp/out >[1=2]
+		fail $name: expected a run fault, status $status
+	}
+	echo fault $reason >$tmp/want
+	if(! cmp -s $tmp/out $tmp/want){
+		echo expected: fault $reason >[1=2]
+		echo actual: >[1=2]
+		cat $tmp/out >[1=2]
+		fail $name: fault differs
+	}
+	echo ok - $name faulted
+}
+
 golden basic-ast -a basic.nv basic.ast
 golden nested-ast -a nested.nv nested.ast
 golden tuple-leading-body -a tuple-body.nv tuple-body.ast
 rejected bad-token -a bad-token.nv bad-token.err
 rejected bad-pattern -a bad-pattern.nv bad-pattern.err
 rejected bad-head -a bad-head.nv bad-head.err
+# D076: binary aggregates and segments (M09-T02 stage 1, parser only).
+golden binary-ast -a binary.nv binary.ast
+rejected bad-binwidth -a bad-binwidth.nv bad-binwidth.err
+rejected bad-binrest -a bad-binrest.nv bad-binrest.err
+golden binary-format -f binary-fmt.nv binary-fmt.fmt
+# D077: construction and matching end to end (M09-T02/T03).
+ran binary-run binary-run.nv main binary-run.out
+# D079: construction and matching faults.
+faulted binfault-overflow binfault-overflow.nv main overflow
+faulted binfault-signed binfault-signed.nv main overflow
+faulted binfault-badarith binfault-badarith.nv main badarith
+faulted binfault-notbin binfault-notbin.nv main bad_binary
+faulted binfault-toolong binfault-toolong.nv main bad_binary
+faulted binfault-negsize binfault-negsize.nv main bad_binary
+faulted binfault-trailing binfault-trailing.nv main match_fail
+faulted binfault-limit binfault-limit.nv main system_limit -H 1000
+# D077/D079: compile-time rejections.
+rejected binreject-forward -c binreject-forward.nv binreject-forward.err
+rejected binreject-unbound -c binreject-unbound.nv binreject-unbound.err
+rejected binreject-guard -c binreject-guard.nv binreject-guard.err
+# Milestone 09 exit criterion.
+ran protocol ../../examples/protocol.nv main protocol.out
 golden current-format -f current.nv current.fmt
 golden match-format -f current-match.nv current-match.fmt
 golden if-format -f if.nv if.fmt

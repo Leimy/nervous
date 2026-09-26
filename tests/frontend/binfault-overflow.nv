@@ -1,0 +1,5 @@
+// D079: an unsigned 8-bit segment cannot hold 300.
+fn main() {
+	n = 300;
+	<<n:8>>
+}

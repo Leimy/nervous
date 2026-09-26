@@ -39,10 +39,7 @@ The next throughput candidate is duplicated arithmetic/call-target work across r
 
 ## Milestone 09 - Binaries
 
-- Exact minimal segment grammar.
-- Construction evaluation order.
-- Integer-width limits and byte alignment restrictions.
-- Binary allocation limits and fault reasons.
+Settled in D076 through D079 before implementation begins: the `Bbin` representation (opaque boxed bytes, self-contained, byte-exact equality), the minimal byte-aligned segment grammar (integer segments of literal widths {8,16,32,64} with explicit signed/unsigned and big/little modifiers, sized and unsized `/binary` segments, a final unsized remainder), left-to-right no-backtracking transactional matching with a data(mismatch)/code(fault) split, and sizing-reservation allocation with the `bad_binary` fault reason. `is_binary` joins the D060 type tests. Arbitrary (non-byte-aligned) widths remain explicitly out of scope per the milestone document.
 
 ## Milestone 10 - Multicore
 

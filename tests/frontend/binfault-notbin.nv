@@ -1,0 +1,5 @@
+// D079: a /binary segment's value must be a binary.
+fn main() {
+	x = 5;
+	<<x/binary>>
+}

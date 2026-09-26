@@ -267,6 +267,7 @@ nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biob
 	e->maxframe = 1024;
 	e->state = NvYield;
 	e->guardfail = -1;
+	e->binsubj = -1;
 	/* Initial copying used non-moving chunks; compact once before execution. */
 	rc = nvexeccollect(e, 0);
 	if(rc < 0){
@@ -323,6 +324,64 @@ arithresult(NvExec *e, NvInsn *in, vlong *out)
 }
 
 /*
+ * D076: the subject of the binary match in progress. binsubj is a
+ * register index recorded by bintestbinary; a verified module cannot
+ * prove that every bin*get follows one in the same frame, so check the
+ * index and the term kind on every use rather than trusting it.
+ */
+static int
+binsubject(NvExec *e, NvTerm *out)
+{
+	if(e->binsubj < 0 || e->binsubj >= curfunc(e)->nreg)
+		return -1;
+	*out = curregs(e)[e->binsubj];
+	if(nvtermkind(*out) != Vbin || e->binpos > nvbinlen(*out))
+		return -1;
+	return 0;
+}
+
+/*
+ * D079 sizing reservation for the append opcodes. The result size is
+ * known from the operand registers at instruction start, so it is
+ * reserved exactly like a fixed-size instruction (D067). Invalid
+ * operands reserve nothing; run() reports their fault.
+ */
+static char *
+binappneed(NvExec *e, NvInsn *in, uvlong *space)
+{
+	NvTerm *r;
+	uvlong clen, add;
+	vlong sz;
+
+	r = curregs(e);
+	*space = 0;
+	if(nvtermkind(r[in->b]) != Vbin)
+		return nil;
+	clen = nvbinlen(r[in->b]);
+	switch(in->op){
+	case Obinappint:
+		add = in->d>>2;
+		break;
+	case Obinappbin:
+		if(nvtermkind(r[in->c]) != Vbin || nvtermkind(r[in->d]) != Vint)
+			return nil;
+		sz = nvtermint(r[in->d]);
+		if(sz < 0 || (uvlong)sz > nvbinlen(r[in->c]))
+			return nil;
+		add = sz;
+		break;
+	default:	/* Obinappend */
+		if(nvtermkind(r[in->c]) != Vbin)
+			return nil;
+		add = nvbinlen(r[in->c]);
+		break;
+	}
+	if(clen > ~0ULL-add || (*space = nvbinwords(clen+add)) == 0)
+		return "system_limit";
+	return nil;
+}
+
+/*
  * D067: no writes, side effects or reduction charge precede reservation.
  * space is bump-space demand; charge also covers adoption/stack growth.
  * Adopted words participate in space pressure even when maxheap is zero.
@@ -333,6 +392,7 @@ prepare(NvExec *e, NvInsn *in, char *err, int nerr)
 {
 	NvHeap *h;
 	NvConst *k;
+	NvTerm t, *r;
 	uvlong space, charge, newsp, limit;
 	ulong cap;
 	vlong v;
@@ -368,6 +428,30 @@ prepare(NvExec *e, NvInsn *in, char *err, int nerr)
 			why = "bad_process_context";
 		else
 			space = 3;
+		break;
+	/* D079: binary sizes come from operand registers, read here. */
+	case Obinalloc:
+		space = 2;
+		break;
+	case Obinappint: case Obinappbin: case Obinappend:
+		why = binappneed(e, in, &space);
+		break;
+	case Obinintget:
+		space = 2;	/* a decoded value may need a boxed Bint */
+		break;
+	case Obinbinget:
+		r = curregs(e);
+		if(binsubject(e, &t) == 0 && nvtermkind(r[in->b]) == Vint){
+			v = nvtermint(r[in->b]);
+			if(v >= 0 && (uvlong)v <= nvbinlen(t)-e->binpos &&
+			   (space = nvbinwords((uvlong)v)) == 0)
+				why = "system_limit";
+		}
+		break;
+	case Obinremget:
+		if(binsubject(e, &t) == 0 &&
+		   (space = nvbinwords(nvbinlen(t)-e->binpos)) == 0)
+			why = "system_limit";
 		break;
 	case Ocall: case Otailcall:
 		active = 1;
@@ -417,13 +501,15 @@ run(NvExec *e, uvlong quantum)
 	NvTerm *regs, *r;
 	NvInsn *insn;
 	NvConst *k;
-	NvTerm v, arg;
+	NvTerm v, arg, bsubj;
 	NvFrag *frag;
 	char hosterr[128];
-	uvlong used;
-	vlong left, right, ir;
+	char scratch[8];
+	uvlong used, blen;
+	vlong left, right, ir, bval, bsizev;
+	uchar *bbytes;
 	ulong pc, callerfp, newsp;
-	int j, truth, eq, rc, found, targetidx, dstreg;
+	int j, truth, eq, rc, found, targetidx, dstreg, bw, bflags;
 
 	if(e->state != NvYield) return e->state;
 	if(e->gcpending) return NvCollect;
@@ -655,6 +741,109 @@ run(NvExec *e, uvlong quantum)
 		case Oistype:
 			if(boolatom(nvtermkind(regs[insn->b]) == insn->c, &v) < 0) return fault(e,"out_of_memory");
 			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinalloc:
+			/* D077: the running binary starts empty. */
+			v = nvbin(&e->heap, nil, 0);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinappint:
+			/* D079: append width bytes encoding regs[c]. A non-integer
+			 * value is badarith; one outside the width's range is overflow. */
+			bw = insn->d>>2; bflags = insn->d&3;
+			if(nvtermkind(regs[insn->b]) != Vbin) return fault(e,"bad_binary");
+			if(nvtermkind(regs[insn->c]) != Vint) return fault(e,"badarith");
+			bval = nvtermint(regs[insn->c]);
+			if(!nvbinfits(bval, bw, bflags)) return fault(e,"overflow");
+			nvbinenc(bval, bw, bflags, (uchar*)scratch);
+			v = nvbinapp(&e->heap, regs[insn->b], scratch, (uvlong)bw);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinappbin:
+			/* D079: append regs[d] bytes of regs[c]. A non-integer size is
+			 * badarith; a non-binary operand, a negative size, or more bytes
+			 * than regs[c] holds is bad_binary. */
+			if(nvtermkind(regs[insn->b]) != Vbin || nvtermkind(regs[insn->c]) != Vbin) return fault(e,"bad_binary");
+			if(nvtermkind(regs[insn->d]) != Vint) return fault(e,"badarith");
+			blen = nvbinlen(regs[insn->c]);
+			bsizev = nvtermint(regs[insn->d]);
+			if(bsizev < 0 || (uvlong)bsizev > blen) return fault(e,"bad_binary");
+			v = nvbinapp(&e->heap, regs[insn->b], nvbinbytes(regs[insn->c]), (uvlong)bsizev);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinappend:
+			/* D079: append all of regs[c]'s bytes. */
+			if(nvtermkind(regs[insn->b]) != Vbin || nvtermkind(regs[insn->c]) != Vbin) return fault(e,"bad_binary");
+			v = nvbinapp(&e->heap, regs[insn->b], nvbinbytes(regs[insn->c]), nvbinlen(regs[insn->c]));
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obintestbinary:
+			/* D077: begin a binary pattern match; a non-binary subject is a
+			 * clause failure, not a fault. */
+			if(nvtermkind(regs[insn->a]) != Vbin){
+				setpc(e, insn->b);
+				break;
+			}
+			e->binsubj = insn->a;
+			e->binpos = 0;
+			setpc(e, pc+1);
+			break;
+		case Obinintget:
+			/* D077: decode width bytes at e->binpos; short subject is a
+			 * mismatch. The subject register is re-read (it may have moved);
+			 * binsubject faults bytecode that reached here without a valid
+			 * bintestbinary. */
+			bw = insn->c>>2; bflags = insn->c&3;
+			if(binsubject(e, &bsubj) < 0) return fault(e,"bad_binary");
+			bbytes = nvbinbytes(bsubj);
+			blen = nvbinlen(bsubj);
+			if((uvlong)bw > blen - e->binpos){
+				setpc(e, insn->b);
+				break;
+			}
+			nvbindec(bbytes+e->binpos, bw, bflags, &bval);
+			v = nvint(&e->heap, bval);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			e->binpos += (uvlong)bw;
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinbinget:
+			/* D077: extract regs[b] bytes into a fresh binary; a non-integer,
+			 * negative or too-large size is a mismatch (data, not code). */
+			if(binsubject(e, &bsubj) < 0) return fault(e,"bad_binary");
+			if(nvtermkind(regs[insn->b]) != Vint){
+				setpc(e, insn->c);
+				break;
+			}
+			bbytes = nvbinbytes(bsubj);
+			blen = nvbinlen(bsubj);
+			bsizev = nvtermint(regs[insn->b]);
+			if(bsizev < 0 || (uvlong)bsizev > blen - e->binpos){
+				setpc(e, insn->c);
+				break;
+			}
+			v = nvbin(&e->heap, bbytes+e->binpos, (uvlong)bsizev);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			e->binpos += (uvlong)bsizev;
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinremget:
+			/* D077: extract all remaining bytes (possibly zero); always
+			 * succeeds once the subject is a binary. */
+			if(binsubject(e, &bsubj) < 0) return fault(e,"bad_binary");
+			bbytes = nvbinbytes(bsubj);
+			blen = nvbinlen(bsubj);
+			v = nvbin(&e->heap, bbytes+e->binpos, blen - e->binpos);
+			if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
+			e->binpos = blen;
+			regs[insn->a] = v; setpc(e, pc+1); break;
+		case Obinend:
+			/* D077: a pattern with no final remainder must consume the
+			 * whole value; a trailing byte is a mismatch. */
+			if(binsubject(e, &bsubj) < 0) return fault(e,"bad_binary");
+			if(nvbinlen(bsubj) != e->binpos){
+				setpc(e, insn->a);
+				break;
+			}
+			setpc(e, pc+1);
+			break;
 		default:
 			/*
 			 * Unreachable for a verified module (nvverify rejects unknown

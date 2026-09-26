@@ -1,0 +1,8 @@
+// D077: n is bound after the segment that needs it.
+fn f(${<<p:n/binary>>, n}) {
+	p
+}
+
+fn main() {
+	f(${<<1:8>>, 1})
+}

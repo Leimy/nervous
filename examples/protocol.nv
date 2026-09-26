@@ -1,0 +1,53 @@
+// Milestone 09 exit criterion: a length-prefixed protocol over binaries.
+//
+// Each frame is <<length:16, payload/binary>>.  main builds a stream of
+// three frames, cuts it into chunks that split frames at awkward places,
+// and sends the chunks to a consumer process.  The consumer appends each
+// chunk to its buffer and decodes every complete frame; an incomplete
+// frame fails the pattern (too few bytes) and simply waits for more.
+//
+//	nervous -r examples/protocol.nv main
+//	${<<104, 105>>, <<1, 2, 3>>, <<>>, 3}
+
+fn frame(payload, n) {
+	<<n:16, payload/binary>>
+}
+
+fn consumer(parent, buf, got) {
+	receive {
+		'done => parent ! ${'frames, got};
+		chunk => drain(parent, <<buf/binary, chunk/binary>>, got);
+	}
+}
+
+fn drain(parent, <<n:16, p:n/binary, rest/binary>>, got) {
+	parent ! ${'frame, p};
+	drain(parent, rest, got + 1)
+}
+
+fn drain(parent, buf, got) {
+	consumer(parent, buf, got)
+}
+
+fn main() {
+	stream = <<frame(<<104:8, 105:8>>, 2)/binary, frame(<<1:8, 2:8, 3:8>>, 3)/binary, frame(<<>>, 0)/binary>>;
+	<<c1:3/binary, c2:5/binary, c3/binary>> = stream;
+	c = spawn consumer(self, <<>>, 0);
+	c ! c1;
+	c ! c2;
+	c ! c3;
+	c ! 'done;
+	f1 = receive {
+		${'frame, p} => p;
+	};
+	f2 = receive {
+		${'frame, p} => p;
+	};
+	f3 = receive {
+		${'frame, p} => p;
+	};
+	n = receive {
+		${'frames, k} => k;
+	};
+	${f1, f2, f3, n}
+}

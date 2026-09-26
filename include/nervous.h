@@ -34,6 +34,15 @@ enum {
 	Eexit,
 	Eunary,
 	Ebinary,
+	Ebinagg,
+	Ebinseg,
+};
+
+/* D076-D078: binary aggregate and segment classes (Ebinseg ival, high bits). */
+enum {
+	Binsegint = 0,
+	Binsegsized,
+	Binsegrest,
 };
 
 /*
@@ -54,6 +63,14 @@ enum {
  * Eself, Emkref	no operands.
  * Eunary	text = operator, left = operand.
  * Ebinary	text = operator, left, right.
+ * Ebinagg	list = segments (Ebinseg); no other fields.
+ * Ebinseg	D076: ival = (class << 8) | (width << 2) | (signed<<1 |
+ *		little), class one of Binsegint/Binsegsized/Binsegrest, width
+ *		the byte count 1, 2, 4, 8 for Binsegint (0 otherwise);
+ *		left = the segment operand (pattern position: an Evar, Ewild,
+ *		or Eint for Binsegint, an Evar/Ewild for the binary forms;
+ *		construction position: any expression); right = the size
+ *		expression for Binsegsized, nil otherwise.
  */
 
 struct Exprs {
@@ -125,12 +142,15 @@ enum {
 	Tor,
 	Tnot,
 	Twhen,
+	Tbinopen,
+	Tbinclose,
 	Tlbrace,
 	Trbrace,
 	Tlparen,
 	Trparen,
 	Tcomma,
 	Tsemi,
+	Tcolon,
 	Tarrow,
 	Tassign,
 	Tbang,
@@ -182,6 +202,8 @@ enum {
 struct Parser {
 	Lexer lex;
 	Token tok;
+	Token peek;		/* one-token lookahead (D076 segment disambiguation) */
+	int havepeek;
 	int compat;
 	int depth;
 	Comment *comments;

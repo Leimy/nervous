@@ -35,6 +35,8 @@ The `after` clause of a receive follows the same rule. `if` chains place `else i
 
 Process operations are keyword forms: `self`, `mkref`, `spawn worker(args...)`, `pid ! message`, `exit reason`. `!` is written with one space either side (which also keeps it visually distinct from `!=`). Binding and send bind loosest and associate right, so `x = pid ! msg` and `a ! b ! m` print without parentheses while `(a ! b) ! m` keeps them.
 
+Binary aggregates (D076) print as `<<seg, seg>>` with no space inside the brackets and `, ` between segments; the empty aggregate is `<<>>`. A segment prints with no spaces around `:` or `/`: `v:16/signed/little`, `payload:n/binary`, `rest/binary`. Default modifiers (`/unsigned`, `/big`) are dropped, and signedness always precedes endianness, so `v:16/little/signed` prints `v:16/signed/little`, and `v:8/unsigned/big` prints `v:8`. A segment value or size is read by the parser as a single primary or unary expression, so a looser expression keeps its parentheses: `(a + b):8`, `-(a + b):8`, `x:(n * 2)/binary`.
+
 `tests/frontend/*.fmt` are the canonical fixtures; `compat.nv`/`compat.fmt` show the previous syntax and its conversion.
 
 ## Comments

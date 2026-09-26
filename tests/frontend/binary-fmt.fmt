@@ -1,0 +1,11 @@
+// D076: canonical binary aggregate layout
+fn main(a, b) {
+	e = <<>>;
+	x = <<a:16/signed/little, b:8, -1:32/signed, -(a + b):8>>;
+	y = <<(a * 2):64, x:2/binary, x/binary>>;
+	<<n:8, body:n/binary, _/binary>> = y;
+	match y {
+		<<0:8, _:32/little, rest/binary>> => rest;
+		<<>> => 'empty;
+	}
+}

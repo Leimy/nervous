@@ -101,6 +101,19 @@ struct NvExec {
 	 * guards cannot call, so they cannot nest.
 	 */
 	int guardfail;
+	/*
+	 * D076: binary pattern-match state. binsubj is the register index of
+	 * the subject binary (set by bintestbinary, -1 otherwise); binpos is
+	 * the current byte position into it. Both are plain integers (no heap
+	 * pointer), so they are safe across a collection: the subject term is
+	 * read fresh from regs[binsubj] on every use, and the collector
+	 * updates that register; binpos is a byte offset, unchanged by a move.
+	 * A quantum boundary in the middle of a match preserves both (as D060
+	 * preserves guardfail), and a failed match leaves them stale but
+	 * unused until the next bintestbinary.
+	 */
+	int binsubj;
+	uvlong binpos;
 	int gcstress;
 	int gcpending;
 	int gcretry;		/* 0 fresh, 1 collected, 2 limit, 3 allocation failure */

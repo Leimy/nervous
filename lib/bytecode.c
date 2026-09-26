@@ -13,6 +13,8 @@ static char *opnames[] = {
 	"recvdeadline", "recvwaitdeadline",
 	"print", "eprint",
 	"guard", "guardend", "istype",
+	"binalloc", "binappint", "binappbin", "binappend",
+	"bintestbinary", "binintget", "binbinget", "binremget", "binend",
 };
 
 char *
@@ -59,6 +61,18 @@ putinsn(Biobuf *b, int pc, NvInsn *i)
 		break;
 	case Otailcall: case Orecvbegin: case Orecvnext: case Oprint: case Oeprint:
 		Bprint(b, " %d %d", i->a, i->b);
+		break;
+	case Obinappint: case Obinappbin:
+		Bprint(b, " %d %d %d %d", i->a, i->b, i->c, i->d);
+		break;
+	case Obinappend: case Obinintget: case Obinbinget:
+		Bprint(b, " %d %d %d", i->a, i->b, i->c);
+		break;
+	case Obintestbinary:
+		Bprint(b, " %d %d", i->a, i->b);
+		break;
+	case Obinalloc: case Obinremget: case Obinend:
+		Bprint(b, " %d", i->a);
 		break;
 	case Otesteq: case Otestarity: case Ogetelem:
 	case Oadd: case Osub: case Omul: case Odiv: case Orem:

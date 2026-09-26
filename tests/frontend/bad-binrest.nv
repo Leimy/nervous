@@ -1,0 +1,3 @@
+fn bad(<<a/binary, b:8>>) {
+    0
+}

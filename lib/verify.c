@@ -12,7 +12,14 @@ enum {
 static int
 kindok(int k)
 {
-	return k == Vint || k == Vatom || k == Vtuple || k == Vpid || k == Vref;
+	return k == Vint || k == Vatom || k == Vtuple || k == Vpid || k == Vref || k == Vbin;
+}
+
+/* D078: a binary integer segment's width is a compile-time byte count. */
+static int
+binwidthok(int w)
+{
+	return w == 1 || w == 2 || w == 4 || w == 8;
 }
 
 static int
@@ -130,6 +137,39 @@ verifyinsn(NvModule *m, NvFunc *f, int pc, NvInsn *i, char *err, int nerr)
 	case Oistype:
 		if(!regok(f,i->a) || !regok(f,i->b) || !kindok(i->c)) return bad(err,nerr,f,pc,"bad istype operand");
 		break;
+	case Obinalloc:
+		if(!regok(f,i->a)) return bad(err,nerr,f,pc,"bad binalloc register");
+		break;
+	case Obinappint:
+		if(!regok(f,i->a) || !regok(f,i->b) || !regok(f,i->c) ||
+		   !binwidthok(i->d>>2) || (i->d&3) > 3)
+			return bad(err,nerr,f,pc,"bad binappint operand");
+		break;
+	case Obinappbin:
+		if(!regok(f,i->a) || !regok(f,i->b) || !regok(f,i->c) || !regok(f,i->d))
+			return bad(err,nerr,f,pc,"bad binappbin operand");
+		break;
+	case Obinappend:
+		if(!regok(f,i->a) || !regok(f,i->b) || !regok(f,i->c))
+			return bad(err,nerr,f,pc,"bad binappend operand");
+		break;
+	case Obintestbinary:
+		if(!regok(f,i->a) || !targetok(f,i->b)) return bad(err,nerr,f,pc,"bad bintestbinary operand");
+		break;
+	case Obinintget:
+		if(!regok(f,i->a) || !targetok(f,i->b) || !binwidthok(i->c>>2) || (i->c&3) > 3)
+			return bad(err,nerr,f,pc,"bad binintget operand");
+		break;
+	case Obinbinget:
+		if(!regok(f,i->a) || !regok(f,i->b) || !targetok(f,i->c))
+			return bad(err,nerr,f,pc,"bad binbinget operand");
+		break;
+	case Obinremget:
+		if(!regok(f,i->a)) return bad(err,nerr,f,pc,"bad binremget register");
+		break;
+	case Obinend:
+		if(!targetok(f,i->a)) return bad(err,nerr,f,pc,"bad binend target");
+		break;
 	case Onop:
 		break;
 	}
@@ -234,7 +274,16 @@ verifyguards(NvFunc *f, char *err, int nerr)
 			fall = i->op == Orecvwaitdeadline;
 			break;
 		case Otestatom: case Otestint: case Otesteq: case Otestarity:
+		case Obinbinget:
 			if(guardedge(f, pc, i->c, out, region, err, nerr) < 0)
+				goto fail;
+			break;
+		case Obintestbinary: case Obinintget:
+			if(guardedge(f, pc, i->b, out, region, err, nerr) < 0)
+				goto fail;
+			break;
+		case Obinend:
+			if(guardedge(f, pc, i->a, out, region, err, nerr) < 0)
 				goto fail;
 			break;
 		case Otailcall: case Oreturn: case Ofail: case Oexit:
@@ -312,6 +361,19 @@ checkreads(NvFunc *f, int pc, NvInsn *i, ulong *s, char *err, int nerr)
 		return readreg(f, pc, s, i->a, err, nerr);
 	case Oprint: case Oeprint:
 		return readreg(f, pc, s, i->b, err, nerr);
+	case Obintestbinary:
+		return readreg(f, pc, s, i->a, err, nerr);
+	case Obinbinget:
+		return readreg(f, pc, s, i->b, err, nerr);
+	case Obinappint: case Obinappend:
+		if(readreg(f, pc, s, i->b, err, nerr) < 0)
+			return -1;
+		return readreg(f, pc, s, i->c, err, nerr);
+	case Obinappbin:
+		if(readreg(f, pc, s, i->b, err, nerr) < 0 ||
+		   readreg(f, pc, s, i->c, err, nerr) < 0)
+			return -1;
+		return readreg(f, pc, s, i->d, err, nerr);
 	}
 	return 0;
 }
@@ -325,6 +387,8 @@ transfer(NvInsn *i, ulong *s)
 	case Olt: case Ole: case Ogt: case Oge:
 	case Oself: case Omakeref: case Osend: case Ospawn: case Oprint: case Oeprint:
 	case Oistype:
+	case Obinalloc: case Obinappint: case Obinappbin: case Obinappend:
+	case Obinintget: case Obinbinget: case Obinremget:
 		setreg(s, i->a);
 		break;
 	case Orecvbegin: case Orecvnext:
@@ -409,6 +473,23 @@ verifyflow(NvFunc *f, char *err, int nerr)
 			break;
 		case Otestatom: case Otestint: case Otesteq: case Otestarity:
 			edge(f, i->c, out, in, seen, queued, queue, &qt, &nq);
+			break;
+		/*
+		 * D077: binary match mismatch edges. binintget/binbinget write
+		 * their destination only on the fallthrough, so the mismatch
+		 * edge carries the state from BEFORE the instruction.
+		 */
+		case Obintestbinary:
+			edge(f, i->b, out, in, seen, queued, queue, &qt, &nq);
+			break;
+		case Obinintget:
+			edge(f, i->b, in+pc*Nword, in, seen, queued, queue, &qt, &nq);
+			break;
+		case Obinbinget:
+			edge(f, i->c, in+pc*Nword, in, seen, queued, queue, &qt, &nq);
+			break;
+		case Obinend:
+			edge(f, i->a, out, in, seen, queued, queue, &qt, &nq);
 			break;
 		case Oguard:
 			/*

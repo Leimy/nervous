@@ -1,0 +1,5 @@
+// D079: a sized segment's size cannot be negative.
+fn main() {
+	b = <<1:8>>;
+	<<b:-1/binary>>
+}

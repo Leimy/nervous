@@ -139,6 +139,90 @@ addbind(Builder *b, char *name, int reg)
 	return 0;
 }
 
+/*
+ * Bind a freshly extracted segment value in r: a first occurrence of
+ * the name binds it, a repeat tests equality (as Pvar does), and a
+ * wildcard segment (name nil) discards it.
+ */
+static int
+bindseg(Builder *b, char *name, int r)
+{
+	NvPatReg *binding;
+
+	if(name == nil)
+		return 0;
+	binding = findbind(b->code, name);
+	if(binding != nil)
+		return emit(b, Otesteq, binding->reg, r, b->failpc);
+	return addbind(b, name, r);
+}
+
+/*
+ * D077: a binary pattern walks the subject with bintestbinary and one
+ * get per segment, then binend unless the final segment took the rest.
+ * Every mismatch is an edge to failpc, never a fault. A size variable
+ * must already be bound -- a known enclosing binding, or an earlier
+ * segment or pattern element lowered before this one -- which also
+ * rejects a size bound later in an enclosing pattern, e.g.
+ * `${<<p:n/binary>>, n}` (patcompile.c only sees one binary).
+ */
+static int
+compilebin(Builder *b, NvPattern *p, int src)
+{
+	NvBinseg *s;
+	NvPatReg *size;
+	int i, r, sr, k;
+
+	if(emit(b, Obintestbinary, src, b->failpc, 0) < 0)
+		return -1;
+	for(i = 0; i < p->nseg; i++){
+		s = &p->seg[i];
+		switch(s->kind){
+		case Bsegint:
+			r = newreg(b);
+			if(r < 0 || emit(b, Obinintget, r, b->failpc, (s->width<<2) | (s->flags & (Bsegsigned|Bseglittle))) < 0)
+				return -1;
+			if(s->flags & Bsegtest){
+				k = constant(b, Kint, s->ival, nil);
+				if(k < 0 || emit(b, Otestint, r, k, b->failpc) < 0)
+					return -1;
+			}else if(bindseg(b, s->name, r) < 0)
+				return -1;
+			break;
+		case Bsegsized:
+			if(s->sizename != nil){
+				size = findbind(b->code, s->sizename);
+				if(size == nil){
+					snprint(b->err, b->nerr, "binary size %s is not bound before its segment", s->sizename);
+					return -1;
+				}
+				sr = size->reg;
+			}else{
+				sr = newreg(b);
+				k = constant(b, Kint, s->sizeval, nil);
+				if(sr < 0 || k < 0 || emit(b, Oloadk, sr, k, 0) < 0)
+					return -1;
+			}
+			r = newreg(b);
+			if(r < 0 || emit(b, Obinbinget, r, sr, b->failpc) < 0 || bindseg(b, s->name, r) < 0)
+				return -1;
+			break;
+		case Bsegrest:
+			/* A discarded rest needs no copy: skipping binend accepts any tail. */
+			if(s->name == nil)
+				return 0;
+			r = newreg(b);
+			if(r < 0 || emit(b, Obinremget, r, 0, 0) < 0 || bindseg(b, s->name, r) < 0)
+				return -1;
+			return 0;
+		default:
+			snprint(b->err, b->nerr, "unsupported binary segment kind %d", s->kind);
+			return -1;
+		}
+	}
+	return emit(b, Obinend, b->failpc, 0, 0);
+}
+
 static int
 compile(Builder *b, NvPattern *p, int src)
 {
@@ -177,6 +261,8 @@ compile(Builder *b, NvPattern *p, int src)
 				return -1;
 		}
 		return 0;
+	case Pbin:
+		return compilebin(b, p, src);
 	}
 	snprint(b->err, b->nerr, "unsupported pattern kind %d", p->kind);
 	return -1;

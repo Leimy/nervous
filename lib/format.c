@@ -154,6 +154,43 @@ fmtif(Biobuf *b, Expr *e, int ind)
 		fmtblock(b, els, ind);
 }
 
+/*
+ * D076 segments: `value:W[/signed][/little]`, `value:size/binary` or
+ * `value/binary`, separated by ", ". Default modifiers (unsigned, big)
+ * are omitted, signedness first. The parser reads a segment value or
+ * size as one primary or unary expression, so anything looser is
+ * parenthesized (outer = Punary).
+ */
+static void
+fmtbinsegs(Biobuf *b, Exprs *xs, int ind)
+{
+	Expr *s;
+
+	for(; xs != nil; xs = xs->next){
+		s = xs->expr;
+		fmtexpr(b, s->left, ind, Punary);
+		switch(s->ival >> 8){
+		case Binsegint:
+			Bprint(b, ":%d", (int)(((s->ival >> 2) & 0x3f) * 8));
+			if(s->ival & 2)
+				Bprint(b, "/signed");
+			if(s->ival & 1)
+				Bprint(b, "/little");
+			break;
+		case Binsegsized:
+			Bputc(b, ':');
+			fmtexpr(b, s->right, ind, Punary);
+			Bprint(b, "/binary");
+			break;
+		default:
+			Bprint(b, "/binary");
+			break;
+		}
+		if(xs->next != nil)
+			Bprint(b, ", ");
+	}
+}
+
 static void
 fmtexpr(Biobuf *b, Expr *e, int ind, int outer)
 {
@@ -246,6 +283,11 @@ fmtexpr(Biobuf *b, Expr *e, int ind, int outer)
 		fmtexpr(b, e->left, ind, p);
 		Bprint(b, " %s ", e->text);
 		fmtexpr(b, e->right, ind, p+1);
+		break;
+	case Ebinagg:
+		Bprint(b, "<<");
+		fmtbinsegs(b, e->list, ind);
+		Bprint(b, ">>");
 		break;
 	}
 	if(paren) Bputc(b, ')');

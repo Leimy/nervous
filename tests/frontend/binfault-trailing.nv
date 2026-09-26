@@ -1,0 +1,5 @@
+// D077: a leftover byte is a mismatch, so `=` fails with match_fail.
+fn main() {
+	<<a:8>> = <<1:8, 2:8>>;
+	a
+}

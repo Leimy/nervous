@@ -293,10 +293,10 @@ main(void)
 	clause[0].pattern = &pattern[0];
 	clause[1].pattern = &pattern[1];
 	memset(&bindings, 0, sizeof bindings);
-	check(nvprocreceive(&runtime, p2, clause, 1, &bindings, &which, &got, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "receive requires running process");
+	check(nvprocreceive(&runtime, nil, p2, clause, 1, &bindings, &which, &got, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "receive requires running process");
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "dispatch selective receiver");
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "duplicate dispatch rejected");
-	rc = nvprocreceive(&runtime, p2, clause, 1, &bindings, &which, &got, err, sizeof err);
+	rc = nvprocreceive(&runtime, nil, p2, clause, 1, &bindings, &which, &got, err, sizeof err);
 	check(rc == 1 && which == 0 && nvbinding(&bindings, "x") != nil && nvtermint(*nvbinding(&bindings, "x")) == 9, "selective receive");
 	check(nvprocyield(&runtime, p2, err, sizeof err) == 0, "yield selective receiver");
 	nvbindingsfree(&bindings);
@@ -310,7 +310,7 @@ main(void)
 	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1, "clause send");
 	memset(&bindings, 0, sizeof bindings);
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "dispatch wildcard receiver");
-	rc = nvprocreceive(&runtime, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err);
+	rc = nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err);
 	check(rc == 1 && which == 0 && nvtermint(got->root) == 7, "clause wildcard");
 	check(nvprocyield(&runtime, p2, err, sizeof err) == 0, "yield wildcard receiver");
 	nvfragfree(got);
@@ -322,12 +322,12 @@ main(void)
 	clause[1].pattern = &pattern[1];
 	memset(&bindings, 0, sizeof bindings);
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "dispatch waiting receiver");
-	check(nvprocreceive(&runtime, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && runtime.process[nvpidslot(p2)].state == Prwaiting, "receive transitions running to waiting");
+	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && runtime.process[nvpidslot(p2)].state == Prwaiting, "receive transitions running to waiting");
 	check(nvprocyield(&runtime, p2, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "waiting process cannot yield");
 	v = nvatom("wake");
 	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && runtime.process[nvpidslot(p2)].state == Prrunnable, "send wakes waiting process once");
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "redispatch woken receiver");
-	check(nvprocreceive(&runtime, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 1, "woken receive consumes message");
+	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 1, "woken receive consumes message");
 	check(nvprocyield(&runtime, p2, err, sizeof err) == 0, "yield woken receiver");
 	nvfragfree(got);
 	nvbindingsfree(&bindings);

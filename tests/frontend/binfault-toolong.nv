@@ -1,0 +1,5 @@
+// D079: a sized segment cannot take more bytes than the binary has.
+fn main() {
+	b = <<1:8>>;
+	<<b:2/binary>>
+}

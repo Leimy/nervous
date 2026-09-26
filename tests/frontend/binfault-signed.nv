@@ -1,0 +1,4 @@
+// D079: a signed 8-bit segment holds -128..127, so 128 overflows.
+fn main() {
+	<<128:8/signed>>
+}

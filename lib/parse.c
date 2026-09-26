@@ -168,6 +168,7 @@ clausenew(Span sp)
 
 static Expr *parseexpr(Parser *, int);
 static Expr *parseexpr1(Parser *, int);
+static Expr *parsebinagg(Parser *, Span);
 static int patternok(Parser *, Expr *);
 
 /* D060: an optional `when guard` after a clause head; nil when absent. */
@@ -427,6 +428,133 @@ compatintrinsic(Expr *e)
 	return e;
 }
 
+/*
+ * One segment of a binary aggregate (D076): value [ ':' operand ]
+ * { '/' modifier }. The value and operand are primary expressions, so
+ * the segment's ':' and '/' can never be read as operators; compound
+ * values must be parenthesized. The class is decided once the modifier
+ * list is read: ':' plus 'binary' is a sized binary, ':' plus a literal
+ * width is an integer, and a bare 'binary' is the remainder.
+ */
+static Expr *
+parsebinseg(Parser *p)
+{
+	Expr *v, *x, *e;
+	Span sp;
+	int hasx, sign, end, bin, nsign, nend;
+
+	sp = p->tok.span;
+	v = parseexpr(p, Pmax);
+	if(v == nil)
+		return nil;
+	hasx = 0;
+	x = nil;
+	e = nil;
+	if(take(p, Tcolon)){
+		x = parseexpr(p, Pmax);
+		if(x == nil){
+			exprfree(v);
+			return nil;
+		}
+		hasx = 1;
+	}
+	sign = 0;	/* 0 unsigned (default), 1 signed */
+	end = 0;	/* 0 big (default), 1 little */
+	bin = 0;
+	nsign = 0;
+	nend = 0;
+	for(;;){
+		if(!take(p, Tslash))
+			break;
+		if(p->tok.kind != Tident){
+			error(p, p->tok.span, "expected segment modifier, found %s", tokname(p->tok.kind));
+			goto fail;
+		}
+		if(strcmp(p->tok.text, "signed") == 0 || strcmp(p->tok.text, "unsigned") == 0){
+			if(nsign++)
+				goto dup;
+			sign = strcmp(p->tok.text, "signed") == 0;
+		}else if(strcmp(p->tok.text, "big") == 0 || strcmp(p->tok.text, "little") == 0){
+			if(nend++)
+				goto dup;
+			end = strcmp(p->tok.text, "little") == 0;
+		}else if(strcmp(p->tok.text, "binary") == 0){
+			if(bin++)
+				goto dup;
+		}else{
+			error(p, p->tok.span, "unknown segment modifier %s", p->tok.text);
+			goto fail;
+		}
+		next(p);
+	}
+	e = exprnew(Ebinseg, sp);
+	if(bin && (nsign || nend)){
+		error(p, sp, "no signedness or endianness modifier with /binary");
+		goto fail;
+	}
+	if(hasx && bin){
+		e->ival = Binsegsized << 8;
+		e->left = v;
+		e->right = x;
+		return e;
+	}
+	if(hasx){
+		if(x->kind != Eint || (x->ival != 8 && x->ival != 16 && x->ival != 32 && x->ival != 64)){
+			error(p, x->span, "binary width must be the literal 8, 16, 32 or 64");
+			goto fail;
+		}
+		e->ival = (Binsegint << 8) | ((int)(x->ival/8) << 2) | (sign << 1) | end;
+		e->left = v;
+		exprfree(x);
+		return e;
+	}
+	if(bin){
+		e->ival = Binsegrest << 8;
+		e->left = v;
+		return e;
+	}
+	error(p, sp, "binary segment requires : width or /binary");
+	goto fail;
+dup:
+	error(p, p->tok.span, "duplicate or conflicting segment modifier %s", p->tok.text);
+fail:
+	exprfree(v);
+	if(x != nil)
+		exprfree(x);
+	if(e != nil)
+		exprfree(e);
+	return nil;
+}
+
+/*
+ * A binary aggregate, << segment { , segment } >> (D076).
+ * The empty aggregate is legal.
+ */
+static Expr *
+parsebinagg(Parser *p, Span sp)
+{
+	Expr *e, *s;
+
+	e = exprnew(Ebinagg, sp);
+	if(p->tok.kind != Tbinclose){
+		for(;;){
+			s = parsebinseg(p);
+			if(s == nil){
+				exprfree(e);
+				return nil;
+			}
+			exprappend(&e->list, s);
+			if(!take(p, Tcomma))
+				break;
+		}
+	}
+	if(!expect(p, Tbinclose)){
+		exprfree(e);
+		return nil;
+	}
+	return e;
+}
+
 static Expr *
 parseprimary(Parser *p)
 {
@@ -481,6 +609,9 @@ parseprimary(Parser *p)
 			return nil;
 		}
 		return e;
+	case Tbinopen:
+		next(p);
+		return parsebinagg(p, sp);
 	case Tmapopen:
 		error(p, sp, "maps are reserved but not implemented");
 		return nil;
@@ -602,6 +733,7 @@ parseexpr1(Parser *p, int min)
 static int
 patternok(Parser *p, Expr *e)
 {
+	Expr *s;
 	Exprs *x;
 
 	if(e == nil)
@@ -621,6 +753,44 @@ patternok(Parser *p, Expr *e)
 		for(x = e->list; x != nil; x = x->next)
 			if(!patternok(p, x->expr))
 				return 0;
+		return 1;
+	case Ebinagg:
+		/*
+		 * D076: binary pattern. Integer segment values are patterns
+		 * (variable, _, literal, or negative literal); binary segment
+		 * values bind (variable or _), a size is a literal or a
+		 * variable, and the remainder must be the last segment.
+		 */
+		for(x = e->list; x != nil; x = x->next){
+			s = x->expr;
+			switch(s->ival >> 8){
+			case Binsegint:
+				if(s->left->kind != Evar && s->left->kind != Ewild && s->left->kind != Eint &&
+				   !(s->left->kind == Eunary && s->left->text != nil && strcmp(s->left->text, "-") == 0 &&
+				     s->left->left != nil && s->left->left->kind == Eint)){
+					error(p, e->span, "expression is not a pattern");
+					return 0;
+				}
+				break;
+			case Binsegsized:
+				if((s->left->kind != Evar && s->left->kind != Ewild) ||
+				   s->right == nil || (s->right->kind != Eint && s->right->kind != Evar)){
+					error(p, e->span, "expression is not a pattern");
+					return 0;
+				}
+				break;
+			default:
+				if(s->left->kind != Evar && s->left->kind != Ewild){
+					error(p, e->span, "expression is not a pattern");
+					return 0;
+				}
+				if(x->next != nil){
+					error(p, e->span, "rest segment must be the last segment of a binary pattern");
+					return 0;
+				}
+				break;
+			}
+		}
 		return 1;
 	}
 	error(p, e->span, "expression is not a pattern");
