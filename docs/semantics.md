@@ -1,18 +1,18 @@
 # Early Semantic Contract
 
-This is the compact normative contract for the initial implementation sequence. The long-form rationale remains in `../nervous_design.md`.
+This is the compact normative contract for the initial implementation sequence; `decisions.md` records the reasoning behind each rule and wins on any conflict. Long-form rationale is in the non-normative design files split from `../nervous_design.md` (`language-semantics.md` and its siblings; see `README.md` in this directory), whose examples use superseded syntax.
 
 ## Values in the early subset
 
-The first subset contains:
+The implemented subset contains:
 
-- checked small integers;
-- interned atoms;
-- exact tuples;
-- later, lists and binaries;
-- opaque PIDs and Refs once processes are introduced.
+- checked 64-bit integers (D007, D061);
+- interned atoms (D062);
+- exact tuples, written `${a, b}`;
+- binaries, written `<<...>>` (milestone 09, D076-D079; see "Binaries" below);
+- opaque PIDs and Refs (D038).
 
-Maps, floats, closures, distribution, links, monitors, and catch semantics are deferred.
+Lists, maps, floats, closures, `@` whole-value binding, distribution, links, monitors, and catch semantics are deferred.
 
 ## Variables and scope
 
@@ -24,11 +24,11 @@ A function clause is one lexical scope. Nested blocks do not permit shadowing or
 
 ## Matching and clauses
 
-Tuple and list patterns match exact shapes. A list tail pattern explicitly accepts a remainder. Binary patterns consume the complete binary unless they contain a final remainder segment.
+Tuple patterns match exact shapes, as list patterns will once lists exist; a list tail pattern will be the explicit way to accept a remainder (D001). Binary patterns consume the complete binary unless they contain a final remainder segment.
 
 Clauses are ordered. Exact arity makes clauses of different tuple arities disjoint, but patterns of the same arity may overlap and retain source-order behavior.
 
-A function, `match`, or `receive` clause may carry a guard: `fn f(x) when x > 0 { ... }`, `pattern when guard => body`. The guard is evaluated after the pattern has matched and bound its variables and before the clause is selected; the clause is selected only if the guard yields exactly `'true`. A guard that yields `'false` or any non-boolean, or that faults for any reason (`badarith` on a non-integer, `divide_by_zero`, `overflow`, ...), makes the clause fail like a pattern mismatch: the next clause is tried, and in a `receive` the candidate stays in the mailbox. A guard can never terminate the process. Guard expressions are restricted to literals, variables, tuple construction, the operators, and the type tests `is_int`, `is_atom`, `is_tuple`, `is_pid`, `is_ref`; calls, bindings, blocks, `match`, `receive`, `if`, and every process or I/O form are compile errors in a guard (D060). The type tests are also ordinary expressions usable anywhere. A negative integer literal is a pattern.
+A function, `match`, or `receive` clause may carry a guard: `fn f(x) when x > 0 { ... }`, `pattern when guard => body`. The guard is evaluated after the pattern has matched and bound its variables and before the clause is selected; the clause is selected only if the guard yields exactly `'true`. A guard that yields `'false` or any non-boolean, or that faults for any reason (`badarith` on a non-integer, `divide_by_zero`, `overflow`, ...), makes the clause fail like a pattern mismatch: the next clause is tried, and in a `receive` the candidate stays in the mailbox. A guard can never terminate the process. Guard expressions are restricted to literals, variables, tuple construction, the operators, and the type tests `is_int`, `is_atom`, `is_tuple`, `is_pid`, `is_ref`, `is_binary`. A guard may not contain calls, bindings, blocks, `match`, `receive`, `if`, binary aggregates, or any process or I/O form; each is a compile error (D060, D079). The type tests are also ordinary expressions usable anywhere. A negative integer literal is a pattern.
 
 A direct failed match exits the current process abnormally.
 
@@ -48,7 +48,7 @@ Blocks are expression-valued. Semicolons separate expressions; a trailing semico
 
 There is no general truthiness. The ordinary atoms `'true` and `'false` are boolean results. `if cond { a } else { b }` requires `cond` to be exactly `'true` or `'false` and faults `match_fail` otherwise; `else if` chains, and an `if` with no `else` yields `'ok`. Branch bindings are local to the branch. `==` and `!=` are D028 structural equality.
 
-`and`, `or`, and `not` are the boolean operators and follow the same rule as `if`: every operand must be exactly `'true` or `'false`, and anything else faults `match_fail`. `and` and `or` short-circuit -- the right operand is evaluated only when the left one does not decide the result -- so a binding made inside a right operand exists on only one path and is local to that operand, as an `if` branch's bindings are. Unary `-` is checked subtraction from zero (negating the minimum integer faults `overflow`), and a negative integer literal is a compile-time constant; unary `+` is the identity on an integer and faults `badarith` on anything else. Negative literals are expressions, not yet patterns.
+`and`, `or`, and `not` are the boolean operators and follow the same rule as `if`: every operand must be exactly `'true` or `'false`, and anything else faults `match_fail`. `and` and `or` short-circuit -- the right operand is evaluated only when the left one does not decide the result -- so a binding made inside a right operand exists on only one path and is local to that operand, as an `if` branch's bindings are. Unary `-` is checked subtraction from zero (negating the minimum integer faults `overflow`), and a negative integer literal is a compile-time constant; unary `+` is the identity on an integer and faults `badarith` on anything else. A negative integer literal is also a pattern (D060).
 
 Calls, aggregate elements, and operator operands evaluate left to right. Binding `=` and send `!` are the two lowest-precedence operators and associate to the right; everything else associates to the left.
 
@@ -58,11 +58,27 @@ Nervous processes are lightweight VM processes, not Plan 9 processes or libthrea
 
 Send is asynchronous. Ordinary message terms are copied into a self-contained mailbox fragment; no mailbox points into the sender's private heap.
 
-Current mailbox byte limits use the provisional host-representation estimate in D040. That estimate is an implementation budget only, not a language-visible term size; R3 will replace it when the final fragment/heap representation exists.
+Mailbox and message limits are word counts of the copied fragment, checked all-or-nothing during the copy (D064, D066). They are implementation budgets, not language-visible term sizes.
 
 Send is written `pid ! message` and returns the sent value, so `a ! b ! m` delivers `m` to `b` and then to `a`. Sending to a dead or stale PID drops the message and still returns it. `self` is the current PID, `mkref` is a fresh opaque unique Ref, and `exit reason` terminates the current process with an arbitrary reason term. These are keywords, not calls (D058).
 
-Selective receive is written `receive { pattern => body; ... }`. It scans messages oldest-first and clauses in source order for each candidate, consumes the first selected candidate before evaluating its body, and preserves all unmatched messages in order. If no candidate matches, the process waits; after wakeup, scanning restarts at the oldest retained message. Receive-clause bindings are transactional and local to the selected clause. Timeout behavior remains milestone 06 work.
+Selective receive is written `receive { pattern => body; ... }`. It scans messages oldest-first and clauses in source order for each candidate, consumes the first selected candidate before evaluating its body, and preserves all unmatched messages in order. If no candidate matches, the process waits; after wakeup, scanning restarts at the oldest retained message. Receive-clause bindings are transactional and local to the selected clause.
+
+A receive may end with one `after duration => body` clause (D048-D051). The duration is an integer count of nanoseconds (0 through `NvMaxduration`) or `'infinity`. Any other value faults `bad_timeout`, and an out-of-range literal is a compile error. Duration literals such as `5s` are not implemented yet. The deadline is computed once, on entry. The timeout body runs only after a complete scan finds nothing, so a timeout is a lower bound on waiting and never fires while an acceptable message is queued. `after 0` is a single nonblocking scan.
+
+## Binaries
+
+A binary is an immutable, self-contained byte string (D076). It is never a view into another binary. Equality compares bytes exactly, and a binary prints as `<<b0, b1, ...>>`. The aggregate `<< segment, ... >>` has three segment forms:
+
+- `v:W` with optional `/signed` or `/unsigned` and `/big` or `/little`: an integer segment. `W` must be a literal 8, 16, 32, or 64, and the default is unsigned big-endian (D078).
+- `v:size/binary`: a sized binary segment, where `size` is a byte count.
+- `v/binary`: an unsized binary segment.
+
+`<<>>` is the empty binary. A segment value or size is one primary or unary expression, so parenthesize anything looser. The modifier names are ordinary identifiers outside modifier position.
+
+Construction evaluates every segment value and size left to right, then builds the result (D077). It faults `badarith` on a non-integer integer value or size, and `overflow` on a value outside the segment's range. It faults `bad_binary` on a negative size or a non-binary `/binary` operand, and `system_limit` when the heap budget is exhausted (D079).
+
+Matching proceeds left to right with no backtracking, and its bindings are transactional like every other pattern. Integer segments in a pattern are a variable, `_`, or an integer literal. A size may name a variable already bound outside the pattern or by an earlier segment of the same pattern. A size bound by the same or a later segment is a compile error. An unsized `/binary` segment is allowed only last in a pattern and binds the remaining bytes, possibly none. Without one, the pattern must consume the whole binary, so a trailing byte is a mismatch. A subject that is not a binary, is too short, or has a bad size is a mismatch, never a fault. A binding of a sub-binary copies its bytes.
 
 ## Host output
 
@@ -70,9 +86,9 @@ Selective receive is written `receive { pattern => body; ... }`. It scans messag
 
 ## Failure
 
-Expected errors are ordinary values. In the early VM, runtime faults cause abnormal process exit with a bounded symbolic reason rendered as `fault <reason>`; the implementation stores that reason as a diagnostic string corresponding to the D029 reason atom. Explicit `exit(reason)` carries an arbitrary term. Converting all VM faults into first-class reason terms is required before links, monitors, or catch semantics can observe them.
+Expected errors are ordinary values. In the early VM, runtime faults cause abnormal process exit with a bounded symbolic reason rendered as `fault <reason>`; the implementation stores that reason as a diagnostic string corresponding to the D029 reason atom. Explicit `exit reason` carries an arbitrary term. Converting all VM faults into first-class reason terms is required before links, monitors, or catch semantics can observe them.
 
-Resource exhaustion must be detected and reported rather than causing memory corruption. Source expression nesting is limited to 256 and excessive nesting is an ordinary parse error. The milestone 05 runtime limits process count, mailbox/message bytes, non-tail call frames, and term depth. Call-depth and tuple-construction depth exhaustion fault the offending process with `system_limit`; an over-depth send reports `mailbox_full`. The portable provisional term-depth ceiling is 256, and a runtime may configure a smaller send ceiling. Exact process-heap and aggregate-memory accounting remain milestone 07 work.
+Resource exhaustion must be detected and reported rather than causing memory corruption. Source expression nesting is limited to 256 and excessive nesting is an ordinary parse error. The runtime limits process count, mailbox and message words, non-tail call frames, term depth, and each process's heap words (`maxheap`: live heap, adopted fragments, and frame-stack capacity; D066). Exhausting call depth or the heap budget faults the offending process with `system_limit`. An over-depth or over-budget send reports `mailbox_full`. Equality and printing past the term-depth ceiling fault `system_limit` (D061). The portable provisional term-depth ceiling is 256, and a runtime may configure a smaller send ceiling.
 
 ## Machine boundary
 

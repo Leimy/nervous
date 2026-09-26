@@ -1,4 +1,6 @@
-# Nervous Runtime Strategy
+# Nervous Runtime Strategy (design rationale)
+
+> **Not normative.** This file is Part III of the deprecated `nervous_design.md`, split out for readability; section numbers are the original ones, and "Section N" references below 32 point into `language-semantics.md`. It records the intended 9front runtime direction. What is actually built and settled is in `docs/decisions.md` (D059 run queue, D061-D075 memory and collection) and `STATUS.md`'s implementation map; those win on any conflict. As of milestone 09 there is still exactly one scheduler proc (multicore is milestone 10), so Sections 32-35 describe future work; the collector (Section 36) is a per-process Cheney copier with optional off-process collection (D063, D074, D075).
 
 ## 32. Multicore Scheduling
 
@@ -72,7 +74,7 @@ large immutable binaries:
 
 Messages are copied on send, unconditionally, even between processes on the same scheduler. Copying preserves GC isolation (Section 36), not address-space separation: if a mailbox could hold pointers into a sender's heap, the sender's collector could no longer move or free anything reachable from any mailbox without coordinating with every recipient. The copy lands in a self-contained per-message fragment attached to the mailbox entry, not in the receiver's private heap directly -- the sending scheduler must not allocate into a process it does not own (Section 32) -- and the receiver's next collection merges the fragment into its heap.
 
-Mailbox and message limits are word counts, not byte counts. A process's mailbox and message size limits bound the number of terms it may retain, not the number of bytes. Term depth also limits what may be enqueued (see Section 21). These limits are enforced in `nvprocsend()` before copying: it first checks that the destination's remaining mailbox and message budget (in words, computed from `NvLimits.maxmailbox` and `maxmessage`) can accommodate the fragment, then performs the copy.
+Mailbox and message limits are word counts, not byte counts (D066): `NvLimits.maxmailbox` and `maxmessage` bound the words of queued fragments, root word included. `nvprocsend()` checks them, together with the term-depth limit, all-or-nothing during the copy, so an over-limit send reports `mailbox_full` and enqueues nothing.
 
 Transferring ownership instead of copying is sound only when the transferred subgraph is reachable from nothing else, which single-assignment does not guarantee by construction. Immutable message regions and hazard-pointer-like techniques remain worth experimenting with for large, provably-exclusive payloads, but they are optimizations layered on the copying baseline, not alternatives to it, and are not language semantics.
 

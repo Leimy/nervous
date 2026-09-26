@@ -1,8 +1,21 @@
-# Nervous Future Work
+# Nervous Future Work (design rationale)
+
+> **Not normative, and partly out of date.** This file is Sections 46-47 of the deprecated `nervous_design.md` ("Decisions Now Considered Settled" and "Open Questions"), split out for readability. It holds no numbered decision records; those are in `docs/decisions.md` (D001-D079), which wins on any conflict. Live open questions, by owning milestone, are in `docs/questions.md`. "Section N" references point into `language-semantics.md`.
+>
+> Several items in the open-question list below have since been settled or narrowed:
+>
+> - 64-bit term tagging: D061.
+> - Atom table and limits: D062 (`NvLimits.maxatom`).
+> - GC algorithm: per-process Cheney copying with instruction-boundary reservation (D063, D067), optional off-process collection (D074, D075).
+> - Message-region design: per-message fragments adopted at receive (D064).
+> - Guards: retained, with a fixed primitive set (D060).
+> - Minimal binary segment syntax: D076-D079. Anything beyond that minimal set is still open.
+> - Scheduler run queue and reductions: D030 and D059. Multicore work-stealing is still open (milestone 10).
+> - Bytecode encoding: the "Symbolic Bytecode v0" text format (`docs/bytecode.md`) is portable. A compact binary encoding is still open.
 
 ## 47. Open Questions
 
-Still deliberately unresolved:
+Still deliberately unresolved at the time of the original design pass (see the note above):
 
 - exact 64-bit term tagging;
 - bignum representation and promotion strategy;
@@ -34,9 +47,9 @@ These do not prevent building the first Nervous machine.
 
 ---
 
-## Decisions Now Considered Settled
+## 46. Decisions Now Considered Settled
 
-For the current design pass:
+From the original design pass. Later decisions refined some of these: D058 replaced clause-form `fn` bodies with adjacent declarations, which makes the lookahead item below obsolete, and D066 made message limits word-based.
 
 - braces delimit blocks;
 - whitespace is not syntax;

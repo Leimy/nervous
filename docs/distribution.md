@@ -1,11 +1,13 @@
-# Nervous Distribution
+# Nervous Distribution (design rationale)
+
+> **Not normative, not implemented.** This file is Part IV (Sections 40-41) of the deprecated `nervous_design.md`, split out for readability; "Section N" references point into `language-semantics.md`. Distribution is outside the current milestone sequence (see `README.md`); no wire encoding exists yet. `docs/decisions.md` wins on any conflict.
 
 ## 40. Distribution
 
 Local and remote messaging share the same syntax and semantics:
 
 ```text
-pid <- message;
+pid ! message;
 ```
 
 Wire representations must not expose local atom IDs, pointers, scheduler identity, or native struct layout.

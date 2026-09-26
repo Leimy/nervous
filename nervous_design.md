@@ -1,17 +1,13 @@
 # Nervous Design Document
 
-**NOTE:** This document is deprecated. For normative specifications, see the files in `docs/`:
+**NOTE:** This document is deprecated and kept only as historical reference. The normative sources are in `docs/`:
 
-- `language-semantics.md` — language contract (terms, patterns, clauses, guards, processes)
-- `bytecode.md` — abstract machine, instruction families, verification rules
-- `runtime.md` — 9front runtime strategy (multicore, GC, I/O, message memory)
-- `distribution.md` — wire encoding and protocol evolution
-- `language-philosophy.md` — parsing, static analysis, first implementation milestone
-- `future-work.md` — open questions and consolidated settled decisions
-- `architecture.md` — high-level architecture and design principles
-- `decisions.md` — compact decision records (D001-D079)
+- `semantics.md`: the language contract as implemented.
+- `decisions.md`: numbered decision records (D001-D079).
+- `bytecode.md`: instruction set, verification rules, and VM semantics.
+- `format.md`: the canonical formatting contract.
 
-This file is kept only as historical reference. When this document conflicts with the compact sources above, the compact sources win. Do not copy a rule from here without checking its decision status in `docs/decisions.md`.
+`architecture.md` gives a non-normative overview. This file's Parts I, III and IV were also split verbatim into non-normative rationale files: `language-semantics.md`, `runtime.md`, `distribution.md`, `language-philosophy.md`, and `future-work.md` (see `docs/README.md`). When this document or those split files conflict with the normative sources, the normative sources win. Do not copy a rule from here without checking its decision status in `docs/decisions.md`.
 
 ---
 

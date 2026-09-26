@@ -1,4 +1,18 @@
-# Nervous Language Semantics
+# Nervous Language Semantics (design rationale)
+
+> **Not normative.** This file is Part I of the deprecated `nervous_design.md`, split out verbatim for readability. It explains *why* the language is shaped the way it is, but its examples use superseded surface syntax and some rules have since been narrowed. The normative contract is `docs/semantics.md`; settled decisions are in `docs/decisions.md`. Both win over this file on any conflict. Section numbers are the original `nervous_design.md` numbers; "Section N" references may point into the sibling split files (`runtime.md` 32-39, `distribution.md` 40-41, `language-philosophy.md` 42-46, `future-work.md` 47).
+>
+> Known differences from the implemented language:
+>
+> - Tuples are written `${a, b}`, not `{a, b}` (braces are blocks only).
+> - Send is `pid ! message`, not `pid <- message` (D058).
+> - Functions are adjacent single-clause declarations `fn f(pattern, ...) { body }`, not clause-form `fn f { (p) => body; }`; `fn main() { ... }`, not `fn main { ... }` (D058).
+> - Guards use `when`, not `if` (D060); `if` is the conditional expression.
+> - A fresh Ref is the keyword `mkref`, not `ref()`; `self`, `spawn`, and `exit` are keywords too (D058).
+> - Every function takes one semantic argument tuple, so clauses of different arities may coexist under one name (`docs/semantics.md`, "Functions"); Section 12's "all clauses have the same arity" does not hold.
+> - Binary integer segments take only the widths 8, 16, 32, and 64 (D078), not arbitrary bit widths; `/binary` sizes are bytes; the rest segment takes no modifiers and must be last.
+> - Duration literals (`5s`, `10ms`, Section 19) are not implemented. `after` takes an integer nanosecond count or `'infinity` (D049).
+> - Lists, maps/records, floats, `@` whole-value binding, links, and monitors are not implemented; Sections 1, 5, 6, 7, and 22 describe intended design.
 
 ## 1. Terms
 
@@ -92,8 +106,6 @@ fn counter {
     };
 }
 ```
-
-Mailbox and message limits are word counts, not byte counts. A process's mailbox and message size limits bound the number of terms it may retain, not the number of bytes. Term depth also limits what may be enqueued (see Section 21).
 
 ---
 

@@ -1,4 +1,6 @@
-# Nervous Language Philosophy and Architecture
+# Nervous Language Philosophy and Architecture (design rationale)
+
+> **Not normative.** This file is Sections 42-45 and the closing "Central Idea" of the deprecated `nervous_design.md`, split out for readability; "Section N" references point into `language-semantics.md`. `docs/semantics.md` and `docs/decisions.md` win on any conflict. In particular, Section 43's lookahead rule for clause-form `fn` bodies is obsolete: D058 replaced clause-form bodies with adjacent single-clause declarations `fn f(pattern, ...) { ... }`. Section 44's "first milestone" list is historical; the actual sequence is in `README.md`.
 
 ## 42. Static Analysis Without Closing the World
 
@@ -82,7 +84,7 @@ Then add multiple `rfork` schedulers, `QLock`-protected cross-scheduler queues, 
 
 ---
 
-## 46. Central Idea
+## Central Idea
 
 > Computation consists largely of describing the shapes of values a process is prepared to accept.
 

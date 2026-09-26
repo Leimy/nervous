@@ -1,115 +1,98 @@
 # Nervous Architecture
 
-This file provides a high-level overview of the Nervous system's architecture and summarizes the settled design decisions that are most relevant for understanding how the pieces fit together.
+A high-level map of how the pieces fit together, with pointers to the decisions that settle each part. This file summarizes; it does not decide. `docs/semantics.md` is the normative language contract, `docs/decisions.md` (D001-D079) the normative design record, and `STATUS.md`'s "Current implementation map" the file-level map of the source. On any conflict those win.
 
 ## System Overview
 
-Nervous is a portable 64-bit register-based abstract machine with Erlang/BEAM-inspired lightweight processes, asynchronous message passing, selective pattern matching, and process-local garbage collection. It uses Plan 9's `rfork` for multicore scheduling and shares memory between schedulers through `RFPROC|RFMEM`.
+Nervous is a portable 64-bit register-based abstract machine with Erlang/BEAM-inspired lightweight processes, asynchronous message passing, selective pattern matching, and process-local garbage collection. Today one scheduler runs inside the `nervous` Plan 9 proc; `rfork(RFPROC|RFMEM)` is used only for optional off-process garbage collection (D068, D074). Multiple schedulers sharing memory through `rfork` are milestone 10 (D070).
 
 ### Key Components
 
-| Component | Responsibility |
-|-----------|----------------|
-| **Language Frontend** | Parser, lexer, AST construction, AST printer, canonical formatter |
-| **Compiler** | AST → symbolic bytecode, verification, pattern compilation, binary lowering |
-| **Bytecode** | Portable instruction set (symbolic text format for diagnostics) |
-| **Virtual Machine** | Register-based interpreter for symbolic bytecode |
-| **Scheduler** | Cooperative scheduling, process lifecycle, mailbox management |
-| **Garbage Collector** | Copying collector, off-process collection, fragmentation handling |
-| **Host Boundary** | `print`, `eprint`, process intrinsics, I/O callbacks |
-| **Runtime Library** | Process table, atom table, message fragments, type tests |
+| Component | Responsibility | Source |
+|-----------|----------------|--------|
+| **Frontend** | Lexer, parser, AST, AST printer, canonical formatter, previous-syntax (`-F`) converter | `lib/lex.c`, `lib/parse.c`, `lib/ast.c`, `lib/format.c` |
+| **Compiler** | AST to symbolic bytecode, including clause, guard, pattern and binary lowering | `lib/compile.c`, `lib/patcompile.c`, `lib/patbc.c` |
+| **Bytecode** | "Symbolic Bytecode v0" text format, reader, writer, verifier (`docs/bytecode.md`) | `lib/bytecode.c`, `lib/bcread.c`, `lib/verify.c` |
+| **Interpreter** | Register VM with instruction-boundary heap reservation | `lib/exec.c`, `lib/vm.c` |
+| **Runtime** | Tagged terms, heaps, fragments, pattern matcher, process table, mailboxes | `lib/value.c`, `lib/alloc.c`, `lib/pattern.c`, `lib/process.c` |
+| **Collector** | Per-process Cheney copier, inline or off-process | `lib/gc.c`, `lib/sched.c` |
+| **Scheduler** | FIFO run queue, deadlines, collection triggers, host callbacks (`print`, `eprint`, process intrinsics) | `lib/sched.c` |
+| **CLI** | `nervous(1)`: format, compile, run from source (`-r`) or saved bytecode (`-X`) | `cmd/nervous/main.c`, `man/1/nervous` |
 
 ### Data Flow
 
-1. **Source** → Frontend (parse, format) → AST
-2. **AST** → Compiler (verify, compile) → Bytecode
-3. **Bytecode** → VM (execute) → Term values
-4. **VM** ↔ Scheduler (dispatch, yield, collect)
-5. **VM** ↔ Host (I/O, process intrinsics)
+1. **Source** -> frontend (parse, format) -> AST
+2. **AST** -> compiler -> symbolic bytecode -> verifier
+3. **Bytecode** -> interpreter -> terms
+4. **Interpreter** <-> scheduler (dispatch, yield, receive wait, collection request)
+5. **Interpreter** <-> host callbacks (I/O, process intrinsics; D043, D053)
 
 ## Design Principles
 
-1. **Patterns are fundamental** — dispatch, matching, and binary protocol decoding all work through patterns
-2. **Single-assignment variables** — variables bind once, never reassigned
-3. **Exact matching** — tuples, lists, and binaries match exactly; maps/records match by key presence
-4. **Asynchronous messaging** — sends don't block; selective receive scans the mailbox
-5. **Process-local heaps** — each process has its own garbage-collected heap; collections don't stop other processes
-6. **Portable bytecode** — instruction set is independent of host C structs, pointers, or Plan 9 descriptors
-7. **Simple synchronization** — `tsemacquire`/`semrelease` for scheduler wakeup; `QLock` for shared queues (until measurements show otherwise)
+1. **Patterns are fundamental.** Clause dispatch, `match`, `receive`, and binary decoding all use one exact, transactional matcher (D001, D003).
+2. **Single-assignment variables.** A variable binds once; a bound variable in a pattern tests equality (D002).
+3. **Exact matching.** Tuples and binaries match exactly unless a remainder is bound explicitly. Maps, when they exist, will match named keys by presence (D001).
+4. **Asynchronous messaging.** Send never blocks; selective receive scans the mailbox oldest-first (D035).
+5. **Process-local heaps.** No pointer crosses from one heap into another, so each heap is collected independently (D008, D063, D064).
+6. **Portable bytecode.** The instruction set exposes no host C structs, pointers, or Plan 9 descriptors (D010).
+7. **Simple synchronization.** Semaphores (`tsemacquire`/`semrelease`) for wakeup (D011), a spinlock `Lock` for one-word heap-owner transitions (D074), and `QLock` for shared queues when multicore needs them. Nothing lock-free until measurement says so.
 
-## Term Representation
+## Term Representation (D061, D062, D076)
 
-Terms are 64-bit words:
-- **Immediate values**: small integers, atoms, PIDs (tagged in payload)
-- **Boxed values**: pointers to header + body (tuples, Refs, boxed integers, binaries, maps)
-- **Tagged term model**: low bits indicate kind; boxed terms have a header word followed by body
+A term is one 64-bit word with a low-bit tag:
 
-Equality is structural and type-sensitive. Deep copies happen only at process boundaries (message sending, exit, spawn).
+- **Immediate:** small integers, atoms (index into an append-only interned table), and PIDs (slot and generation).
+- **Boxed:** a pointer to a header word (kind and length) and a body. The boxed kinds so far are tuples, Refs, boxed 64-bit integers, and binaries.
 
-## Scheduler Design
+Terms are immutable, so copying a term inside a process copies one word. Equality is structural and type-sensitive (D028). Deep copies happen only at process boundaries: send, spawn arguments, and results or exit reasons handed to the host (D064).
 
-- **Single scheduler**: one `rfork` process owns all language processes
-- **FIFO run queue**: dispatch takes the head, re-enqueues on yield (D059)
-- **Process states**: `runnable`, `running`, `waiting`, `exited`
-- **Deadlines**: attached to process slots; scheduler blocks on nearest deadline when nothing runnable
-- **Off-process GC**: large collections fork a separate collector proc; scheduler folds completion lazily (D074)
+## Scheduler (D041, D046, D050, D059, D074)
 
-## Garbage Collection
+- One scheduler owns every language process.
+- **FIFO run queue.** Dispatch takes the head, and every transition into `runnable` appends at the tail (D059).
+- **Process states:** `runnable`, `running`, `waiting`, `exited`, `retired` (D041).
+- **Deadlines** live in process slots. With nothing runnable, the scheduler sleeps until the nearest deadline (D050).
+- **Off-process collection.** A heap at or above the `gcoffload` threshold is collected by a forked proc while other processes run. The scheduler skips that process until it folds the completion. The default threshold is 0, which means never (D074, D075).
 
-- **Copying collector**: breadth-first Cheney copy; live data determines to-space size (D069)
-- **Process-local heaps**: each process has contiguous bump-pointer heap; no shared memory
-- **Message fragments**: copied once at send, merged at receive (D064); fragments become part of receiver's heap
-- **Roots**: all register slots and frame stack (D063); nothing else
-- **Off-process**: collections above `gcoffload` threshold run in separate `rfork` proc; default 0 (D075)
+## Garbage Collection (D063-D069, D072, D074, D075)
 
-## Binary Protocol Support
+- **Algorithm:** breadth-first Cheney copy. The to-space is sized from live data plus the pending need (D069).
+- **Collection points.** Allocating instructions reserve their words before they execute. A failed reservation yields `NvCollect` to the scheduler, so the interpreter never collects mid-instruction (D067, D072).
+- **Roots:** the active registers of the process's frame stack, and nothing else (D063, D065, D069).
+- **Message fragments.** A send copies the message once into a fragment owned by the receiver's mailbox. `recvtake` adopts the fragment onto the receiver's heap, and the next collection merges it (D064).
+- **Accounting.** `maxheap`, `maxmessage`, and `maxmailbox` are word counts, checked exactly (D066).
+- **Off-process collection:** see Scheduler above. Stress mode `-G` forces a collection at every reservation (D069).
 
-Binaries are boxed terms with opaque byte storage:
-- **Self-contained**: never a view or slice; always copied on send/receive
-- **Segment grammar**: integer segments `{:W[/signed][/big|/little]}`, sized binary segments `{/binary}`, unsized remainder `{/binary}`
-- **Exact matching**: no backtracking; trailing-byte rejection for non-remainder final segments
-- **Construction**: left-to-right evaluation, then append-style allocation (D077)
-- **Ownership**: process-local; copied at send, consumed by receive
+## Binaries (D076-D079)
 
-## Distribution Strategy
+Binaries are boxed, self-contained byte strings. They are never views or slices.
 
-- **Wire encoding**: hides local atom IDs, PIDs, Refs; uses logical node/incarnation/generation
-- **Dispatch vs field extraction**: tuples dispatch by exact tag/arity; map/record fields use ordinary lookup (Section 7)
-- **Version skew**: handled by keeping dispatch exact; payload evolution via map decoding
-- **Network migration**: deferred to future milestone; external resources are capabilities
+- **Segments:**
+  - `v:W[/signed|/unsigned][/big|/little]`: an integer segment. `W` is a literal 8, 16, 32, or 64 (D078).
+  - `v:size/binary`: a sized binary segment; `size` is a byte count.
+  - `v/binary`: an unsized binary segment. In a pattern it must be last and binds the remainder.
+- **Matching** runs left to right with no backtracking, and a trailing byte is a mismatch. Bad sizes or shapes in matched data are mismatches, not faults (D077).
+- **Construction** evaluates all segment operands left to right, then builds the result by appending segments. Construction errors fault with `badarith`, `overflow`, or `bad_binary` (D077, D079).
+- **Size** is bounded by the process heap word budget, and binary opcodes are banned in guards (D079).
 
-## Key Design Decisions
+## Distribution Strategy (not implemented)
 
-This section summarizes the settled decisions that shape the architecture:
+- The planned wire encoding hides local atom IDs, PIDs, and Refs behind logical node, incarnation, and generation identities.
+- Dispatch stays exact. Payload evolution is meant to go through map field extraction; see `language-semantics.md` Section 7, "Decoding Is Not Dispatch".
+- Network process migration is not a v1 promise. External resources are capabilities.
 
-### D001-D079 (full list in `docs/decisions.md`)
-- **Tagged terms** (D061) — word-sized immutable terms, single copy for moves
-- **Interned atoms** (D062) — indexed table, machine-local IDs
-- **Copying collector** (D063/D067/D068) — per-process heaps, reservation at instruction boundaries, off-process collection
-- **Fragment merging** (D064) — message copy at send, adoption at receive, collector merges
-- **Frame stack** (D065) — contiguous stack, registers are roots
-- **Exact accounting** (D066) — word-based `maxheap`, `maxmessage`, `maxmailbox`
-- **Guards** (D060) — clause refinements, fault-means-false rule
-- **Off-process collection** (D074) — `rfork` collector procs, completion semaphore, never-spin waits
-- **`gcoffload` default** (D075) — 0 (never off-process), measurement-driven
-- **Binary matching** (D076-D079) — minimal segment grammar, append construction, sizing reservation
+See `distribution.md` for the rationale.
 
 ## Not Yet Implemented
 
-- **Multicore schedulers** (milestone 10) — multiple `rfork` processes sharing memory
-- **Module/name system** — flat function namespace, no import/qualification
-- **Distributed execution** — network process migration, wire encoding
-- **Maps/records** — keyed aggregate syntax still undecided
-- **Bignum promotion** — 64-bit overflow exits, future bignum term kind
-- **Static type system** — only optional Dialyzer-style success typing
+- **Multicore schedulers** (milestone 10, D070).
+- **Lists, maps/records, floats, `@` whole-value binding.** D020 reserves their delimiters (`[...]`, `#{...}`), but none of them has an implementation.
+- **Links, monitors, catch.** A fault ends only the faulting process.
+- **Module/name system.** There is one flat function namespace.
+- **Bignums.** Out-of-range 64-bit arithmetic faults `overflow` (D007). Bignum promotion is kept compatible for later.
+- **Distribution** and a compact binary bytecode encoding.
+- **Static analysis** (optional and future).
 
-## Portability Considerations
+## Portability
 
-The design is intentionally 9front-native but aims to be portable:
-
-- **`rfork`**: Plan 9's fork with shared memory; would need `clone()` on Linux-like systems
-- **Semaphores**: `tsemacquire`/`semrelease` exist on 9front; pthreads on Linux
-- **`QLock`**: cross-platform spinlock; measurements needed before lock-free structures
-- **Bytecode format**: intentionally independent of host structs, pointers, file descriptors
-
-Milestone 10 will need to replace 9front-specific primitives with portable equivalents if the target platform is not Plan 9.
+The implementation is 9front-native: `rfork`, `tsemacquire`/`semrelease`, `Lock`/`QLock`, `uptime` for the monotonic clock. The portable part is the contract: source semantics and bytecode never depend on those primitives, host structs, or file descriptors (D010). A port to another OS would reimplement the scheduler, collector-launch, and clock layer, not the language or the bytecode.

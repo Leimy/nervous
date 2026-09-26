@@ -4,20 +4,18 @@ Nervous is an experimental concurrent language and portable 64-bit virtual machi
 
 ## How to read this repository
 
-Minimum context for making progress, in order -- about 30 KB total:
+Minimum context for making progress, in order:
 
 1. `README.md` (this file).
-2. `STATUS.md` -- current state only, short by design.
-3. `docs/architecture.md` -- high-level overview and settled decisions summary.
-4. `docs/language-semantics.md` -- compact language contract.
-5. `docs/bytecode.md` -- instruction set and verification rules.
-6. `docs/runtime.md` -- 9front runtime strategy.
-7. `docs/distribution.md` -- wire encoding and protocol evolution.
-8. `docs/language-philosophy.md` -- parsing, static analysis, and first implementation.
-9. `docs/future-work.md` -- open questions and settled decisions (D001-D079).
-10. `docs/questions.md` -- unresolved semantic questions by owning milestone.
-11. The active milestone file under `milestones/`.
-12. `docs/format.md` if touching the parser or formatter.
+2. `STATUS.md`: current state, task ledger, and resumption checklist.
+3. `docs/architecture.md`: how the components fit together (overview, not normative).
+4. `docs/semantics.md`: the normative language contract.
+5. `docs/bytecode.md`: instruction set and verification rules.
+6. `docs/questions.md`: unresolved semantic questions by owning milestone.
+7. The active milestone file under `milestones/`, and the `docs/decisions.md` records it cites.
+8. `docs/format.md` if touching the parser or formatter.
+
+`docs/README.md` indexes every file in `docs/`. The design-rationale files (`docs/language-semantics.md`, `runtime.md`, `distribution.md`, `language-philosophy.md`, `future-work.md`) explain why the language is shaped as it is. They are split from the deprecated `nervous_design.md` and still use superseded syntax, so read them for motivation, not for rules.
 
 Read `COORDINATION.md` only when more than one agent is working. Do not read `docs/review-findings-archive.md`, `docs/review-05.md`, or `nervous_design.md` for forward work; they are historical records, kept for audit and for the rare regression investigation into closed work. `docs/review-findings.md` is short and worth a glance only if a review gate is open.
 
@@ -26,13 +24,11 @@ Full map:
 - `README.md`: project map and milestone order.
 - `COORDINATION.md`: multi-agent roles, ownership, handoff, and integration protocol.
 - `STATUS.md`: active coordinator, task assignments, write ownership, and milestone state.
-- `docs/architecture.md`: high-level architecture, design principles, and settled decisions summary.
-- `docs/language-semantics.md`: compact normative rules shared by early milestones.
-- `docs/runtime.md`: 9front runtime strategy (multicore, GC, I/O).
-- `docs/distribution.md`: wire encoding and protocol evolution.
-- `docs/language-philosophy.md`: parsing, static analysis, and first implementation milestone.
-- `docs/future-work.md`: open questions and consolidated settled decisions.
+- `docs/README.md`: index of `docs/`, marking which files are normative.
+- `docs/architecture.md`: component overview with pointers to source and decisions (not normative).
+- `docs/semantics.md`: compact normative language contract.
 - `docs/decisions.md`: compact decision records (D001-D079).
+- `docs/language-semantics.md`, `docs/runtime.md`, `docs/distribution.md`, `docs/language-philosophy.md`, `docs/future-work.md`: design rationale split from `nervous_design.md`. They are not normative and still use superseded syntax; see each file's header note.
 - `docs/questions.md`: unresolved semantic questions by owning milestone.
 - `docs/format.md`: canonical formatting contract and current limitations.
 - `docs/bytecode.md`: instruction set, verification, and VM semantics.
@@ -68,11 +64,11 @@ Distribution, maps, floats, links, monitors, general FFI, code replacement, and 
 
 Milestones 00-08 and reviews R1-R2 are complete. Milestone 08 (process-local heaps and garbage collection, including off-process collection for large live sets) closed with M08-T04d: `docs/decisions.md`'s D061-D075 record the settled design, from tagged-term representation through the final `gcoffload` default (0, never off-process -- a real crossover was measured but only bracketed, not located, so no positive default is supported by the evidence; see D075 and `bench/README.md`). The latest benchmark evidence is in `bench/README.md`.
 
-Milestone 09 (Binaries) is next, followed by the mandatory R3 review before milestone 10 (Multicore). Neither is started or assigned. `STATUS.md` is authoritative for current assignments and resumption.
+Milestone 09 (Binaries) is in progress. D076-D079 settle the design. T01-T04 are implemented and accepted: runtime, frontend, compiler lowering, and tests. They include the exit-criterion example `examples/protocol.nv`, which runs from source and from saved bytecode. Only T05 remains, a latency-isolation measurement that prepares for R3. The mandatory R3 review follows milestone 09 and gates milestone 10 (Multicore). `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md` and `milestones/08-memory.md` (now closed) before starting milestone 09. D061-D075 record the settled milestone-08 design; the status lists accepted evidence and planned, unassigned next tasks. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Commit/push status has not been independently established; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
+Read `STATUS.md` ("M09-Tasks (in progress)") and `milestones/09-binaries.md` before continuing. D076-D079 record the binary design, and D061-D075 the milestone-08 memory design it builds on. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
 
 ## Try it
 
