@@ -14,7 +14,7 @@ static char *version = "nervous frontend 4";
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-sG] [-H heapwords] [-o words] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-sG] [-H heapwords] [-o words] [-w visits] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
 	exits("usage");
 }
 
@@ -192,7 +192,7 @@ printroot(Biobuf *b, NvFrag *f)
  * never returns.
  */
 static void
-runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, uvlong gcoffload, int stats)
+runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, uvlong gcoffload, uvlong worklimit, int stats)
 {
 	Biobuf bout, berr;
 	NvHeap h;
@@ -243,6 +243,8 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 	io.out = &bout;
 	io.err = &berr;
 	nvschedsetio(&sched, &io);
+	/* D080: -w visits; 0 (default) is no ceiling. Must precede the root spawn. */
+	nvschedsetworklimit(&sched, worklimit);
 	rc = nvschedspawnroot(&sched, entry, args, &rootpid, err, sizeof err);
 	nvheapfree(&h);
 	if(rc < 0){
@@ -305,7 +307,7 @@ main(int argc, char **argv)
 {
 	char *file, *src, *stressenv, *offloadenv;
 	int mode, gcstress;
-	vlong heaplimit, gcoffload;
+	vlong heaplimit, gcoffload, worklimit;
 	long n;
 	Parser p;
 	Program *pr;
@@ -323,6 +325,7 @@ main(int argc, char **argv)
 	heaplimit = 0;
 	gcstress = 0;
 	gcoffload = 0;
+	worklimit = 0;
 	/* rc may export an unset/restored variable as an empty /env file. */
 	stressenv = getenv("nervous_gcstress");
 	if(stressenv != nil){
@@ -364,6 +367,11 @@ main(int argc, char **argv)
 		if(parseint(EARGF(usage()), &gcoffload) < 0 || gcoffload < 0)
 			usage();
 		break;
+	case 'w':
+		/* D080: node visits one traversal may make under -r/-X; 0 = none. */
+		if(parseint(EARGF(usage()), &worklimit) < 0 || worklimit < 0)
+			usage();
+		break;
 	case 'a': mode = 'a'; file = EARGF(usage()); break;
 	case 'A': mode = 'A'; file = EARGF(usage()); break;
 	case 'b': mode = 'b'; file = EARGF(usage()); break;
@@ -403,7 +411,7 @@ main(int argc, char **argv)
 			exits("verify");
 		}
 		if(mode == 'X')
-			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, stats);
 		Binit(&bout, 1, OWRITE);
 		if(mode == 'b'){
 			nvdisasm(&bout, m);
@@ -468,7 +476,7 @@ main(int argc, char **argv)
 			 * control never returns here to reach the shared tail below.
 			 */
 			programfree(pr);
-			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, stats);
 		}
 	}else if(mode == 'a' || mode == 'A')
 		programprint(&bout, pr);

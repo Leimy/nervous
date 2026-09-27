@@ -18,7 +18,7 @@ lookup(NvRuntime *r, NvTerm pid)
 	slot = nvpidslot(pid);
 	if(slot >= r->nslot)
 		return nil;
-	p = &r->process[slot];
+	p = nvprocat(r, slot);
 	if(p->generation != nvpidgeneration(pid) ||
 	   p->state != Prrunnable && p->state != Prrunning && p->state != Prwaiting)
 		return nil;
@@ -60,21 +60,23 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
  * (spawn, quantum yield, message wake, deadline wake) and every transition
  * out removes (dispatch, or exit of a not-yet-dispatched process), so the
  * queue holds exactly the Prrunnable slots and dispatch is O(1) regardless
- * of how many processes are waiting. Links are indices, not pointers,
- * because nvprocspawn may realloc the table.
+ * of how many processes are waiting. Links are indices, not pointers: this
+ * keeps them compact and keeps a PID's slot number stable, although D082's
+ * segmented table no longer moves slots on growth (a pointer would now
+ * survive growth too, but the index representation is unchanged).
  */
 static void
 runenq(NvRuntime *r, ulong slot)
 {
 	NvProcess *p;
 
-	p = &r->process[slot];
+	p = nvprocat(r, slot);
 	p->runnext = NvNoslot;
 	p->runprev = r->runtail;
 	if(r->runtail == NvNoslot)
 		r->runhead = slot;
 	else
-		r->process[r->runtail].runnext = slot;
+		nvprocat(r, r->runtail)->runnext = slot;
 	r->runtail = slot;
 	r->nrunnable++;
 }
@@ -84,15 +86,15 @@ runrm(NvRuntime *r, ulong slot)
 {
 	NvProcess *p;
 
-	p = &r->process[slot];
+	p = nvprocat(r, slot);
 	if(p->runprev == NvNoslot)
 		r->runhead = p->runnext;
 	else
-		r->process[p->runprev].runnext = p->runnext;
+		nvprocat(r, p->runprev)->runnext = p->runnext;
 	if(p->runnext == NvNoslot)
 		r->runtail = p->runprev;
 	else
-		r->process[p->runnext].runprev = p->runprev;
+		nvprocat(r, p->runnext)->runprev = p->runprev;
 	p->runnext = NvNoslot;
 	p->runprev = NvNoslot;
 	r->nrunnable--;
@@ -114,7 +116,7 @@ nvprocwake(NvRuntime *r, ulong slot)
 
 	if(slot >= r->nslot)
 		return -1;
-	p = &r->process[slot];
+	p = nvprocat(r, slot);
 	if(p->state != Prwaiting)
 		return -1;
 	p->state = Prrunnable;
@@ -133,7 +135,7 @@ nvprocrequeue(NvRuntime *r, ulong slot)
 {
 	if(slot >= r->nslot)
 		return -1;
-	if(r->process[slot].state != Prrunnable)
+	if(nvprocat(r, slot)->state != Prrunnable)
 		return -1;
 	runrm(r, slot);
 	runenq(r, slot);
@@ -174,19 +176,21 @@ nvruntimefree(NvRuntime *r)
 	if(r == nil)
 		return;
 	for(i = 0; i < r->nslot; i++){
-		execfree(&r->process[i]);
-		mailboxfree(&r->process[i]);
+		execfree(nvprocat(r, i));
+		mailboxfree(nvprocat(r, i));
 	}
-	free(r->process);
+	for(i = 0; i < r->nchunk; i++)
+		free(r->chunk[i]);
+	free(r->chunk);
 	memset(r, 0, sizeof *r);
 }
 
 int
 nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 {
-	NvProcess *p, *q;
-	ulong slot, cap, max;
-	uintptr oldbase;
+	NvProcess *p, *newchunk;
+	NvProcess **newarray;
+	ulong slot, max;
 
 	if(r->nlive >= r->limits.maxprocess){
 		snprint(err, nerr, "system_limit");
@@ -196,7 +200,7 @@ nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 	 * reuse is unchanged, but append-only creation does not rescan live slots. */
 	for(slot = r->freehint; slot < r->nslot; slot++){
 		r->slotprobes++;
-		p = &r->process[slot];
+		p = nvprocat(r, slot);
 		if(p->state == Prexited && p->generation == NvMaxgeneration){
 			p->state = Prretired;
 			continue;
@@ -205,38 +209,46 @@ nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 			break;
 	}
 	if(slot == r->nslot){
-		max = (~0UL)/sizeof *q;
-		if(max > NvMaxslot+1)
-			max = NvMaxslot+1;
+		/* D061: a slot index must fit the PID representation's slot field. */
+		max = NvMaxslot+1;
 		if(r->nslot >= max){
 			snprint(err, nerr, "system_limit");
 			return -1;
 		}
-		if(r->nslot == r->nalloc){
-			cap = r->nalloc;
-			if(cap == 0){
-				cap = 16;
-				if(cap > r->limits.maxprocess) cap = r->limits.maxprocess;
-			}else
-				cap = cap > max/2 ? max : cap*2;
-			if(cap > max) cap = max;
-			oldbase = (uintptr)r->process;
-			q = realloc(r->process, cap*sizeof *q);
-			if(q == nil){ snprint(err,nerr,"system_limit"); return -1; }
-			r->tablegrows++;
-			if(oldbase != 0 && oldbase != (uintptr)q){
-				r->tablemoves++;
-				r->tablemovebytes += (uvlong)r->nalloc*sizeof *q;
+		if(r->nslot == r->nchunk*NvProcchunk){
+			/*
+			 * D082: growth appends one full chunk; there is no partial-
+			 * capacity doubling phase any more. Guard the chunk pointer
+			 * array's own realloc size against overflow -- in practice
+			 * this bound is astronomically larger than NvMaxslot+1, but
+			 * it is checked here rather than assumed.
+			 */
+			if(r->nchunk >= (~0UL)/sizeof *newarray){
+				snprint(err, nerr, "system_limit");
+				return -1;
 			}
-			r->process = q;
-			r->nalloc = cap;
+			newchunk = mallocz(NvProcchunk*sizeof *newchunk, 1);
+			if(newchunk == nil){ snprint(err,nerr,"system_limit"); return -1; }
+			newarray = realloc(r->chunk, (r->nchunk+1)*sizeof *newarray);
+			if(newarray == nil){
+				free(newchunk);
+				snprint(err,nerr,"system_limit");
+				return -1;
+			}
+			newarray[r->nchunk] = newchunk;
+			r->chunk = newarray;
+			r->nchunk++;
+			r->tablegrows++;
 		}
 		/* Spare capacity is not a slot until initialized here. Retired
 		 * slots may require capacity beyond maxprocess (a LIVE limit). */
-		p = &r->process[r->nslot++];
+		/* slot == nslot here; nvprocat is a macro that evaluates its slot
+		 * argument twice, so never pass it an expression with a side effect. */
+		p = nvprocat(r, slot);
+		r->nslot++;
 		memset(p, 0, sizeof *p);
 	}else{
-		p = &r->process[slot];
+		p = nvprocat(r, slot);
 		execfree(p);
 		mailboxfree(p);
 		/*

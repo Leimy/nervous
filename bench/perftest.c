@@ -111,7 +111,7 @@ phase(NvScheduler *s, char *label, uvlong start, uintptr base)
 	print("  subsets: heap used %llud bytes; stack used %llud bytes; execs %llud; adopted fragments %llud; mailbox fragments %llud\n",
 		m.heapused, m.stackused, m.nexec, m.nadopted, m.nmailbox);
 	print("  host break growth %llud bytes; slots %lud initialized/%lud capacity; table grows %llud, moves %llud, old requested bytes on moved grows %llud; reuse probes %llud\n",
-		(uvlong)high, s->runtime.nslot, s->runtime.nalloc, s->runtime.tablegrows,
+		(uvlong)high, s->runtime.nslot, s->runtime.nchunk*NvProcchunk, s->runtime.tablegrows,
 		s->runtime.tablemoves, s->runtime.tablemovebytes, s->runtime.slotprobes);
 	prev = now;
 }
@@ -196,15 +196,15 @@ main(int argc, char **argv)
 	 * These two explicit collections are setup, excluded from GC counters.
 	 * No shrinking means the resulting spaces persist during traffic. */
 	if(headroom != 0){
-		e = s.runtime.process[nvpidslot(pong)].exec;
+		e = nvprocat(&s.runtime, nvpidslot(pong))->exec;
 		check(nvexeccollect(e, headroom) == 0, "ponger pre-sizing");
-		e = s.runtime.process[nvpidslot(root)].exec;
+		e = nvprocat(&s.runtime, nvpidslot(root))->exec;
 		check(nvexeccollect(e, headroom) == 0, "pinger pre-sizing");
 	}
 	phase(&s, "busy-setup", start, base);
 	print("  busy capacities before traffic: ponger %lud words, pinger %lud words\n",
-		s.runtime.process[nvpidslot(pong)].exec->heap.cur->cap,
-		s.runtime.process[nvpidslot(root)].exec->heap.cur->cap);
+		nvprocat(&s.runtime, nvpidslot(pong))->exec->heap.cur->cap,
+		nvprocat(&s.runtime, nvpidslot(root))->exec->heap.cur->cap);
 
 	before = s.runtime.nsent;
 	start = uptime();
@@ -219,8 +219,8 @@ main(int argc, char **argv)
 	check(stop != NvNil, "stop atom");
 	start = uptime();
 	for(i = 0; i < s.runtime.nslot; i++)
-		if(s.runtime.process[i].state == Prwaiting){
-			pid = nvpid(i, s.runtime.process[i].generation);
+		if(nvprocat(&s.runtime, i)->state == Prwaiting){
+			pid = nvpid(i, nvprocat(&s.runtime, i)->generation);
 			check(nvprocsend(&s.runtime, pid, stop, err, sizeof err) == 1, "drain send");
 		}
 	check(drive(&s, maxsteps) == NvSchedDone && s.faulted == 0, "drain result");

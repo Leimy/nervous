@@ -50,7 +50,9 @@ struct NvExecHost {
 	 * D053-D057 I/O boundary. print/eprint write one value to host
 	 * stdout/stderr respectively and return 0 on success or -1 with a
 	 * reason (io_error on a host write failure, system_limit if the value
-	 * is deeper than NvMaxtermdepth). The callback does not produce the
+	 * is deeper than NvMaxtermdepth or exceeds the D080 work ceiling; a
+	 * host that prints through nvtermprintw with e->work also charges
+	 * the visits to the process). The callback does not produce the
 	 * destination value: nvexecrun writes the fixed atom 'ok into the
 	 * destination register itself on success. A nil slot faults
 	 * bad_process_context exactly like every other process instruction.
@@ -130,7 +132,43 @@ struct NvExec {
 	 * argument list (NvExec*, the completion semaphore) can reach.
 	 */
 	int offlaunched;
+	/*
+	 * D074 amendment (R3-F05): the outcome of the last off-process
+	 * collection, written by the collector child before it publishes
+	 * idle and read by the scheduler's completion fold under the same
+	 * lock: 1 collected, 2 limit, 3 allocation failure. Separate from
+	 * gcretry because gcretry is the *interpreter's* retry state for a
+	 * pending demand reservation: a collector launched by the idle
+	 * sweep has no pending reservation, must not touch gcretry (the
+	 * next prepare() would misread it as a serviced retry), and yet
+	 * must still report its outcome to the fold.
+	 */
+	int gcresult;
+	/*
+	 * D080: traversal work. Every counted traversal an instruction
+	 * performs (testeq's equality, print/eprint's print, the root
+	 * return's and exit's fragment copy, spawn's argument copy) adds
+	 * its node visits to work.count; the interpreter drains whole
+	 * NvWorkunit multiples into `used` and `reductions` after the
+	 * instruction, so an instruction that walks a large graph
+	 * consumes its quantum instead of stalling every other process
+	 * for free. work.max is the per-traversal ceiling installed by
+	 * nvexecsetworklimit (0 = none); exceeding it faults system_limit.
+	 * Both are plain integers, never heap pointers.
+	 */
+	NvWork work;
 	char fault[128];
+};
+
+/*
+ * D080: node visits per charged reduction. A ring hop is ~24 reductions
+ * at ~12 ns each and an equality visit is ~3.5 ns, so 8 is a little
+ * generous to the traversal; what matters is that a quantum of 1000
+ * reductions now ends after about 8000 visits of traversal work
+ * wherever it happens, rather than never.
+ */
+enum {
+	NvWorkunit = 8,
 };
 
 /*
@@ -144,8 +182,17 @@ struct NvExec {
  * frees them.
  */
 int nvexecinit(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, int, char *, int);
+/*
+ * D080: nvexecinitw is nvexecinit with the argument copy's node visits
+ * charged to (and bounded by) the given NvWork -- the spawning
+ * process's, when the scheduler spawns on its behalf. nil is nvexecinit.
+ * A copy refused on work reports system_limit like one refused on depth.
+ */
+int nvexecinitw(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, int, NvWork *, char *, int);
 void nvexecsethost(NvExec *, NvExecHost *);
 int nvexecsetframelimit(NvExec *, ulong);
+/* D080: per-traversal visit ceiling for this exec's counted traversals; 0 = none. */
+void nvexecsetworklimit(NvExec *, uvlong);
 /* NvCollect leaves pc, registers and reductions unchanged at the pending
  * instruction. Stop the owner and call nvexecgc before retrying. */
 int nvexecrun(NvExec *, uvlong);

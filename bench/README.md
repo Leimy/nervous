@@ -394,4 +394,81 @@ Reading this with the repeats in hand, not just one sample:
 
 **Decision (M08-T04d): `gcoffload` default stays 0 (never off-process), unchanged.** The crossover between "off-process hurts" (50000 words, confirmed) and "off-process helps" (500000 words, confirmed on p99.9/max) is real but only *bracketed*, not *located* -- somewhere between 50000 and 500000 words, and this data cannot say where, because the threshold value itself barely moved the result at the small end (see above). Picking any specific positive default between those two brackets would be guessing at a number this evidence does not support, which is exactly what this section declined to do with one run and still declines to do with three. Concretely: every workload this tree currently exercises (every existing benchmark and test) has a live set far smaller than even the 50000-word "hurts" bracket, so 0 costs nothing today and a wrong positive guess would actively regress every one of them by roughly 2x tail. See `docs/decisions.md` (D075) for the full record, `docs/questions.md` for what would reopen this (a real workload with a live set past roughly 100k words, or the persistent-collector-pool mechanism refinement, which would move the crossover left rather than require guessing a threshold). `NvGcsweepcap = 8` (the idle-sweep per-pass launch cap) is left unmeasured and explicitly provisional: this fixture's peers never grew large enough to trigger the sweep path at all, so it was never exercised under real load.
 
+## M09-T05: latency isolation on expensive terms (R3 preparation)
+
+`REVIEW-impressions.md`'s third isolation leg, now in R3's scope, asks whether one process's expensive term operations can stall everyone else. `bench/latency.c` (`mk benchmarks` builds it as `bench/latency`) takes the first numbers. Measurement only: no mechanism or default changes.
+
+```text
+mk benchmarks
+rc bench/latency.rc        # part 1, then hop at depths 8/12/16
+bench/latency              # part 1 only
+bench/latency hop depth peers rounds
+```
+
+**Part 1 -- host-side term-API cost.** A shared chain is `x0 = 5`, `x(k+1) = ${x(k), x(k)}`: `d` tuple objects, but `nvtermequal`, `nvtermprint` and `nvfragcopy` have no visited set, so each walks both elements into the same subtree, which is 2^(d+1)-1 node visits. For each depth in 1..24 it times equality of two chains built independently in separate heaps (so the identical-word fast path never fires), print into `/dev/null`, and fragment copy (unshared, 3(2^d-1)+1 words). It reports min/median of 11 samples plus each call's return value. A linear chain probe at depth 255/256 shows the `NvMaxtermdepth` limit, which is unreachable in finite time on a shared chain. Note `nvfragcopy`'s `maxwords` of 0 is a zero budget, not unlimited; the fixture passes `~0ULL`. The depth-24 row dominates the runtime, and its copy allocates about 400MB per sample; trim `depths[]` if the machine cannot spare that.
+
+**Part 2 -- hop latency with a hog.** `peers` echo processes, as in `bench/largelive.c`, are timed per round trip in a `baseline` phase, then again in a `loaded` phase while a hog process evaluates `a == b` on two independently built depth-`d` shared chains in a loop, checking its mailbox with `receive { 'stop => 'ok; after 0 => ... }` so the host can stop it cleanly and the loaded phase never outlives the hog (avoiding the T04r duration mismatch). `run()` in `lib/exec.c` charges one reduction per instruction, so one equality costs one reduction however many nodes it walks. The fixture prints the host cost of one equality at that depth, and the hog's reduction count after the loaded phase, to relate peer latency to equality cost.
+
+Interpretation, before the first run: if the hog's `receive ... after 0` keeps it runnable within one quantum (1000 reductions), one dispatch can run on the order of hundreds of equalities, and the loaded tail should scale with roughly 2x per depth level times that count. If the timeout ends each dispatch, the tail should track about one equality. Either is a finding for R3: a single instruction whose cost is exponential in term depth is not bounded by the reduction quantum. Record: host equality cost per depth (part 1 and each hop header); baseline vs loaded p50/p99/max per depth; the hog's reductions; and whether `loaded` max is approximately (equalities per dispatch) x (host equality cost).
+
+Three pre-run risks were checked against source before the first run (coordinator review, no run involved): (1) the fragment word-count formulas -- `fragcount` in `lib/value.c` has no visited set and charges `1+n` words per tuple visit with immediates costing 0, so a shared depth-d chain is `3(2^d-1)` body words and `nvfragwords` adds one root word; the linear chain is `2d+1`; the depth guard is `depth > NvMaxtermdepth` with the root at depth 1, so linear 255 completes and 256 is refused. Both formulas in `latency.c` match. (2) The scheduler cannot report `Idle` mid-round-trip: `nvprocrecvwaitdeadline` (`lib/process.c`) returns 1 for an already-expired armed deadline and leaves the process `Prrunning`, so the hog's `after 0` never parks it in `Prwaiting`; each loaded round trip is one full hog quantum then one peer dispatch. (3) `a == b;` is an ordinary expression statement (`parseblock` in `lib/parse.c` accepts any expression followed by `;`). What remains genuinely unverifiable without running is the numbers themselves.
+
+### First run (M09-T05 results)
+
+User ran `rc bench/latency.rc` on the M09-T04 working tree plus the R3-F02 guard in `lib/value.c` (which is not on any path this benchmark times) and supplied the output via `/dev/snarf`. One run per row, not a confidence interval. The fixture ran to completion: the fragment word-count checks did not abort, no round trip saw an unexpected scheduler state, and no process faulted.
+
+**Part 1.** Nanoseconds, min/median of 11 samples; `ret` columns are the return values.
+
+| shape | depth | node visits | eq min | eq med | print min | print med | copy min | copy med | eq/pr/cp ret |
+|---|---|---|---|---|---|---|---|---|---|
+| shared | 1 | 3 | 250 | 292 | 416 | 458 | 333 | 375 | 1/0/0 |
+| shared | 2 | 7 | 250 | 291 | 500 | 542 | 333 | 375 | 1/0/0 |
+| shared | 4 | 31 | 500 | 500 | 1541 | 1625 | 625 | 667 | 1/0/0 |
+| shared | 8 | 511 | 3083 | 3125 | 17917 | 18333 | 5125 | 5333 | 1/0/0 |
+| shared | 12 | 8191 | 53125 | 53874 | 258583 | 267708 | 70333 | 70624 | 1/0/0 |
+| shared | 16 | 131071 | 617998 | 643373 | 2886324 | 3179489 | 809747 | 818622 | 1/0/0 |
+| shared | 20 | 2097151 | 7070610 | 7236817 | 40801228 | 41545559 | 11039221 | 11492678 | 1/0/0 |
+| shared | 24 | 33554431 | 115726373 | 118957945 | 652890145 | 660205803 | 187514286 | 189534919 | 1/0/0 |
+| linear | 255 | 256 | 1958 | 2042 | 3709 | 4166 | 3084 | 3167 | 1/0/0 |
+| linear | 256 | 257 | 1916 | 2041 | 3750 | 3875 | 1459 | 1583 | -2/-2/-2 |
+
+Read: the exponential is confirmed -- every four levels of depth cost about 16x (equality 3.1us at depth 8, 53us at 12, 618us at 16, 7.1ms at 20, 116ms at 24) for a term that is only d tuple objects. Per node visit: equality ~3.5ns, fragment copy ~5.6ns, print ~19.5ns (Bprint per node into /dev/null). At depth 24 one equality is 116ms, one print 653ms, one copy 188ms and ~400MB. The linear probe behaves as documented: depth 255 completes, depth 256 returns `NvTermlimit` (-2) from all three traversals, and the refused copy costs less than the accepted one (1.5us vs 3.1us) because it allocates nothing.
+
+**Part 2.** Round-trip nanoseconds per peer; the hog evaluates `a == b` on two independently built depth-d shared chains in a `receive ... after 0` loop.
+
+| depth | peers x rounds | host eq (ns) | baseline p50 / p99 / max | loaded min / p50 / p90 / p99 / max | loaded mean | hog reductions | reductions per round trip |
+|---|---|---|---|---|---|---|---|
+| 8 | 4 x 500 | 2541 | 459 / 2167 / 3708 | 9209 / 57542 / 74334 / 113499 / 157041 | 61845 | 863353 | 432 |
+| 12 | 4 x 200 | 33791 | 500 / 2000 / 2500 | 8250 / 1772036 / 2034285 / 2606492 / 2655116 | 1002195 | 414549 | 518 |
+| 16 | 2 x 50 | 545207 | 500 / 2042 / 2667 | 7375 / 27162829 / 31287023 / 55903902 / 57535146 | 27659385 | 88848 | 888 |
+
+Read, with the mechanism traced in source rather than guessed:
+
+- **The loaded p50 is not the reduction quantum's doing alone.** `run()` (`lib/exec.c`) charges one reduction per instruction and `a == b` is one `testeq`, so the README's pre-run prediction -- about (1000 / instructions-per-iteration) equalities per hog dispatch -- would give ~1000 reductions per round trip. The measured 432/518/888 are lower because every call, including the hog's tail call `hog(a, b)`, allocates a 3-word argument tuple (`Otuple`, reserved in `prepare()`), so the heap fills after roughly (headroom / 3) iterations and `prepare` returns `NvCollect`, ending the dispatch early. A hog dispatch is therefore **min(quantum, heap headroom)**, and the live set (two chains, 6d words) sets the heap's capacity and hence the headroom.
+- **Depth 8** (small heap): every dispatch is collection-limited at ~22 iterations; 432 reductions per round trip, p50 57us ~= 22 x 2.5us, mean ~= p50 (unimodal).
+- **Depth 12**: headroom is about one quantum, so hog dispatches alternate long (quantum-limited: 1.77ms = 50 equalities x 34us) and short (the few iterations left before the next collection: ~8us). Mean 1.0ms is half the p50 and reductions per round trip 518 ~= (1000 + ~36) / 2. Bimodal, exactly as this predicts.
+- **Depth 16**: headroom exceeds a quantum, so ~89% of round trips carry a full 1000-reduction hog dispatch (27ms = 50 x 545us). The p99/max of 56-58ms are round trips in which the *peer* itself hit `NvCollect` (adopting its tick fragment, building its call tuple) before sending `'tock`, letting the hog run a second quantum in between.
+- Implied instruction count per hog loop iteration: ~20 (1000 / 50). Inferred from the ratios, not counted from a disassembly.
+- The loaded `min` of 7-9us at every depth (vs 0.5us baseline) is a short hog dispatch plus one inline collection of a ~100-word heap.
+
+**The R3 finding.** At depth 16 a single process evaluating `==` on a 16-deep shared term stalls every other process on the scheduler by 27ms median and 58ms worst case -- about 54,000x the unloaded p50 -- and the reduction quantum places no bound on it, because the cost is inside one instruction. It scales as 2^d per equality times up to 50 equalities per quantum; extrapolating from part 1, a depth-24 hog would hold the scheduler for several seconds per dispatch. Today the *GC preflight* is the only thing that shortens a hog's dispatch, and only when the heap is small. This is the third isolation leg (fault, memory, latency) measured for the first time; R3 owns deciding whether a mechanism (work-sensitive charging of traversal instructions, a resumable/bounded traversal, or a depth or node-visit ceiling on equality/print/copy as `NvMaxtermdepth` already is for the linear case) is required before milestone 10, and R4 inherits whatever latency property R3 settles on. Also worth carrying into R3: `print` is 5-6x more expensive per node than equality and is a blocking host write, so the same shape through `print` is worse still.
+
+### D080 build (work charging): prediction and result
+
+D080 (`docs/decisions.md`) charges traversal visits to reductions at 8 per reduction and adds an optional per-traversal ceiling. The prediction, written before the rerun: part 1 unchanged (host-side calls go through the uncounted names). Part 2: each hog equality at depth d costs about 2^(d+1)/8 reductions on top of ~20 instructions per loop iteration -- 64 / 1024 / 16384 at depths 8 / 12 / 16 -- so at 12 and 16 one equality exceeds the 1000-reduction quantum and a hog dispatch is one equality; at 8 a dispatch is ~12 equalities. Expected loaded p50 ~30 us / ~34 us + overhead / ~0.55 ms; hog reductions per round trip ~1000 / ~1044 / ~16404; the depth-12 bimodality gone.
+
+Result (user ran `rc bench/latency.rc` on the D080 build, before the VISIT-macro change noted below; same one-run-per-row caveat as the first run):
+
+| depth | peers x rounds | host eq (ns) | baseline p50 | loaded min / p50 / p90 / p99 / max | loaded mean | hog reductions | per round trip | first run p50 / max |
+|---|---|---|---|---|---|---|---|---|
+| 8 | 4 x 500 | 2208 | 459 | 8209 / 38458 / 41042 / 76249 / 90958 | 39355 | 2052848 | 1026 | 57542 / 157041 |
+| 12 | 4 x 200 | 43833 | 500 | 1458 / 42916 / 45083 / 82708 / 92291 | 42909 | 830051 | 1038 | 1772036 / 2655116 |
+| 16 | 2 x 50 | 733434 | 500 | 1833 / 745663 / 951454 / 1506743 / 1519910 | 761774 | 1607911 | 16079 | 27162829 / 57535146 |
+
+Read: every prediction held. Reductions per round trip are 1026 / 1038 / 16079 against ~1000 / ~1044 / ~16404 -- the hog is now quantum-limited at every depth, and the count confirms one equality per dispatch at 12 and 16 and ~12 per dispatch at 8. Loaded p50 fell 1.5x at depth 8 (GC-limited before, so it was already short), **41x at depth 12** (1.77 ms -> 43 us) and **36x at depth 16** (27.2 ms -> 746 us, which is exactly one equality at this run's host cost of 733 us). Mean equals p50 at depth 12: the GC-preflight alternation is gone because the quantum ends before the heap fills. Worst case fell from 57.5 ms to 1.5 ms at depth 16; every p99/max is two hog dispatches (the peer itself hitting `NvCollect` before sending `'tock`), as before, but two small ones. The `min` of 1.5-1.8 us at 12 and 16 (vs 7-9 us before) is a hog dispatch that hit `NvCollect` on its first iteration and collected a nearly empty heap.
+
+Part 1 was **not** unchanged: equality came out 1.3-1.5x slower at depth >= 8 (618 us -> 879 us at depth 16), copy and print only 5-15% slower. Run-to-run noise is real in these numbers (the depth-8 host equality in part 2 got *faster*, 2541 -> 2208 ns), but the one code change on the uncounted path was a function call per node visit to discover that the work pointer is nil, and 7c does not inline; equality is the tightest of the three loops, so it would show there most. That check is now a macro (`VISIT` in `lib/value.c`); the next `latency.rc` run's part 1 will say whether that was the cause. It does not affect part 2's conclusion either way, since the hog's cost per equality is measured, not assumed.
+
+What this settles for R3/R4: a traversing instruction's cost is now visible to the scheduler as reductions, exactly and deterministically. What remains true: one equality's own latency is unchanged (746 us at depth 16, 144 ms at depth 24 in this run), which is what the `-w` ceiling exists for.
+
 Add a row here whenever a change is meant to move these numbers, with the build it was measured on.

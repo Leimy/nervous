@@ -366,7 +366,7 @@ main(int argc, char **argv)
 	 */
 	ownerexec = nil;
 	if(nvprocalive(&s.runtime, ownerpid))
-		ownerexec = s.runtime.process[nvpidslot(ownerpid)].exec;
+		ownerexec = nvprocat(&s.runtime, nvpidslot(ownerpid))->exec;
 	if(ownerexec != nil)
 		print("owner's own collections (cumulative since spawn): %llud; last live words %llud\n",
 			ownerexec->collections, ownerexec->livewords);

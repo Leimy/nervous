@@ -53,9 +53,9 @@ mailboxlimits(void)
 	NvLimits limits;
 	NvHeap h;
 	NvTerm pid, v, elem[2];
-	NvFrag *got;
+	NvFrag *got, *headbefore, *tailbefore;
 	char err[128];
-	uvlong words;
+	uvlong words, wordsbefore;
 
 	/* D064/D066: an integer message fragment is 1 word: nword 0, plus the root word. */
 	words = 1;
@@ -73,7 +73,21 @@ mailboxlimits(void)
 	check(nvprocspawn(&r, &pid, err, sizeof err) == 0, "limit-test spawn");
 	v = integer(1);
 	check(nvprocsend(&r, pid, v, err, sizeof err) == 1, "exact mailbox boundary");
+	/*
+	 * R3 gap 3a: a send refused as mailbox_full must enqueue nothing.
+	 * Capture the mailbox's exact state (word budget plus head/tail
+	 * fragment pointers, from include/nvproc.h's NvProcess) right before
+	 * the refused send and require it to be bit-for-bit unchanged after,
+	 * not merely that the call returned an error.
+	 */
+	wordsbefore = nvprocat(&r, nvpidslot(pid))->mailboxwords;
+	headbefore = nvprocat(&r, nvpidslot(pid))->head;
+	tailbefore = nvprocat(&r, nvpidslot(pid))->tail;
 	check(nvprocsend(&r, pid, v, err, sizeof err) < 0 && strcmp(err, "mailbox_full") == 0, "mailbox aggregate boundary");
+	check(nvprocat(&r, nvpidslot(pid))->mailboxwords == wordsbefore &&
+		nvprocat(&r, nvpidslot(pid))->head == headbefore &&
+		nvprocat(&r, nvpidslot(pid))->tail == tailbefore,
+		"refused send at the aggregate boundary enqueued or reordered a fragment");
 	check(nvprocpop(&r, pid, &got, err, sizeof err) == 1, "limit-test pop");
 	nvfragfree(got);
 	check(nvprocsend(&r, pid, v, err, sizeof err) == 1, "mailbox budget restored");
@@ -98,9 +112,26 @@ mailboxlimits(void)
 	elem[0] = integer(1);
 	elem[1] = integer(2);
 	v = nvtuple(&h, elem, 2);
+	/*
+	 * R3 gap 3a, continued: this mailbox never receives a single
+	 * successful send, so its word budget and fragment chain must stay
+	 * at their freshly spawned zero/nil state across BOTH refusals
+	 * below, not just report an error each time.
+	 */
+	wordsbefore = nvprocat(&r, nvpidslot(pid))->mailboxwords;
+	headbefore = nvprocat(&r, nvpidslot(pid))->head;
+	tailbefore = nvprocat(&r, nvpidslot(pid))->tail;
 	check(nvprocsend(&r, pid, v, err, sizeof err) < 0 && strcmp(err, "mailbox_full") == 0, "message larger than mailbox rejected");
+	check(nvprocat(&r, nvpidslot(pid))->mailboxwords == wordsbefore &&
+		nvprocat(&r, nvpidslot(pid))->head == headbefore &&
+		nvprocat(&r, nvpidslot(pid))->tail == tailbefore,
+		"oversized-message refusal enqueued or reordered a fragment");
 	/* D064: NvNil ("no term") is malformed input; nvprocsend rejects it as mailbox_full without ever calling nvfragcopy. */
 	check(nvprocsend(&r, pid, NvNil, err, sizeof err) < 0 && strcmp(err, "mailbox_full") == 0, "malformed value rejected");
+	check(nvprocat(&r, nvpidslot(pid))->mailboxwords == wordsbefore &&
+		nvprocat(&r, nvpidslot(pid))->head == headbefore &&
+		nvprocat(&r, nvpidslot(pid))->tail == tailbefore,
+		"malformed-value refusal enqueued or reordered a fragment");
 	nvruntimefree(&r);
 	nvheapfree(&h);
 	print("ok - mailbox accounting boundaries and malformed values\n");
@@ -165,7 +196,7 @@ timeouts(void)
 	limits.gcoffload = 0;
 	check(nvruntimeinit(&r, &limits, 1, err, sizeof err) == 0, err);
 	check(nvprocspawn(&r, &pid, err, sizeof err) == 0, "spawn timeout tester");
-	p = &r.process[nvpidslot(pid)];
+	p = nvprocat(&r, nvpidslot(pid));
 	check(nvprocdispatch(&r, pid, err, sizeof err) == 0, "dispatch timeout tester");
 
 	dur = integer(100);
@@ -322,10 +353,10 @@ main(void)
 	clause[1].pattern = &pattern[1];
 	memset(&bindings, 0, sizeof bindings);
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "dispatch waiting receiver");
-	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && runtime.process[nvpidslot(p2)].state == Prwaiting, "receive transitions running to waiting");
+	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && nvprocat(&runtime, nvpidslot(p2))->state == Prwaiting, "receive transitions running to waiting");
 	check(nvprocyield(&runtime, p2, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "waiting process cannot yield");
 	v = nvatom("wake");
-	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && runtime.process[nvpidslot(p2)].state == Prrunnable, "send wakes waiting process once");
+	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && nvprocat(&runtime, nvpidslot(p2))->state == Prrunnable, "send wakes waiting process once");
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "redispatch woken receiver");
 	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 1, "woken receive consumes message");
 	check(nvprocyield(&runtime, p2, err, sizeof err) == 0, "yield woken receiver");
@@ -340,13 +371,13 @@ main(void)
 	check(nvprocspawn(&runtime, &p1, err, sizeof err) == 0, "reuse slot");
 	check(!nvtermequal(stale, p1) && !nvprocalive(&runtime, stale), "stale generation");
 
-	runtime.process[nvpidslot(p1)].generation = NvMaxgeneration;
+	nvprocat(&runtime, nvpidslot(p1))->generation = NvMaxgeneration;
 	p1 = nvpid(nvpidslot(p1), NvMaxgeneration);
 	stale = p1;
 	check(nvpidslot(stale) == nvpidslot(p1) && nvpidgeneration(stale) == NvMaxgeneration, "exhausted pid copy");
 	check(nvprocexit(&runtime, p1) == 1, "exit exhausted generation");
 	check(nvprocspawn(&runtime, &p1, err, sizeof err) == 0, "spawn after generation exhaustion");
-	check(nvpidslot(p1) != nvpidslot(stale) && runtime.process[nvpidslot(stale)].state == Prretired && !nvprocalive(&runtime, stale),
+	check(nvpidslot(p1) != nvpidslot(stale) && nvprocat(&runtime, nvpidslot(stale))->state == Prretired && !nvprocalive(&runtime, stale),
 		"exhausted generation retires slot");
 	print("ok - dead sends, stale PIDs, and exhausted generations do not alias\n");
 

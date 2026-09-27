@@ -120,6 +120,19 @@ struct NvScheduler {
 	long *gcsem;
 	long *gchold;
 	/*
+	 * D074 amendment (R3-F06): every successfully forked collector
+	 * child semrelease's gcsem exactly once, as its last touch of
+	 * shared memory, *after* publishing idle -- so a fold that observed
+	 * idle proves the heap is free of the child but not that the child
+	 * is finished with gcsem. gclaunched counts successful forks (the
+	 * rfork-failure fallback is not one) and gccredits counts the
+	 * semaphore credits this scheduler has consumed; nvschedfree may
+	 * free gcsem only once they are equal. Scheduler-proc-only fields,
+	 * so they may live in the struct.
+	 */
+	uvlong gclaunched;
+	uvlong gccredits;
+	/*
 	 * D074 amendment/M08-T04d "Test determinism": a second test-only
 	 * seam, nil (no-op) in production like gchold above but structurally
 	 * different from it -- this one is a plain function-pointer field,
@@ -144,6 +157,7 @@ struct NvScheduler {
 	 * sets this field.
 	 */
 	void (*gcidlestep)(NvScheduler *);
+	uvlong maxtermwork;	/* D080: per-traversal visit ceiling for spawned processes; 0 = none */
 	int profile;		/* opt-in real monotonic elapsed timing, default off */
 	uvlong execns;		/* includes host callbacks and nested spawn time */
 	uvlong gcns;		/* demand + idle collection, excludes startup */
@@ -176,6 +190,13 @@ void nvschedsetclock(NvScheduler *, NvClock *);
  * default here.
  */
 void nvschedsetio(NvScheduler *, NvIO *);
+/*
+ * D080: install the per-traversal work ceiling (node visits one
+ * equality, print, or boundary copy may make) for processes spawned
+ * after the call; 0, the nvschedinit default, means no ceiling. Charging
+ * of traversal work to reductions is unconditional and not affected.
+ */
+void nvschedsetworklimit(NvScheduler *, uvlong);
 void nvschedfree(NvScheduler *);
 /*
  * D074 "Test determinism": a deterministic hold point, absent (a no-op)

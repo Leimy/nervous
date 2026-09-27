@@ -461,12 +461,34 @@ nvbinfits(vlong val, int width, int flags)
  * elements happen to be the same immediate word would compare "equal"
  * one level below the depth at which a copy of either is refused.
  */
+/*
+ * D080: one node visit against an absolute ceiling. `limit` is the
+ * count at which this traversal must stop, computed once at entry by
+ * worklimit() from the caller's cumulative count plus its per-call
+ * max, so the accumulated count of earlier traversals does not eat
+ * into this one's allowance. nil work is free and unlimited. A macro,
+ * not a function: 7c does not inline, and a call per node on the
+ * uncounted path measured as a visible slowdown of host-side equality
+ * (bench/README.md, "D080 build").
+ */
+#define VISIT(w, limit)	((w) != nil && ++(w)->count > (limit))
+
+static uvlong
+worklimit(NvWork *w)
+{
+	if(w == nil || w->max == 0 || w->count > ~0ULL-w->max)
+		return ~0ULL;
+	return w->count + w->max;
+}
+
 static int
-termequal(NvTerm a, NvTerm b, ulong depth)
+termequal(NvTerm a, NvTerm b, ulong depth, NvWork *w, uvlong limit)
 {
 	int ka, kb, n, i, rc;
 
 	if(depth > NvMaxtermdepth)
+		return NvTermlimit;
+	if(VISIT(w, limit))
 		return NvTermlimit;
 	if(a == b)
 		return 1;
@@ -488,7 +510,7 @@ termequal(NvTerm a, NvTerm b, ulong depth)
 		if(n != nvtuplelen(b))
 			return 0;
 		for(i = 0; i < n; i++){
-			rc = termequal(nvtupleelem(a, i), nvtupleelem(b, i), depth+1);
+			rc = termequal(nvtupleelem(a, i), nvtupleelem(b, i), depth+1, w, limit);
 			if(rc != 1)
 				return rc;
 		}
@@ -502,11 +524,17 @@ termequal(NvTerm a, NvTerm b, ulong depth)
 int
 nvtermequal(NvTerm a, NvTerm b)
 {
-	return termequal(a, b, 1);
+	return termequal(a, b, 1, nil, ~0ULL);
+}
+
+int
+nvtermequalw(NvTerm a, NvTerm b, NvWork *w)
+{
+	return termequal(a, b, 1, w, worklimit(w));
 }
 
 static int
-termprint(Biobuf *b, NvTerm t, ulong depth)
+termprint(Biobuf *b, NvTerm t, ulong depth, NvWork *w, uvlong limit)
 {
 	int i, n, rc, hit;
 
@@ -516,6 +544,10 @@ termprint(Biobuf *b, NvTerm t, ulong depth)
 	}
 	if(depth > NvMaxtermdepth){
 		Bprint(b, "<deep>");
+		return NvTermlimit;
+	}
+	if(VISIT(w, limit)){
+		Bprint(b, "<limit>");
 		return NvTermlimit;
 	}
 	switch(nvtermkind(t)){
@@ -554,9 +586,21 @@ termprint(Biobuf *b, NvTerm t, ulong depth)
 		for(i = 0; i < n; i++){
 			if(i != 0)
 				Bprint(b, ", ");
-			rc = termprint(b, nvtupleelem(t, i), depth+1);
-			if(rc == NvTermlimit)
+			rc = termprint(b, nvtupleelem(t, i), depth+1, w, limit);
+			if(rc == NvTermlimit){
 				hit = 1;
+				/*
+				 * D080: a depth refusal prints its marker and lets the
+				 * siblings print; a work refusal must stop the whole
+				 * traversal, or the remaining siblings would keep
+				 * spending the visits the ceiling just denied. Close
+				 * this tuple so the output stays well-formed.
+				 */
+				if(w != nil && w->count > limit){
+					Bprint(b, "}");
+					return NvTermlimit;
+				}
+			}
 		}
 		Bprint(b, "}");
 		return hit ? NvTermlimit : 0;
@@ -569,7 +613,13 @@ termprint(Biobuf *b, NvTerm t, ulong depth)
 int
 nvtermprint(Biobuf *b, NvTerm t)
 {
-	return termprint(b, t, 1);
+	return termprint(b, t, 1, nil, ~0ULL);
+}
+
+int
+nvtermprintw(Biobuf *b, NvTerm t, NvWork *w)
+{
+	return termprint(b, t, 1, w, worklimit(w));
 }
 
 /* D063: a zeroed NvHeap is a valid empty heap; init only records the word budget. */
@@ -715,7 +765,7 @@ nvheapadopt(NvHeap *h, NvFrag *f)
  * across a call that might allocate, applied at construction time.
  */
 static int
-heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth)
+heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth, NvWork *w, uvlong limit)
 {
 	NvTerm *tmp, t;
 	int i, n, rc;
@@ -723,6 +773,8 @@ heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth)
 	if(src == NvNil)
 		return NvTermerror;
 	if(depth > NvMaxtermdepth)
+		return NvTermlimit;
+	if(VISIT(w, limit))
 		return NvTermlimit;
 	switch(src & NvTagmask){
 	case NvTagint:
@@ -763,7 +815,7 @@ heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth)
 		if(tmp == nil)
 			return -1;
 		for(i = 0; i < n; i++){
-			rc = heapcopy(h, nvtupleelem(src, i), &tmp[i], depth+1);
+			rc = heapcopy(h, nvtupleelem(src, i), &tmp[i], depth+1, w, limit);
 			if(rc != 0){
 				free(tmp);
 				return rc;
@@ -782,7 +834,20 @@ heapcopy(NvHeap *h, NvTerm src, NvTerm *out, ulong depth)
 int
 nvheapcopy(NvHeap *heap, NvTerm src, NvTerm *out)
 {
-	return heapcopy(heap, src, out, 1);
+	return heapcopy(heap, src, out, 1, nil, ~0ULL);
+}
+
+/*
+ * D080: a heap copy refused on work leaves the objects it already
+ * allocated in the destination heap as garbage (unrooted, reclaimed by
+ * that heap's next collection or its free). Its one caller, the spawn
+ * argument copy into a fresh child heap, frees the whole heap on that
+ * failure, so nothing leaks.
+ */
+int
+nvheapcopyw(NvHeap *heap, NvTerm src, NvWork *w, NvTerm *out)
+{
+	return heapcopy(heap, src, out, 1, w, worklimit(w));
 }
 
 /*
@@ -798,13 +863,15 @@ nvheapcopy(NvHeap *heap, NvTerm src, NvTerm *out)
  * fragment ever moves once allocated.
  */
 static int
-fragcount(NvTerm t, ulong depth, uvlong *count, uvlong maxwords)
+fragcount(NvTerm t, ulong depth, uvlong *count, uvlong maxwords, NvWork *w, uvlong limit)
 {
 	int i, n, rc;
 
 	if(t == NvNil)
 		return NvTermerror;
 	if(depth > NvMaxtermdepth)
+		return NvTermlimit;
+	if(VISIT(w, limit))
 		return NvTermlimit;
 	switch(t & NvTagmask){
 	case NvTagint:
@@ -839,7 +906,7 @@ fragcount(NvTerm t, ulong depth, uvlong *count, uvlong maxwords)
 		if(*count+1 > maxwords)
 			return NvTermlimit;
 		for(i = 0; i < n; i++){
-			rc = fragcount(nvtupleelem(t, i), depth+1, count, maxwords);
+			rc = fragcount(nvtupleelem(t, i), depth+1, count, maxwords, w, limit);
 			if(rc != 0)
 				return rc;
 		}
@@ -907,8 +974,13 @@ fragbuild(NvTerm t, NvTerm *word, uvlong *top, NvTerm *out)
 	return NvTermerror;	/* unreachable: unknown header kind, already validated by pass 1 */
 }
 
+/*
+ * D080: the sizing pass is the one that can refuse, so it is the one
+ * that is counted and bounded; the build pass walks the same nodes
+ * again but has already been paid for by the words it was allowed.
+ */
 int
-nvfragcopy(NvTerm src, uvlong maxwords, NvFrag **out)
+nvfragcopyw(NvTerm src, uvlong maxwords, NvWork *w, NvFrag **out)
 {
 	uvlong count, top;
 	int rc;
@@ -918,10 +990,20 @@ nvfragcopy(NvTerm src, uvlong maxwords, NvFrag **out)
 	if(src == NvNil)
 		return NvTermerror;
 	count = 0;
-	rc = fragcount(src, 1, &count, maxwords);
+	rc = fragcount(src, 1, &count, maxwords, w, worklimit(w));
 	if(rc != 0)
 		return rc;
 	if(count+1 > maxwords)
+		return NvTermlimit;
+	/*
+	 * R3-F02: malloc takes ulong bytes and NvFrag.nword is ulong (both
+	 * 32 bits on Plan 9), but count is a 64-bit word total that a Bbin
+	 * -- the one kind whose fragment cost NvMaxtermdepth does not bound
+	 * -- can push past 2^29 words under an unlimited heap budget.
+	 * Refuse, as nvbinwords and gc.c's space sizing do, rather than let
+	 * the byte count wrap and fragbuild write past a short allocation.
+	 */
+	if(count > ((~0UL)-sizeof(NvFrag))/sizeof(NvTerm))
 		return NvTermlimit;
 	f = malloc(sizeof(NvFrag) + count*sizeof(NvTerm));
 	if(f == nil)
@@ -938,6 +1020,12 @@ nvfragcopy(NvTerm src, uvlong maxwords, NvFrag **out)
 	f->root = root;
 	*out = f;
 	return 0;
+}
+
+int
+nvfragcopy(NvTerm src, uvlong maxwords, NvFrag **out)
+{
+	return nvfragcopyw(src, maxwords, nil, out);
 }
 
 uvlong

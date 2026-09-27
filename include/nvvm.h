@@ -217,14 +217,37 @@ uvlong nvbinlen(NvTerm);
 void *nvbinbytes(NvTerm);
 
 /*
+ * D080: traversal work accounting. Every traversal below (equality,
+ * print, fragment copy, heap copy) visits nodes; on an independently
+ * built shared graph the visit count is exponential in depth while the
+ * object count is linear, so visits, not words, are the honest cost.
+ * A traversal handed an NvWork adds one to `count` per node visited
+ * (immediates included) and, if `max` is nonzero, refuses with
+ * NvTermlimit once this call's visits exceed `max` -- after allocating
+ * nothing (copies) or after printing a "<limit>" marker (print). `count`
+ * is cumulative across calls: the interpreter drains it into reductions
+ * after each instruction (NvWorkunit, nvexec.h). nil means uncounted
+ * and unlimited, which is what the plain nvtermequal/nvtermprint/
+ * nvfragcopy/nvheapcopy names do.
+ */
+typedef struct NvWork NvWork;
+struct NvWork {
+	uvlong max;	/* visits one traversal may make; 0 = unlimited */
+	uvlong count;	/* visits accumulated since the owner last drained it */
+};
+
+/*
  * nvtermequal: 1 equal, 0 unequal (D028, type-sensitive, identical words
  * are a fast path), NvTermlimit if the comparison would exceed
- * NvMaxtermdepth. nvtermprint: 0, or NvTermlimit after printing a
- * "<deep>" marker in place of the subterm it refused to descend into.
+ * NvMaxtermdepth or the NvWork ceiling. nvtermprint: 0, or NvTermlimit
+ * after printing a "<deep>" (depth) or "<limit>" (work) marker in place
+ * of the subterm it refused to descend into; output stays well-formed.
  * Both treat NvNil as "<uninitialized>" / unequal to everything.
  */
 int nvtermequal(NvTerm, NvTerm);
 int nvtermprint(Biobuf *, NvTerm);
+int nvtermequalw(NvTerm, NvTerm, NvWork *);
+int nvtermprintw(Biobuf *, NvTerm, NvWork *);
 
 /*
  * Heaps. nvheapinit zeroes the heap and records the budget (0 =
@@ -247,6 +270,7 @@ NvTerm *nvheapalloc(NvHeap *, ulong nword);
 int nvheapexhausted(NvHeap *);
 int nvheapadopt(NvHeap *, NvFrag *);
 int nvheapcopy(NvHeap *, NvTerm src, NvTerm *out);
+int nvheapcopyw(NvHeap *, NvTerm src, NvWork *, NvTerm *out);
 
 /*
  * Explicit stopped-owner collection (M08-T04a). Each range describes
@@ -277,13 +301,17 @@ int nvheapcollect(NvHeap *, NvRoot *, uvlong stackwords, uvlong need);
 
 /*
  * Fragments (D064). nvfragcopy copies src into a new fragment: 0 and
- * *out set; NvTermlimit if the copy would exceed NvMaxtermdepth or
- * nvfragwords() would exceed maxwords (nothing is allocated in that
- * case); -1 for NvNil (NvTermerror) or on allocation failure -- see the
+ * *out set; NvTermlimit if the copy would exceed NvMaxtermdepth, if
+ * nvfragwords() would exceed maxwords, or if the fragment's byte size
+ * cannot be represented to the host allocator (nothing is allocated in
+ * any of those cases); -1 for NvNil (NvTermerror) or on allocation failure -- see the
  * note on nvheapcopy. The cost of a refused copy is bounded by maxwords.
- * nvfragwords is nword+1.
+ * nvfragwords is nword+1. The NvWork form (D080) counts the sizing
+ * pass's node visits and applies the work ceiling there; a refusal on
+ * work, like one on depth or words, allocates nothing.
  */
 int nvfragcopy(NvTerm src, uvlong maxwords, NvFrag **out);
+int nvfragcopyw(NvTerm src, uvlong maxwords, NvWork *, NvFrag **out);
 uvlong nvfragwords(NvFrag *);
 void nvfragfree(NvFrag *);
 

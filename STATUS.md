@@ -5,16 +5,106 @@ Operational source of truth. Settled design is in `docs/decisions.md`; benchmark
 ## Checkpoint and authorization
 
 ```text
-milestone: 08 - Memory, COMPLETE; 09 - Binaries, T01-T04 ACCEPTED, only
-  T05 (latency measurement) remains
-checkpoint: M09-T01..T04 accepted -- user confirmed `rc tests/run.rc`
-  passes with every binary fixture (binary-run, 8 binfault, 3 binreject,
-  protocol) under both -r and saved bytecode (-c + -X)
-implementation: none active.  Coordinator is Claude, with a local Qwen
-  model as sub-agent (driving notes: /usr/dave/qwen.md).
-active source assignment: none; all M09-T01..T04 write sets released
-next: M09-T05 (see its task row; a good Qwen task with Claude choosing
-  the measurements and reviewing).  Then close milestone 09 and open R3.
+milestone: 08 - Memory, COMPLETE; 09 - Binaries, COMPLETE (T05 results
+  recorded in bench/README.md "First run"); R3 - Memory review, OPEN
+checkpoint: M09 closed on the user's `rc bench/latency.rc` output.
+  R3-F02 closed: user confirmed `rc tests/run.rc` and
+  `nervous_gcstress=1 rc tests/run.rc` pass with the lib/value.c guard.
+implementation: none active.  Coordinator is Claude.  Sub-agent policy
+  revised (see /usr/dave/local_models.md, "Economic Review"): cloud
+  Sonnet for bounded read-only audits, coordinator for edits; local
+  models only for independent second-opinion review or doc summaries.
+active source assignment: none (coordinator implemented D080 directly;
+  write set released on build).
+next: M10-T00a (segmented process table, D082) is DONE: all three suite
+  invocations pass (user-run).  Uncommitted; suggested message
+  "M10-T00a: segmented process table (D082)".  bench/run.rc has not been
+  rerun on it yet -- do that before or alongside T00b so any indirection
+  cost is attributed to the right change.  Next: cut M10-T00b (machine/
+  scheduler split, owner field, counters, -p parsing; spec in
+  milestones/10-multicore.md "Tasks").
+  T00a lesson: nvprocat is a macro that evaluates its slot argument
+  twice; the first build passed `r->nslot++` and the root spawned into
+  slot 1 while queued/pid'd as slot 0 (`scheduler: bad_pid`, 0
+  dispatches).  Header now warns.  Build with `mk nervous tests
+  benchmarks`; `mk tests benchmarks` alone does not relink the CLI
+  binary the suite runs first.
+  Changed: include/nvproc.h (chunk/nchunk, NvProcchunk=1024, nvprocat
+  macro; nalloc/process gone; tablemoves/tablemovebytes retired at 0),
+  lib/process.c (growth appends a chunk; nvruntimefree frees chunks),
+  lib/sched.c (nvprocat everywhere; tablebytes = nchunk*NvProcchunk*
+  sizeof), and mechanical nvprocat conversion in tests/memory/autotest.c
+  + offloadtest.c, tests/process/ptest.c + schedtest.c + r2test.c,
+  bench/perftest.c + largelive.c + latency.c.  The ONLY assertion values
+  that changed are in autotest.c:tablegrowth (nalloc 256/1/2 -> nchunk 1;
+  tablegrows 5 -> 1; each with a "was:" comment) and receivetake's
+  tablebytes formula.  Acceptance: the three suite invocations pass and
+  bench/run.rc within noise.  Then T00b (spec in milestones/10-multicore.md
+  "Tasks").  Suggested commit: "M10-T00a: segmented process table (D082)".
+  Note the design docs (D081-D089 etc.) are also uncommitted.
+
+M10 opening -- the coordinator's full pre-implementation design review
+  is in milestones/10-multicore.md ("Coordinator design review"): 7
+  findings on the existing design, 11 proposed decisions, a test
+  strategy, staging T00-T04 + R4, and hazards.  It supersedes the short
+  list below, which is kept as the original question set.  Nothing in
+  it is decided until the user approves and the accepted proposals are
+  written as D081+ in docs/decisions.md; then T00 (refactor, no new
+  behavior) is cut first.  Decisions that most need the user's call:
+  staged global lock first (P1); segmented table (P2); wake-to-home
+  ownership (P3); deadline check per dispatch, which changes observable
+  timing under load in single-scheduler mode (P5, finding 1); one code
+  path with N=1 as the same code (P10).
+  Original question list:
+  a. Process table and PID ownership: one shared NvRuntime table under a
+     QLock, or per-scheduler tables with a global slot->scheduler map.
+     PIDs must not change on migration (required test).
+  b. Mailbox locking: a sender on scheduler A appending to a process
+     owned by scheduler B.  D068 already says the mailbox is
+     scheduler/sender territory; M10 must make that a per-process lock
+     or a per-owner-scheduler lock, and must preserve the M05
+     per-sender FIFO contract across the lock.
+  c. Wakeup: a receive-wait on B, a send from A -- how A makes the
+     process runnable on B (or steals it) without a lost wakeup or a
+     double enqueue (two required tests).  The D074 semaphore pattern
+     (tsemacquire idle / semrelease wake) is the intended primitive.
+  d. Work movement: steal vs. push, and the safe points (a process is
+     only movable while suspended and not NvHeapCollecting -- the D068
+     `owner` field already encodes the second condition).
+  e. Timers: which scheduler owns a deadline and how a sleeping
+     scheduler's tsemacquire bound is computed when the earliest
+     deadline belongs to a process it does not own.
+  f. Off-process GC under multiple schedulers: gcoutstanding /
+     gclaunched / gccredits are per-scheduler today; a migrated process
+     with a collector outstanding must fold on its new owner or be
+     unmovable until folded (simplest: unmovable while offlaunched).
+  g. Statistics: the "measurement requirement" wants queue, steal,
+     wakeup, migration and reduction counts before any lock-free work;
+     decide the counters and the -s output shape up front.
+  h. Single-scheduler mode must be bit-identical to today (required
+     test): keep the current nvschedstep path as the N=1 case rather
+     than a special case of the new one.
+source control: M09-T01..T04 and the docs split are committed and pushed
+  by the user.  UNCOMMITTED as of this checkpoint (D080 files added
+  below): the R3-F02 fix
+  (lib/value.c, include/nvvm.h), the M09-T05 results and R3 opening
+  (bench/README.md, STATUS.md, milestones/09-binaries.md,
+  docs/review-findings.md); and the D080 work charging (include/nvvm.h,
+  include/nvexec.h, include/nvsched.h, lib/value.c, lib/exec.c,
+  lib/sched.c, cmd/nervous/main.c, tests/process/exectest.c,
+  bench/latency.c, bench/latency.rc, docs/decisions.md,
+  docs/bytecode.md, docs/review-findings.md, README.md, STATUS.md);
+  and the R3 closing set (lib/verify.c R3-F03, tests/memory/autotest.c,
+  tests/process/ptest.c, tests/process/exectest.c,
+  milestones/R3-memory-review.md, docs/review-findings.md, README.md,
+  STATUS.md); and the R3-F05/F06 fix (lib/sched.c, include/nvexec.h,
+  include/nvsched.h, tests/memory/offloadtest.c, docs/decisions.md D074
+  amendments, docs/review-findings.md, milestones/R3-memory-review.md).  Suggested messages: "milestone 09 complete (T05 latency
+  results); open R3; R3-F02 nvfragcopy size guard"; "D080: charge
+  traversal work as reductions; -w work ceiling (R3-F04)"; "R3:
+  coverage fixtures for ownership transitions and live-data memory;
+  R3-F03; coverage map and exit statement".  The
+  coordinator commits nothing; ask the user at a checkpoint.
 source control: user committed and pushed M09-T01..T04 plus the
   docs/ split ("milestone 09 binaries (T01-T04); split design doc into
   docs/ (WIP)").  A follow-up docs-only commit marks the split files as
@@ -23,21 +113,7 @@ source control: user committed and pushed M09-T01..T04 plus the
   checkpoint.
 ```
 
-M08-T04e and M08-T04c are both accepted: the user confirmed `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass on the current tree, the latter now also exercising `tests/memory/offloadtest`'s seven off-process lifecycle groups. This closes the last open acceptance gate for T04c (see the M08-T04c section below for the coordinator review and five fixes made before this confirmation).
-
-**Milestone 08 (Memory) is complete.** T04d closed it this session: `gcoffload` stays 0 (D075, measurement-driven), the idle-sweep cap stays 8 (unmeasured, provisional, explicitly recorded as such), and every required test in `milestones/08-memory.md` is reconciled by the existing accepted suites (`gctest`, `autotest`, `offloadtest`) -- reread against that file's "Required tests"/"Exit criterion" before this closure, not merely assumed. No formal review gate is active; R3 (mandatory before milestone 10) has not opened. D074/D075 (`docs/decisions.md`) settle the off-process protocol, the false-idle fix found via T04r, and the final `gcoffload`/sweep-cap policy.
-
-CLI-T01 is accepted, independent of milestone 08 and not gating it: `cmd/nervous/main.c` gained `-X bytecode entry [args...]`, which loads a module saved by `-c` and runs it through the same scheduler, host callback table and `-s` statistics as `-r` (`-x`/`-t` still use the older hostless single-process executor and cannot run any program that spawns, sends, receives or does I/O). The scheduler-execution code is now shared via a new `runscheduled()` used by both `-r` and `-X`, so the two paths cannot drift apart. `man/1/nervous` is a new section-1 man page covering every flag, the argument convention, the bytecode file format, and every exit-status string. `mk tests benchmarks` builds clean. The user judged this did not need a `docs/decisions.md` entry. Write set (`cmd/nervous/main.c`, `README.md`, `man/1/nervous`) released.
-
-**Milestone 08 is a clean stopping point**: no task is assigned, no write set is held, the build is clean, and every regression suite passes under every environment combination exercised so far (normal, CLI gcstress, and now CLI-forced-all-off-process). Resume by reading the Resumption checklist at the end of this file; the recommended next step is milestone 09, not a continuation of milestone 08.
-
-## Accepted evidence
-
-- Build: `mk -a tests benchmarks` rebuilt every command/library/test/benchmark object and linked all targets without diagnostics after final T04p source edits. An earlier unreachable-return warning in the new benchmark driver was fixed before that rebuild. Build tools executed compilation/linking only.
-- Behavior: user confirmed both requested T04p suite commands passed. Correction: `rfork E` discarded inherited CLI stress, so those runs established normal-suite and explicit C stress coverage, NOT full CLI-stress coverage at the time. T04e repaired inheritance and added a collection-count canary; the user has since confirmed fresh normal and CLI-stress runs both pass on the repaired tree (see the T04e closure bullet below).
-- Measurement: user supplied the original six `rc bench/run.rc` shapes and all seven `rc bench/perf.rc` cases through `/dev/snarf`. Normalized T04p results and limitations are in `bench/README.md`; the earlier inline baseline is also preserved in `bench/inline-gc-first.txt`.
-- Latest build: `mk tests` compiled/linked the T04e CLI fix and all test targets without diagnostics. New rc regressions require user execution; mk does not validate or run scripts. No runtime tests, benchmarks, commit or push executed by the coordinator.
-- T04e closure: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass on the repaired tree, including the CLI environment suite and the inherited-mode canary. This is the fresh normal/CLI-stress evidence the earlier `rfork E` correction called for.
+Milestone 08 (Memory) and CLI-T01 are complete and accepted; their full narrative, evidence, task ledger and review notes are in `STATUS-archive.md` ("Milestone 08 detail"). Settled policy from 08 lives in `docs/decisions.md` (D061-D075); benchmark evidence in `bench/README.md`.
 
 ## Milestone ledger
 
@@ -46,126 +122,52 @@ CLI-T01 is accepted, independent of milestone 08 and not gating it: `cmd/nervous
 | Milestone | State | Dependencies | Remaining scope |
 |---|---|---|---|
 | 08 Memory | **complete** | R2, 05, 06 | none -- all tasks (T04a/b/p/e/c/r/d) accepted |
-| 09 Binaries | **in progress**: T01-T04 accepted | 04, 08 | T05 latency measurement only |
-| R3 Memory review | not-started | 08, 09 | Root/fragment/representation/binary ownership gate |
+| 09 Binaries | **complete** | 04, 08 | none -- T01-T05 done; T05 results in `bench/README.md` |
+| R3 Memory review | **open** | 08, 09 | Root/fragment/representation/binary ownership gate, plus the latency-isolation decision T05's numbers force (see below) |
 | 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement |
 | R4 Multicore review | not-started | 10 | Mandatory multicore acceptance review |
 
 ## Task ledger
 
-Every completed write set below is released. Planned tasks have no assignee or reserved files.
-
-| Task | State | Dependencies | Scope / evidence |
-|---|---|---|---|
-| M08-T01 representation design | done | prior milestones | D061-D066 |
-| M08-T02 interned atoms | done | T01 | User-accepted; previously recorded committed before stage 2 |
-| M08-T03 tagged terms, frames, fragments | done | T02 | Tests/bench user-confirmed; previously recorded committed as "milestone 08 stage 2" |
-| PR2-T01 guard verifier hardening | done | post-R2 safety finding | D071; bytecode/full suites user-confirmed; post-R2-F01 closed |
-| M08-T04a explicit collector/root adapter | done | PR2-T01 | Core suites user-confirmed |
-| M08-T04b automatic inline collection | done | T04a | D072; normal/stress suites and first inline benchmark accepted |
-| M08-T04p bounded performance/diagnostic pass | done | T04b | D073; final build, tests and original/phase benchmarks accepted |
-| M08-T04e CLI/environment defect repair | done | T04p | Empty-as-unset, named diagnostic, environment-preserving runners and direct CLI regressions; user-confirmed passing both suites |
-| M08-T04q duplicate interpreter work | planned, optional, deferred | T04p | Time-boxed preflight/execution reuse; no safety or sizing-policy change; not a dependency of T04c |
-| M08-T04c off-process collection | done | T04e | D074 ownership protocol, collector procs, wakeup, failure and teardown correctness; five coordinator-applied correctness fixes during review (see M08-T04c section); `mk -a tests benchmarks` clean; `tests/memory/offloadtest.c` lifecycle suite; user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass |
-| M08-T04r large-live-set latency baseline | done | T04c | Fixture built and run; a real scheduler bug (false idle) found and fixed in `lib/sched.c`, recorded as a D074 amendment; user confirmed `rc bench/largelive.rc` runs clean and both `rc tests/run.rc`/`nervous_gcstress=1 rc tests/run.rc` still pass; first results recorded in `bench/README.md`, flagged single-run/not yet decision-grade. See "M08-T04r" section below |
-| M08-T04d policy and milestone acceptance | done | T04c, T04r | `-o`/`$nervous_gcoffload` CLI plumbing added; `holdfalseidle` deterministic regression added (`gcidlestep` hook); three repeated runs per shape/threshold confirmed a real crossover (off-process hurts at 50000 words, helps at 500000, D075); `gcoffload` default stays 0, `NvGcsweepcap=8` stays unmeasured/provisional, both recorded with rationale; `mk tests benchmarks` clean; user confirmed all four batch invocations (`rc tests/run.rc`, `nervous_gcstress=1`, `nervous_gcstress=1 nervous_gcoffload=1`, `rc bench/largelive.rc 3`) passed. Write set released |
-| CLI-T01 bytecode-under-scheduler mode + man page | done | none (independent of milestone 08) | `-X` mode and shared `runscheduled()` in `cmd/nervous/main.c`; `README.md` `-X` docs; new `man/1/nervous`; `mk tests benchmarks` clean; no decision-record entry needed per user judgment |
-
-T04q is not a new milestone dependency gate and is not required before T04c; the user chose to proceed directly to off-process correctness. T04r was reordered after T04c: a threshold measurement needs the off-process mechanism to measure against, and current tiny-live-set benchmarks already show no existing workload would select a finite gcoffload value (see D074, "gcoffload default and every existing call site").
+The milestone-08 task ledger is archived in `STATUS-archive.md`. Still open from 08: M08-T04q (optional, deferred; see its section below). Milestone-09 tasks are under "M09-Tasks (in progress)".
 
 ## M09-Tasks (in progress)
 
 ### Progress (current)
 
 - **M09-T01 Bbin runtime: done.** A first draft came from a long Qwen run. Claude's review fixed: word-vs-byte arithmetic in `nvbinapp` (heap corruption); no D067 reservation for the new opcodes in `lib/exec.c`; verifier dataflow and guard edges for them in `lib/verify.c`; 32-bit `1L` shifts; the signed range check; zero padding; `lib/pattern.c` length types; D079 fault names. Nine opcodes: `binalloc`, `binappint`, `binappbin`, `binappend`, `bintestbinary`, `binintget`, `binbinget`, `binremget`, `binend`. Tests: construction/encoding checks in `tests/process/ptest.c`; VM opcode cases A-F in `tests/process/exectest.c` (construction, append, match, mismatch-to-fail-target, faults, remainder). `docs/bytecode.md` documents the opcodes. User-confirmed passing.
-- **M09-T02 frontend: mostly done.**
+- **M09-T02 frontend: done.**
   - Lexer tokens `<<`/`>>`/`:`, and parser (`lib/parse.c`) producing `Ebinagg` with one `Ebinseg` per segment. Encoding of a segment is `ival = (kind<<8) | (width<<2) | (signed<<1) | little`, kinds `Binsegint`/`Binsegsized`/`Binsegrest` (header `include/nervous.h`). Decisions made while implementing (within D076): `<<>>` is the empty binary; segment values and sizes are one primary or unary expression (parenthesize anything looser); `/binary` excludes int modifiers; a rest segment takes no modifiers and must be last; `patternok` accepts binaries with pattern-form values.
   - AST printer (`lib/ast.c`), fixtures `tests/frontend/binary.nv/.ast`, `bad-binwidth`, `bad-binrest`.
   - Formatter (`lib/format.c`, rules in `docs/format.md`), fixture `binary-fmt.nv/.fmt`.
   - AST->`Pbin` conversion (`lib/patcompile.c`, `convertbin`), rejecting a size variable bound by the same or a later segment of that binary. Tests: nine cases in `tests/pattern/parsetest.c` (`binpatterns`), covering most of the milestone's required matching tests at the `nvpatternmatch` level.
   - `lib/patbc.c` `compilebin`: `Pbin` -> `bintestbinary`, one get per segment, `binend` unless a rest segment ends it (a discarded rest emits nothing). A size variable must already be bound when its segment is lowered, which also rejects `${<<p:n/binary>>, n}`. Repeated names test equality like `Pvar`.
   - `lib/compile.c` `patchtests` now repatches the binary ops' fail targets (field `b` for `bintestbinary`/`binintget`, `c` for `binbinget`, `a` for `binend`); without it every binary mismatch jumped to pc 0.
-- **M09-T03: mostly done.** `compilebinagg`: evaluates every segment value and size left to right, then `binalloc` plus one append per segment into fresh registers. `is_binary` type test (usable in guards); `guardok` already rejects construction in guards (D079).
+- **M09-T03: done.** `compilebinagg`: evaluates every segment value and size left to right, then `binalloc` plus one append per segment into fresh registers. `is_binary` type test (usable in guards); `guardok` already rejects construction in guards (D079).
 - **Also fixed:** `bintestbinary` was written and read with one operand instead of two (`lib/bytecode.c`, `lib/bcread.c`), so saved bytecode lost the fail target and a failing test looped at pc 0 under `-X`.
 - **End-to-end test:** `tests/frontend/binary-run.nv/.out`, run by the new `ran` helper in `tests/frontend/run.rc` both via `-r` and via `-c` + `-X`. `-r` output user-confirmed to match all 14 expected values.
 - **M09-T04: done, accepted (user-confirmed full suite).** Fault fixtures `tests/frontend/binfault-*.nv` (eight, via the new `faulted` helper), compile rejections `binreject-*.nv/.err` (three, via `rejected -c`), and the exit-criterion example `examples/protocol.nv` (via `ran`, expected output `tests/frontend/protocol.out`). All outputs were first produced by a user run and checked against predictions before being saved. Head-pattern compile errors now report the first parameter's position instead of 0:0 (`clausetuple`). Required tests reconciled in `milestones/09-binaries.md`, "Implementation state".
-- **Remaining:** T05 (latency measurement), after which milestone 09 can close and R3 opens.
+- **M09-T05: done.** User ran `rc bench/latency.rc`; results and their reading are in `bench/README.md` ("First run"). Headline: equality/print/copy on a shared `${x,x}` chain cost ~16x per four levels of depth (116ms/653ms/188ms at depth 24); a hog running `==` on depth-16 chains stalls peer round trips 27ms median / 58ms max against a 0.5us baseline; a hog dispatch is min(quantum, heap headroom) because each tail call allocates a 3-word argument tuple, and the reduction quantum bounds nothing inside one instruction. Original build description follows. `bench/latency.c`, `bench/latency.rc`, a `latency` mkfile target (in `benchmarks` and `clean`), and the "M09-T05" section of `bench/README.md`. Part 1 times host-side `nvtermequal`/`nvtermprint`/`nvfragcopy` on independently built shared `${x,x}` chains (depth 1-24; the traversals do not detect sharing, so cost doubles per level), plus a linear-chain probe of the depth-256 limit. Part 2 (`latency hop depth peers rounds`) times peer round trips before and while a hog evaluates `a == b` on two depth-d chains; one equality is one reduction regardless of cost (`run()` in `lib/exec.c`), which is the isolation question for R3. Provenance: part 1 drafted by local Qwen (analysis correct; Claude fixed a 32-bit `1UL<<255` shift and a check applied to the wrong chain shape); part 2 drafted by local GLM after Qwen stalled, then largely rewritten by Claude (the draft omitted the equality and used an unallocated pid array). `mk benchmarks` builds clean. The three pre-run risks the README section originally listed (word-count formulas, a possible `Idle` abort while the hog waits on `after 0`, and whether `a == b;` parses) were each checked against `lib/value.c`, `lib/process.c` and `lib/parse.c` and hold; see the README section. Only the run itself remains.
+- **Remaining:** user runs `rc bench/latency.rc`; record results; then milestone 09 can close and R3 opens.
+- **R3 pre-gate audit (while T05 awaits its run):** a Sonnet read-only audit of the nine `bin*` opcodes across `value.c`/`exec.c`/`gc.c`/`verify.c`/`pattern.c` (D063 pointer discipline, 32-bit widths, reservation exactness, bounds, encoding, GC sizing, verifier rules) found one real defect and one cosmetic one, both recorded in `docs/review-findings.md`: **R3-F02** (medium, fixed-pending-verification) -- `nvfragcopy` passed an unguarded 64-bit byte size to `malloc(ulong)` and truncated `count` into `NvFrag.nword`; a guard now returns `NvTermlimit` (`lib/value.c`, contract comment in `include/nvvm.h`); `mk tests benchmarks` clean. **R3-F03** (low, open) -- vacuous `(x&3) > 3` flag check in `verify.c`. Questions A, C-G of the audit came back clean with quoted evidence. R3-F02 needs the user to rerun `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` before it closes.
 
-The original plan follows. Design settled in D076-D079 (representation, grammar/evaluation, width/alignment, sizing reservation and fault reasons). Write sets are reserved for the named task. T01 and T02 are disjoint behind the settled interfaces (the D076-D079 opcode operand meanings and the `Ebin`/`Ebinseg` AST shapes) and may run in parallel; T03 depends on both; T04 depends on T03. T05 is independent of T01-T04 (it measures the pre-existing term machinery, not binaries) and may run in parallel with any of them.
+The original plan follows. Design settled in D076-D079 (representation, grammar/evaluation, width/alignment, sizing reservation and fault reasons). Write sets are reserved for the named task. T01 and T02 are disjoint behind the settled interfaces (the D076-D079 opcode operand meanings and the `Ebinagg`/`Ebinseg` AST shapes) and may run in parallel; T03 depends on both; T04 depends on T03. T05 is independent of T01-T04 (it measures the pre-existing term machinery, not binaries) and may run in parallel with any of them.
 
 | Task | State | Dependencies | Write set (canonical, exclusive) | Objective |
 |---|---|---|---|---|
 | M09-T01 Bbin runtime | done | 08 | `include/nvvm.h`, `include/nvexec.h`, `lib/value.c`, `lib/gc.c`, `include/nvpat.h`, `lib/pattern.c`, `lib/exec.c`, `include/nvbc.h`, `lib/verify.c`, `lib/bytecode.c`, `docs/bytecode.md` | `Bbin` boxed kind and `Vbin`/`is_binary`; `nvbin`/`nvbinlen`/`nvbinbytes`; `nvbinbuild`/`nvbinbinget`/`nvbinremget` (self-contained byte copies, budget-aware); equality/print/heapcopy/fragcopy support; new opcodes `binalloc`, `binbinget`, `binremget` (D079 sizing reservation: allocate, retry from clean state, no mid-copy collection); verifier operand + guard-region rules (binaries excluded from guards, D060/D071); disassembly text for the new opcodes. |
-| M09-T02 Binary frontend | done | 08 (independent of T01; builds on the coordinator-settled `include/nvpat.h` `Pbin` interface) | `include/nervous.h`, `lib/parse.c`, `lib/lex.c`, `lib/ast.c`, `lib/patcompile.c` (AST->`NvPattern` conversion, `nvpatternfromexpr`), `lib/patbc.c` (pattern->bytecode lowering, `nvpatterncode`), `lib/format.c`, `docs/format.md`, `tests/frontend/*` (new fixtures only) | `<< ... >>` aggregate with the D076 segment grammar (integer segments with literal widths {8,16,32,64} and `/signed`/`/unsigned`/`/big`/`/little` modifiers; `:size / binary` and `/binary` segments; final unsized remainder); `Ebin`/`Ebinseg` AST nodes (parser does not validate forward/backward references or pattern-mode legality; the compiler and pattern checker do); `patternok` accepts binaries; `nvpatternfromexpr` converts `Ebin` to the `Pbin` `NvPattern`; `nvpatterncode` lowers binary patterns to `binalloc`/`binbinget`/`binremget` with a byte-position register; guard check rejects binaries (D079); canonical formatting for the aggregate (D021, `docs/format.md`); lexer/AST plumbing (a `Tbinopen`/`Tbinclose` token pair is expected -- the exact token names are an implementer detail to report, as with any new token). |
-| M09-T03 Binary compiler lowering | done | T01, T02 | `lib/compile.c`, `docs/decisions.md` (only if an implementation-level refinement is needed; report it) | Lower `Ebin` construction to `binalloc` (D077: evaluate operands left to right, compute total, single allocation, fill left to right) and the D079 construction faults (`bad_binary`, `overflow`, `badarith`); wire `is_binary` into `typetest` and the D060 guard/type-test surface; forward-reference size validation in patterns is already the pattern checker's (T02) -- this task is construction side and the intrinsic wiring only. |
+| M09-T02 Binary frontend | done | 08 (independent of T01; builds on the coordinator-settled `include/nvpat.h` `Pbin` interface) | `include/nervous.h`, `lib/parse.c`, `lib/lex.c`, `lib/ast.c`, `lib/patcompile.c` (AST->`NvPattern` conversion, `nvpatternfromexpr`), `lib/patbc.c` (pattern->bytecode lowering, `nvpatterncode`), `lib/format.c`, `docs/format.md`, `tests/frontend/*` (new fixtures only) | `<< ... >>` aggregate with the D076 segment grammar (integer segments with literal widths {8,16,32,64} and `/signed`/`/unsigned`/`/big`/`/little` modifiers; `:size / binary` and `/binary` segments; final unsized remainder); `Ebinagg`/`Ebinseg` AST nodes (parser does not validate forward/backward references or pattern-mode legality; the compiler and pattern checker do); `patternok` accepts binaries; `nvpatternfromexpr` converts `Ebinagg` to the `Pbin` `NvPattern`; `nvpatterncode` lowers binary patterns to `binalloc`/`binbinget`/`binremget` with a byte-position register; guard check rejects binaries (D079); canonical formatting for the aggregate (D021, `docs/format.md`); lexer/AST plumbing (a `Tbinopen`/`Tbinclose` token pair is expected -- the exact token names are an implementer detail to report, as with any new token). |
+| M09-T03 Binary compiler lowering | done | T01, T02 | `lib/compile.c`, `docs/decisions.md` (only if an implementation-level refinement is needed; report it) | Lower `Ebinagg` construction to `binalloc` (D077: evaluate operands left to right, compute total, single allocation, fill left to right) and the D079 construction faults (`bad_binary`, `overflow`, `badarith`); wire `is_binary` into `typetest` and the D060 guard/type-test surface; forward-reference size validation in patterns is already the pattern checker's (T02) -- this task is construction side and the intrinsic wiring only. |
 | M09-T04 Tests + exit-criterion example | done | T03 | `tests/bytecode/*`, `tests/pattern/*`, `tests/vm/*`, `tests/process/*`, `tests/run.rc`, `examples/README.md`, new `examples/protocol.nv` (the milestone exit-criterion example: a small length-prefixed protocol), `milestones/09-binaries.md` (implementation-state section only) | Every "Required tests" item from `milestones/09-binaries.md`: exact match + trailing-byte rejection, empty/nonempty remainders, length-prefixed payload, endian + signed decoding, invalid forward size reference rejected by the frontend, late failure rolling back earlier segment bindings, allocation/size-limit failures controlled. Golden tests in the existing suites; the example demonstrates the exit criterion (length-prefixed protocol over process-heap-owned binaries). |
-| M09-T05 Latency-isolation measurement (R3 prep) | planned, independent of T01-T04 | 08 | `bench/latency.c` (new), `bench/latency.rc` (new), `bench/README.md`, `mkfile` (only the new target + `benchmarks`/`clean` entries, as T04r did) | First numbers for REVIEW-impressions.md's third isolation leg (now in R3's scope): structural equality and print cost on independently built shared graphs (`${x,x}` chains at increasing depth), copy of shared deep terms, and small-message hop latency measured with an expensive-term peer running concurrently on the same scheduler. Measurement only -- no mechanism changes (work-sensitive charging, resumable traversals, bounded exports, or I/O offloading are named there as possible later mechanisms; this task measures, it does not choose). |
+| M09-T05 Latency-isolation measurement (R3 prep) | built; awaiting user run of `rc bench/latency.rc` | 08 | `bench/latency.c` (new), `bench/latency.rc` (new), `bench/README.md`, `mkfile` (only the new target + `benchmarks`/`clean` entries, as T04r did) | First numbers for REVIEW-impressions.md's third isolation leg (now in R3's scope): structural equality and print cost on independently built shared graphs (`${x,x}` chains at increasing depth), copy of shared deep terms, and small-message hop latency measured with an expensive-term peer running concurrently on the same scheduler. Measurement only -- no mechanism changes (work-sensitive charging, resumable traversals, bounded exports, or I/O offloading are named there as possible later mechanisms; this task measures, it does not choose). |
 
 Notes on the write sets. The three pattern files do different things and are split to keep T01/T02 disjoint: `lib/patcompile.c` is the AST-to-`NvPattern` conversion (`nvpatternfromexpr`, T02), `lib/patbc.c` is the pattern-to-bytecode lowering (`nvpatterncode`, T02), and `lib/pattern.c` is the runtime matcher (`nvpatternmatch`, T01) that both the pattern harness and the source path use, where a `Pbin` pattern matches a `Bbin` term. The one genuinely shared surface, `include/nvpat.h` (the `Pbin` kind and `NvBinseg` struct), is settled centrally in `milestones/09-binaries.md`'s "Settled interfaces" section before either task starts, so T01 owns it and T02 builds to it without editing it -- this is the coordinator-settles-the-interface rule from COORDINATION.md's parallelism policy, not an exception. If a task finds it needs a file outside its set, it reports a blocker, it does not expand scope. `include/nvproc.h` is in no M09 set (no `NvLimits` field is added: D078/D079 deliberately reuse the heap word budget rather than a new binary byte limit, so there is no `.gcoffload`-style field to thread through the construction sites). The `mkfile` change in T05 follows the T04r precedent (new build target only, no behavior change to existing targets).
 
-## M08-T04e CLI/environment defect repair (done)
-
-Accepted: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass, each reporting `all CLI environment tests passed` and ending with `all nervous regression suites passed`. Write set released. Implementation summary retained for the record: empty-as-unset environment parsing with a named diagnostic, `rfork E` to `rfork e` in all seven test runners so inherited `nervous_gcstress` survives, and `tests/cli/run.rc`/`value.nv` covering absent/zero-length/quoted-empty/0/1/-G/invalid cases plus a one-tuple allocation canary. No VM/GC/runtime algorithm change.
-
-## M08-T04c off-process collection (done)
-
-Accepted: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass, the latter now exercising `tests/memory/offloadtest`'s seven lifecycle groups (`holdbasic`, `holddeadline`, `holdteardown`, `holdall`, `holdsweepcap`, `holddeadlock` -- this last one added during coordinator review -- and `nooffloaddefault`). Write set released. Implements D074 in full. Summary for the record:
-
-- `include/nvvm.h`: `NvHeap` gains `owner` (`NvHeapIdle`/`NvHeapRunning`/`NvHeapCollecting`) and a `Lock`.
-- `include/nvexec.h`: `NvExec` gains `offlaunched` (scheduler-only bookkeeping; the collector child never touches it). `nvexecgc`/`nvexeccollect`/`nvexecrun` signatures unchanged, confirmed sufficient as pure, exec-only functions callable from a forked proc.
-- `include/nvproc.h`: `NvLimits.gcoffload` (word threshold; 0 = never off-process, the corrected D074 default polarity). `nvprocrequeue` declared.
-- `include/nvsched.h`: `NvScheduler` gains `gcoutstanding`, `gcofffallback`, malloc'd `gcsem`/`gchold` pointers; `NvMemstats.ncollecting`; `nvschedgchold` (test hold-point hook) declared.
-- `lib/gc.c`, `lib/exec.c`: unchanged, confirmed (not just assumed) sufficient by reading `nvexecgc`/`nvexeccollect`/`nvheapcollect` closely -- they are already scheduler/exec-agnostic pure functions over one stopped process's own heap and stack.
-- `lib/process.c`: added `nvprocrequeue` (dequeue-and-reenqueue-at-tail for a specific runnable slot), needed by the dispatch-skip logic; preserves the D059 FIFO invariant.
-- `lib/sched.c`: launch (`collect`, off-process branch), the collector child (`collectorchild`, restricted to `NvExec*`/`gcsem`/`gchold` arguments only), the locked completion fold (`gcfold`), dispatch-time discovery (`finddispatchable`), the never-idle/never-spin wait logic in `nvschedstep`, the bounded teardown drain (`gcdrain` in `nvschedfree`), the idle-sweep launch cap, and `nvschedmemory`'s skip-and-count of collecting heaps.
-- `cmd/nervous/main.c`, `tests/process/ptest.c` (3 sites), `tests/process/schedtest.c` (1), `tests/process/iotest.c` (1), `tests/process/r2test.c` (10, not the ballpark "about nine" in D074 -- see handoff), `tests/memory/autotest.c` (1, its shared `limits()` helper), `bench/perftest.c` (1): explicit `.gcoffload = 0;` added at every confirmed `NvLimits` construction site. `tests/memory/gctest.c` and `tests/process/exectest.c` confirmed to construct no `NvLimits`, unchanged.
-- `tests/memory/offloadtest.c` (new) and `tests/memory/README.md`: six lifecycle-test groups using a new deterministic test hold point (`nvschedgchold`).
-- Also touched, **outside the originally assigned write set**, because the task cannot otherwise build or run: `mkfile` (new `offloadtest`/`tests/memory/offloadtest.$O` rules, added to the `tests` meta-target and `clean`) and `tests/memory/run.rc` (invoke the new binary). Flagged as a blocker in the mid-task handoff; the coordinator (continuing this same session) explicitly instructed touching them, so they are included here rather than left undone, but the exception is recorded for the record.
-
-`mk -a tests benchmarks` rebuilt every target from clean with no diagnostics. `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` are still required user-run checks (neither the implementer nor the coordinator has a shell; this is the same evidentiary discipline every prior task in this file has followed). See the implementer's full handoff report for semantic decisions proposed (test hold-point shape, idle-sweep cap as a private constant, gcoffload/gcofffallback/gcoutstanding on `NvScheduler`, the force-all-off-process spelling as `gcoffload=1`) -- all ratified as reasonable on review, none reopened.
-
-### Coordinator review (this session)
-
-Read every changed file directly rather than trusting the handoff summary, per `COORDINATION.md`. Verified: the shared-memory placement requirement (`gcsem`/`gchold` are genuinely malloc'd pointers on `NvScheduler`, not embedded fields -- confirmed by reading `nvschedinit`/`nvschedfree`); the `gcoffload` polarity and its explicit presence at all 18 pre-existing `NvLimits` construction sites across 7 files (spot-checked `cmd/nervous/main.c` and `tests/process/r2test.c`'s all 10 sites in full, both correct; `tests/process/ptest.c`'s 3 sites read in full and correct); `lib/process.c`'s `nvprocrequeue`; the full new `tests/memory/offloadtest.c` suite; `mkfile`/`tests/memory/run.rc`.
-
-**Four correctness defects found and fixed directly** (small, precisely scoped each; fixed in place rather than round-tripped back to the implementer, given the cost of a full review cycle -- a second advisor review pass and one more self-check while writing a new regression test caught three of these four after the first pass looked clean):
-
-1. **Ordering gap in the completion fold.** `gcfold` correctly took the heap `Lock` before reading the collector-written `gcretry`/`livewords` fields, but the caller (`finddispatchable`) then did a *second*, unlocked read of `e->heap.owner` immediately afterward to decide dispatch. If `gcfold`'s locked read observed "still collecting" but the collector child finished microseconds later, that second unlocked read could observe `NvHeapIdle` without ever having synchronized via the lock -- meaning the interpreter's later unlocked read of `e->gcretry` in `prepare()` could, on a weak memory model (this project targets 7c/arm64), be the *first* witness of the collector's writes, with no ordering guarantee. Fixed by making `gcfold`'s own locked determination authoritative: it now returns whether the exec is safe to dispatch (1) or still collecting (0), and `finddispatchable` uses that return value instead of re-reading `owner` unlocked.
-2. **Livelock in deadlock detection.** `gcfold` was reachable only through `finddispatchable`, which examines only `Prrunnable` slots. A collection launched by the opportunistic idle sweep (D067) targets a `Prwaiting` process, which can stay waiting forever in a genuinely deadlocked program -- its completion would never be folded, `gcoutstanding` would never reach zero, and D046 deadlock detection would be silently disabled from that point on: every future `nvschedstep` call would loop on `tsemacquire` instead of ever reporting `NvSchedIdle` again. Fixed with a new `gcfoldall(s)` that walks every process slot (runnable or waiting) and folds any `offlaunched` exec whose collector has completed; called once per idle-branch pass before the `gcoutstanding == 0` decision.
-3. **Use-after-free risk in teardown.** `gcdrain` decremented `gcoutstanding` once per successful `tsemacquire`, treating the semaphore's count as a 1:1 proxy for "one more completion is foldable". That is false: `gcfold` (via ordinary dispatch) decrements `gcoutstanding` independent of whether anyone consumed that exec's `semrelease`, leaving a stale credit in the semaphore. A later `gcdrain` `tsemacquire` could consume that stale credit and report drain-complete while a *different* collector was still genuinely running, freeing memory out from under it. Fixed: the semaphore is now used purely as a sleep/wakeup signal in `gcdrain`; every iteration calls `gcfoldall` to re-derive the true count from the locked owner check, never from the semaphore value.
-4. **Double-launch risk in the idle sweep.** The sweep's launch-eligibility check read `e->heap.owner != NvHeapCollecting` unlocked. If a collector had already published `NvHeapIdle` for an exec whose completion had not yet been folded (fix 2 had not run since), the sweep could launch a *second* collector for the same exec -- double-incrementing `gcoutstanding`, discarding the first collection's results, and risking two collector procs genuinely racing on one heap. Fixed by gating on `!e->offlaunched` instead: `offlaunched` is touched only by the scheduler proc itself, so it needs no lock and is authoritative for "a launch/fold cycle is already in flight."
-5. **Stale semaphore credits degrade the wait into a spin.** A direct consequence of fix 2/3's design (the dispatch-path fold decrements `gcoutstanding` without ever consuming the matching `semrelease`): once any completion has ever been folded that way, the leftover credit makes every later bounded `tsemacquire` in the "collector outstanding" wait return immediately instead of actually sleeping until the next real completion. Not a correctness bug -- `gcfoldall` keeps the count accurate regardless -- but it defeats the entire point of "never spin" for the rest of that scheduler's life. Fixed: drain the semaphore to zero (non-blocking) and re-fold immediately before the bounded wait, rechecking `gcoutstanding == 0` (this recheck doubles as the lost-wakeup guard for a completion landing in the narrow window since the earlier fold).
-
-All five are recorded as amendments in D074 (`docs/decisions.md`) so the design record stays normative, not just the code. A regression test (`holddeadlock` in `tests/memory/offloadtest.c`) specifically exercises fix 2/3's scenario: a waiting, unreachable-by-message process whose off-process collection completes with nothing else outstanding must still result in `NvSchedIdle` being reported. Rebuilt clean (`mk tests benchmarks`) after every fix; no file outside `lib/sched.c`, `tests/memory/offloadtest.c`, and `docs/decisions.md` needed a change for any of the five.
-
-Also independently re-verified (not merely assumed from the earlier summary) by directly re-reading both files in full: `tests/process/schedtest.c` and `tests/process/iotest.c` each correctly carry their one `.gcoffload = 0;` addition. Combined with the direct re-reads of `cmd/nervous/main.c` (1 site) and `tests/process/r2test.c` (all 10 sites) and `tests/process/ptest.c` (all 3 sites) earlier in this review, every one of the 18 sites across the 7 files this task was assigned to fix has now actually been read and confirmed, not just claimed.
-
-Two minor, non-blocking notes for T04d rather than fixes made now:
-- `gcfoldall` runs after the idle sweep, not before, so an exec whose waiting-process collection completed in an earlier pass becomes eligible for a fresh sweep decision only on the *next* pass, not the same one. Correct (one pass of latency, no staleness beyond that), just not maximally prompt; moving the call before the sweep would let the sweep see freshly-folded `livewords` in the same pass. Optional.
-- The new `holddeadlock` test relies on `nvexecinit`'s initial heap space being exactly 64 words so that a 41-word tuple exceeds `cap/2` and triggers the idle sweep's eligibility check. If a future change alters that initial sizing, this test will fail loudly at the "waiting process's collector was not launched off-process" assertion rather than silently passing -- the right failure mode, but worth knowing what it means if the user's `rc tests/memory/run.rc` run reports it.
-
-Accepted: user confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass. Not reopening any of the implementer's flagged decisions; T04d inherits the sweep cap (`NvGcsweepcap = 8`) and the `gcoffload` default (0) as provisional, exactly as flagged.
-
 ## Recommended next sequence
 
-**Milestone 08 is complete.** **Milestone 09 (Binaries) is in progress**: see "M09-Tasks (in progress)" above. T01-T04 are done and accepted. Next is T05, the latency measurement; then close milestone 09. The mandatory R3 review (now including the latency-isolation measurement, see `milestones/R3-memory-review.md`) follows milestone 09 and gates milestone 10.
+**Milestones 08 and 09 are complete. R3 is open** and gates milestone 10. Done so far in R3: R3-F02 closed (user-tested); audit legs A1 (bin* opcodes) and A2 (roots, ownership transitions, mid-scan collection, idle sweep, off-process collector, GC rollback, table realloc) clean and logged; D080 decided and implemented for the latency-isolation leg (R3-F04, fixed-pending-verification: traversal visits charged as reductions at 8 per, optional `-w` ceiling). **R3 is complete.** D080 verified by measurement; coverage leg R3-A3 closed gaps 3a/3e/3f/4 with fixtures; the newly mandatory `nervous_gcstress=1 nervous_gcoffload=1` suite run exposed R3-F05 (off-process idle collections were no-ops since M08-T04c) and led to R3-F06 (teardown semrelease use-after-free); both fixed with regressions, and all three suite invocations pass on the final build. **Milestone 10 (Multicore) is open**: design accepted and recorded as D081-D089; M10-T00a (segmented process table) is cut and ready; T00b, T01-T04 and R4 staged in `milestones/10-multicore.md`.
 
-### M08-T04r large-live-set latency baseline (done)
-
-Built this session (self-executed by the coordinator, no sub-agent; the user gave explicit go-ahead for T04r specifically before this began). Original write set: `bench/largelive.c` (new), `bench/largelive.rc` (new), `mkfile` (`largelive` build target, added to `benchmarks` and `clean`), `bench/README.md` (new "M08-T04r" section), `docs/questions.md` (fixed stale pre-D074 `gcoffload` polarity wording, pointed it at the new fixture).
-
-**First user run found a real crash**, not a fixture-only issue. `gcoffload=0` produced a clean, plausible result (`baseline` p50 ~1.4us, `loaded` p50 ~14.8us, p99.9 ~213us, max ~463us -- a real, visible tail). `gcoffload=1` crashed during the baseline phase itself, before the owner was even spawned, with `unexpected scheduler state during round trip`. Exhaustive self-directed tracing through `lib/sched.c`/`lib/exec.c`/`lib/process.c` could not find a reachable code path where the owner-less baseline phase should differ based on `gcoffload` at all, which was itself the tell that the premise, not just the trace, was wrong. Consulted the advisor rather than keep guessing; it found two real things:
-
-1. **The fixture's premise was false.** "Peers never allocate" is wrong: `recvtake` adopts each 1-word tick/tock fragment onto a peer's own heap (D064), so a peer's heap does grow slowly and does eventually collect on its own -- tiny, but real. With `gcoffload=1` ("always off-process," `e->heap.words >= 1`), an ordinary peer's own tiny collection goes off-process too, which is how `gcoffload` ever became reachable during a phase with no owner running.
-2. **That exposed an actual scheduler bug**, not merely a confusing benchmark result: `finddispatchable` returning 0 has two different causes -- the runnable queue is empty, or every runnable slot's heap was `NvHeapCollecting` at that moment (requeued, not dispatched). The idle branch's `gcoutstanding == 0` check did not distinguish these: after an idle-sweep burst of several peer collectors all complete and fold before the next dispatch attempt, `gcoutstanding` returns to 0 while the runnable queue is provably non-empty (the very slots just requeued), and the code fell straight through to reporting `NvSchedIdle` -- exactly the false idle D074's "never falsely report idle or deadlock" corollary requires never happen. Fixed with one added check in `lib/sched.c`: `if(r->nrunnable != 0) return NvSchedProgress;` as the first thing inside that branch. Recorded as a new D074 amendment in `docs/decisions.md` ("False idle when every runnable slot was collecting"), matching the class of the five T04c review fixes already there. No existing test caught this because every existing benchmark and CLI call site hardcodes `gcoffload = 0` (per the polarity note in that same D074 section) -- this bug was reachable only once something actually used a nonzero threshold, which nothing did before this fixture.
-
-**Write set expansion, same pattern as T04c's mkfile exception**: this session also touched `lib/sched.c` and `docs/decisions.md`, outside the fixture's originally-scoped `bench/`-only write set, because the bug found there could not otherwise be fixed or recorded. Also corrected: the "peers never allocate" claim in `bench/largelive.c`'s top comment and `bench/README.md` (both now describe the real, small allocation and why `gcoffload` must be chosen above peer heap sizes to isolate the owner); `bench/largelive.rc`'s off-process rows now use a threshold (1000) that catches only the owner instead of `gcoffload=1`; the owner-collections report in `bench/largelive.c` now reads the owner's own `NvExec` fields directly instead of a scheduler-wide aggregate that also counts every peer's own tiny collections; `measurerounds`' failure diagnostic now prints round/peer/step/nrunnable/gcoutstanding/err instead of a bare assertion. `mk tests benchmarks` builds clean after all of it.
-
-**Accepted.** User re-ran `rc bench/largelive.rc` after `mk tests benchmarks`: all five cases (50000/500000 retainwords, gcoffload 0/1000/25000) completed without error. User also confirmed both `rc tests/run.rc` and `nervous_gcstress=1 rc tests/run.rc` pass in full immediately after, reconfirming the `lib/sched.c` fix did not regress anything. (At the time of this acceptance the fix still had no deterministic regression test of its own; T04d later added one -- `NvScheduler.gcidlestep` and `tests/memory/offloadtest.c`'s `holdfalseidle`, see that section below.) Results recorded in `bench/README.md`'s "First real run" table (superseded by T04d's repeated-run table). Write set released.
-
-**What the first run does and does not establish** (full detail and numbers in `bench/README.md`): the `baseline`-to-`loaded` p50 shift is present regardless of `gcoffload`, consistent with it being FIFO quantum-sharing with a continuously-runnable owner (D059), not GC. But the tail (p99.9/max) tells a genuinely mixed story: at retainwords=50000, off-process collection made the tail roughly *twice as bad* as inline in this run -- the opposite of D068's "fork cost is noise" assumption -- while at retainwords=500000 it *improved* p99.9 with `max` staying enormous (~4.1-4.3 ms) either way. The owner also completed fewer of its own collections under off-process than inline in the same wall-clock window at the smaller shape. All of this is single-run, one machine, not yet distinguishable from OS-scheduling noise now that off-process cases involve genuinely concurrent Plan 9 procs (inline has none) -- `bench/README.md` states plainly this is not yet a basis for choosing a default. Also recorded as a first data point in `docs/questions.md`'s persistent-collector-pool note: no longer purely hypothetical, still not confirmed.
-
-### T04q duplicate interpreter work (planned, optional, deferred; not a T04c dependency)
+## T04q duplicate interpreter work (planned, optional, deferred; not a T04c dependency)
 
 Source inspection found arithmetic results and call-target resolution computed during reservation preflight and then computed again for execution. A narrow pass can remove this duplication. Not required before or after T04c; pursue only if the user wants the throughput work specifically.
 
@@ -175,20 +177,6 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Acceptance: forced build, normal/stress regressions, quanta 1/1000, and repeated unprofiled original/control benchmarks. Keep measured wins or a justified simplification; do not weaken checks to chase the stage-2 number.
 - Stopping rule: one bounded attempt, then proceed or defer.
 
-### Measure policy and close 08: T04d (done; milestone 08 complete)
-
-T04r's first run found a mixed, not-yet-explained result (off-process worse at one shape, better at another) that was one run each on one machine. Before that data could be trusted or acted on, two gaps had to close, both done this session:
-
-1. **Nothing could actually run "full stress with forced off-process collection."** `gcoffload` was `NvLimits`-only; every construction site and the CLI hardcoded 0. Added: `-o words` (mirrors `-H`/`-G` exactly) and `$nervous_gcoffload` (mirrors `$nervous_gcstress`, inherited by test runners the same way T04e's `rfork e` fix makes `nervous_gcstress` inherited) in `cmd/nervous/main.c`; documented in `man/1/nervous` (new `-o` entry, removed the now-stale "no CLI flag" BUGS note) and `README.md`. Applies only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler and therefore no off-process mechanism at all -- documented explicitly since this is an asymmetry with `-H`/`-G`, which do apply there). No existing test or benchmark's own `NvLimits.gcoffload = 0` construction is affected; this is a CLI-only default layered on top.
-2. **The D074 amendment (false idle) had no deterministic regression.** Reproducing the real race (every runnable slot's off-process collector completing between `finddispatchable`'s scan and the idle branch's `gcfoldall` call, two adjacent in-process calls with no syscall between them) is not practical by racing real collector procs -- confirmed by reading `nvschedstep` in full and checking with the advisor before committing to that conclusion. Added a second, structurally different test-only seam: `NvScheduler.gcidlestep` (`include/nvsched.h`), a plain function-pointer field (not malloc'd/shared like `gcsem`/`gchold`, since only the scheduler proc itself ever touches it), called once in `nvschedstep` right after `finddispatchable` reports nothing dispatchable and before the idle sweep/`gcfoldall` run; nil in production, zero cost outside the idle branch. `tests/memory/offloadtest.c` gained an eighth group, `holdfalseidle`: installs the hook to flip every outstanding exec's heap to idle-with-success directly (under its own lock, from the scheduler proc, so nothing races it) at exactly that point, forcing the precise interleaving the bug depends on, and asserts `NvSchedProgress` (not `NvSchedIdle`) plus `gcoutstanding == 0`. `tests/memory/README.md` updated (also fixed a pre-existing miscount: it said "six groups" and was missing `nooffloaddefault`'s bullet even before this session's addition; now correctly "eight groups" with both accounted for).
-3. `bench/largelive.rc` now takes an optional repeat-count argument (default 3), looping each shape/gcoffload row that many times so one invocation produces the repeated-run data T04r's own results said was needed, instead of the user re-running the whole script by hand.
-
-`mk tests benchmarks` builds clean. User ran, via `/dev/snarf`: `rc tests/run.rc`, `nervous_gcstress=1 rc tests/run.rc`, `nervous_gcstress=1 nervous_gcoffload=1 rc tests/run.rc` (genuinely new coverage: CLI-driven, forced-all-off-process stress across the entire existing test suite, not reachable before this session), and `rc bench/largelive.rc 3` (three repeated runs per shape/threshold). All passed, including the new `holdfalseidle` regression under every environment combination.
-
-**Decision made (not deferred): `gcoffload` stays 0.** The repeated data confirmed a real, repeatable crossover -- off-process collection hurts the tail (~2.2x) at a 50000-word owner live set and helps (~2x on p99.9/max) at 500000 words -- but only bracketed that crossover, not located it: the threshold value (1000 vs 25000) barely mattered at the small end, meaning no specific number in that bracket is supported by this evidence. Full reasoning, the repeated-run table, and the fixture duration-mismatch caveat found while writing this up (the 500000 rows' owner finishes early under inline but not under off-process, confounding their p50 comparison -- p99.9/max are unaffected) are in `bench/README.md`'s "Repeated runs (M08-T04d)" and `docs/decisions.md`'s D075. `docs/questions.md` records what would reopen this (a real >100k-word workload, or the persistent-collector-pool refinement). `NvGcsweepcap=8` is recorded as unmeasured and explicitly provisional -- this fixture's peers never grew large enough to trigger the idle-sweep path.
-
-Milestone 08's required tests and exit criterion (`milestones/08-memory.md`) are reconciled: reread that file's "Required tests"/"Exit criterion" against the accepted suites (`gctest`, `autotest`, `offloadtest`) before this closure, not assumed from memory. Write set released.
-
 ## Current implementation map
 
 - Representation/accounting: `include/nvvm.h`, `lib/value.c`. Tagged words, interned atoms, immutable sharing, independent fragments. Managed execution heaps are contiguous; host/startup construction still uses non-moving chunks.
@@ -196,17 +184,9 @@ Milestone 08's required tests and exit criterion (`milestones/08-memory.md`) are
 - Roots/reservations: `include/nvexec.h`, `lib/exec.c`. Active registers only, retained stack capacity charged, small root-view scratch on the C stack, NvCollect request/retry and guard-aware failure. Standalone servicing in `lib/vm.c` preserves the reduction budget.
 - Processes: `include/nvproc.h`, `lib/process.c`. Fragment mailboxes, non-consuming recvneed before take, geometric slot capacity and lowest-free hint. Retired slots can outnumber the configured live-process limit; FIFO links use indices.
 - Scheduler: `include/nvsched.h`, `lib/sched.c`. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
+- Binaries (M09, D076-D079): `Bbin` terms in `include/nvvm.h`/`lib/value.c` (`nvbin`, `nvbinapp`); runtime matching in `lib/pattern.c`; nine `bin*` opcodes in `lib/exec.c`, verified in `lib/verify.c`; frontend in `lib/lex.c`, `lib/parse.c`, `lib/patcompile.c`, `lib/patbc.c`, `lib/compile.c`, `lib/format.c`.
 - CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-s` statistics. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
-- Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest` and `bench/largelive`.
-
-## What the accepted measurements do and do not establish
-
-- T04p whole-program ring cost is 672-731 ns/message, 5.1-8.5% below first-inline measurements. Waiters-10000 falls from 1136 to 725 ns/message and 89.39 to 17.98 MB host high-water. Counts of bytecode work, messages, dispatches and collections are unchanged. These are single-run comparisons, not confidence intervals.
-- The phase control gives 674/672 ns/message at 1000/10000 waiters. At 10000, the host break grows during startup and is flat through traffic; requested waiter storage is 15.04 MB, mostly heap/stack capacity and exec structs. This is not an allocator-leak proof or an exact reconstruction of the former 89 MB allocation history.
-- Pre-sizing only two busy heaps from 64 to 512 words cuts collections 88.7% but traffic cost only 7.4%. Do not raise every idle heap's minimum: 10000 such increases would add 35.84 MB. Keep minimum 64 and current policy for now; adaptive hot-process sizing is optional later research, not an accepted design change.
-- Opt-in profiling raises traffic elapsed time roughly 75-86% in this control. Prefer repeated unprofiled comparisons; the timed execution bucket includes host calls and does not isolate preflight alone.
-- The table/search and GC allocator changes were measured together. Do not assign their independent contributions more precisely than the evidence allows.
-- Stage 2's roughly 300 ns/message came from heaps that never collected. It is a historical throughput reference, not a safe allocation policy or a required performance threshold for milestone 08.
+- Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest`, `bench/largelive` and `bench/latency` (M09-T05).
 
 ## Remaining cautions
 
@@ -218,9 +198,9 @@ Milestone 08's required tests and exit criterion (`milestones/08-memory.md`) are
 
 ## Resumption checklist
 
-1. Milestone 09 is in progress: read "M09-Tasks (in progress)" -> "Progress (current)" for what is done and what remains, then continue with the first remaining item. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
+1. R3 is open: read the checkpoint block's `next:` line and "Recommended next sequence", then `docs/review-findings.md` (R3 table) and `bench/README.md` ("M09-T05" -> "First run" -> "The R3 finding"). Milestone 09's task detail under "M09-Tasks" is history now. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
 2. Confirm actual source-control state with the user; preserve the accepted checkpoint before new edits. A commit message is not evidence of a commit. As of the M09-T04 checkpoint, the user reports committing and pushing (see "source control" in the checkpoint block).
-3. (Only if step 1's fast path doesn't apply) Read README, this status, `docs/semantics.md` (the normative contract; the `docs/` design-rationale files split from `nervous_design.md` are not), milestone 08, D061-D074 (D074 especially, including its five coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
+3. (Only if step 1's fast path doesn't apply) Read README, this status, `docs/semantics.md` (the normative contract; the `docs/` design-rationale files split from `nervous_design.md` are not), `milestones/09-binaries.md` and D076-D079 for milestone 09; for R3 preparation, `milestones/R3-memory-review.md` and D061-D075 (D074 especially, including its coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
 4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d), CLI-T01, and M09-T01..T04 are done, with their write sets released. M09-T05's row in "M09-Tasks (in progress)" has its exact write set; assign it and start.
 5. Build with mk after edits. User runs behavioral tests/benchmarks; never execute scripts, cleaning, installation or source-control commands through the compilation-only mk tool.
-6. For the local Qwen sub-agent, follow `/usr/dave/qwen.md` (session setup, the prompt recipe, what to delegate and what not to). If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.
+6. Sub-agents: read `/usr/dave/local_models.md` "Economic Review" first -- the current policy is cloud Sonnet (`claude-sonnet-5`) for bounded read-only audits with a numbered deliverable and mandatory source quotes (the R3-F02 audit is the template: seven files in order, seven questions, ~35 calls, `maxrounds 40`), the coordinator for every edit, and local models only for second-opinion review or doc summaries. If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.

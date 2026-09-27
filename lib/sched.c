@@ -48,13 +48,20 @@ hostsend(NvExec *e, NvTerm pid, NvTerm value, char *err, int nerr)
 	return nvprocsend(&s->runtime, pid, value, err, nerr) < 0 ? -1 : 0;
 }
 
+static int spawntimed(NvScheduler *, char *, NvTerm, NvTerm *, NvWork *, char *, int);
+
+/*
+ * D080: a bytecode spawn charges the child's argument copy to the
+ * spawning process and bounds it by that process's work ceiling; host
+ * spawns (nvschedspawn) are uncounted.
+ */
 static int
 hostspawn(NvExec *e, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 {
 	NvScheduler *s;
 
 	s = e->host->aux;
-	return nvschedspawn(s, entry, arg, pid, err, nerr);
+	return spawntimed(s, entry, arg, pid, &e->work, err, nerr);
 }
 
 /* Receive callbacks operate only on the currently dispatched process. */
@@ -164,7 +171,7 @@ hostprint(NvExec *e, NvTerm value, char *err, int nerr)
 
 	s = e->host->aux;
 	if(s->io.out == nil){ snprint(err,nerr,"bad_process_context"); return -1; }
-	rc = nvtermprint(s->io.out, value);
+	rc = nvtermprintw(s->io.out, value, &e->work);	/* D080: charged and bounded */
 	Bputc(s->io.out, '\n');
 	if(Bflush(s->io.out) < 0){ snprint(err,nerr,"io_error"); return -1; }
 	if(rc == NvTermlimit){ snprint(err,nerr,"system_limit"); return -1; }
@@ -179,7 +186,7 @@ hosteprint(NvExec *e, NvTerm value, char *err, int nerr)
 
 	s = e->host->aux;
 	if(s->io.err == nil){ snprint(err,nerr,"bad_process_context"); return -1; }
-	rc = nvtermprint(s->io.err, value);
+	rc = nvtermprintw(s->io.err, value, &e->work);	/* D080: charged and bounded */
 	Bputc(s->io.err, '\n');
 	if(Bflush(s->io.err) < 0){ snprint(err,nerr,"io_error"); return -1; }
 	if(rc == NvTermlimit){ snprint(err,nerr,"system_limit"); return -1; }
@@ -311,9 +318,9 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 	int collecting;
 
 	memset(m, 0, sizeof *m);
-	m->tablebytes = (uvlong)s->runtime.nalloc*sizeof(NvProcess);
+	m->tablebytes = (uvlong)s->runtime.nchunk*NvProcchunk*sizeof(NvProcess);
 	for(i = 0; i < s->runtime.nslot; i++){
-		p = &s->runtime.process[i];
+		p = nvprocat(&s->runtime, i);
 		for(f = p->head; f != nil; f = f->next){
 			m->nmailbox++;
 			m->mailboxbytes += fragmentbytes(f);
@@ -395,6 +402,8 @@ enum {
 	NvGcdrainmax = 5000,	/* 5000 * 20ms = 100s worst case before giving up */
 };
 
+static int gcwait(NvScheduler *, ulong);
+
 static void
 gcdrain(NvScheduler *s)
 {
@@ -403,12 +412,26 @@ gcdrain(NvScheduler *s)
 	tries = 0;
 	gcfoldall(s);
 	while(s->gcoutstanding > 0 && tries < NvGcdrainmax){
-		tsemacquire(s->gcsem, NvGcdrainwaitms);
+		gcwait(s, NvGcdrainwaitms);
 		gcfoldall(s);
 		tries++;
 	}
 	if(s->gcoutstanding > 0)
 		sysfatal("nervous: nvschedfree: %llud collector(s) never completed", s->gcoutstanding);
+	/*
+	 * R3-F06: every heap is idle, but a child that published idle and
+	 * was descheduled before its semrelease still holds gcsem. Freeing
+	 * gcsem now would let that release land in whatever malloc hands
+	 * the address to next -- in the test binaries, the next scheduler's
+	 * gcsem or gchold. Wait until every launched child's single credit
+	 * has been consumed; only then is no collector touching anything.
+	 */
+	while(s->gccredits < s->gclaunched && tries < NvGcdrainmax){
+		if(gcwait(s, NvGcdrainwaitms) <= 0)
+			tries++;
+	}
+	if(s->gccredits < s->gclaunched)
+		sysfatal("nervous: nvschedfree: %llud collector(s) never signalled", s->gclaunched-s->gccredits);
 }
 
 void
@@ -440,7 +463,7 @@ nvschedgchold(NvScheduler *s, int hold)
 }
 
 static int
-spawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+spawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, NvWork *w, char *err, int nerr)
 {
 	NvExec *e;
 
@@ -456,10 +479,12 @@ spawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 	}
 	/*
 	 * The argument is a word in the spawning process's own registers
-	 * (D065's host callback contract); nvexecinit copies it into the
-	 * fresh child heap, so nothing here retains it past this call.
+	 * (D065's host callback contract); nvexecinitw copies it into the
+	 * fresh child heap, so nothing here retains it past this call. D080:
+	 * the copy's visits go to w -- the spawner's work when a process
+	 * spawned, nil when the host did.
 	 */
-	if(nvexecinit(e, s->module, entry, arg, s->runtime.limits.maxheap, nil, 0, err, nerr) < 0 ||
+	if(nvexecinitw(e, s->module, entry, arg, s->runtime.limits.maxheap, nil, 0, w, err, nerr) < 0 ||
 	   nvexecsetframelimit(e, s->runtime.limits.maxframe) < 0){
 		if(err[0] == 0)
 			snprint(err, nerr, "bad process limits");
@@ -469,23 +494,46 @@ spawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
 		return -1;
 	}
 	nvexecsethost(e, &s->host);
+	nvexecsetworklimit(e, s->maxtermwork);
 	e->gcstress = s->runtime.limits.gcstress;
-	/* Re-fetch by slot: nvprocspawn/nvexecinit may have grown the table. */
-	s->runtime.process[nvpidslot(*pid)].exec = e;
+	/* Re-fetch by slot: harmless now that D082's segmented table never
+	 * moves an existing slot, but kept since nvprocat is one indirection
+	 * regardless and this stays correct even if that ever changed again. */
+	nvprocat(&s->runtime, nvpidslot(*pid))->exec = e;
 	return 0;
 }
 
-int
-nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+static int
+spawntimed(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, NvWork *w, char *err, int nerr)
 {
 	uvlong start;
 	int rc;
 
 	start = s->profile ? uptime() : 0;
-	rc = spawn(s, entry, arg, pid, err, nerr);
+	rc = spawn(s, entry, arg, pid, w, err, nerr);
 	if(s->profile)
 		s->spawnns += uptime()-start;
 	return rc;
+}
+
+int
+nvschedspawn(NvScheduler *s, char *entry, NvTerm arg, NvTerm *pid, char *err, int nerr)
+{
+	return spawntimed(s, entry, arg, pid, nil, err, nerr);
+}
+
+/*
+ * D080: per-traversal visit ceiling installed into every process spawned
+ * from now on (0 = none). Kept on the scheduler rather than NvLimits
+ * because every NvLimits construction site in this tree assigns fields
+ * without zeroing the struct (D074), so a new field there is stack
+ * garbage at each site not explicitly updated; a scheduler field is
+ * zero from nvschedinit's memset.
+ */
+void
+nvschedsetworklimit(NvScheduler *s, uvlong max)
+{
+	s->maxtermwork = max;
 }
 
 int
@@ -548,9 +596,27 @@ enum {
 };
 
 static void
-collectorchild(NvExec *e, long *gcsem, long *gchold)
+collectorchild(NvExec *e, int demand, long *gcsem, long *gchold)
 {
-	nvexecgc(e);
+	int rc;
+
+	/*
+	 * R3-F05: mirror doinline exactly. nvexecgc services a *pending
+	 * demand request* and returns without collecting when there is none
+	 * -- which is every idle-sweep launch. The original child called
+	 * nvexecgc unconditionally, so every off-process idle collection was
+	 * a fork that collected nothing, reported failure to the fold, and
+	 * left the waiting process eligible to be "collected" again on the
+	 * next idle pass, forever. The outcome goes to gcresult, not
+	 * gcretry, for the reason given at that field.
+	 */
+	if(demand){
+		nvexecgc(e);
+		e->gcresult = e->gcretry;
+	}else{
+		rc = nvexeccollect(e, 0);
+		e->gcresult = rc == 0 ? 1 : rc == NvTermlimit ? 2 : 3;
+	}
 	/* D074 "Test determinism": absent/no-op unless a test engaged it. */
 	if(gchold != nil)
 		while(*gchold != 0)
@@ -558,8 +624,25 @@ collectorchild(NvExec *e, long *gcsem, long *gchold)
 	lock(&e->heap.lock);
 	e->heap.owner = NvHeapIdle;
 	unlock(&e->heap.lock);
+	/* Last touch of shared memory; the parent counts it (R3-F06). */
 	semrelease(gcsem, 1);
 	_exits(nil);
+}
+
+/*
+ * R3-F06: the one way to consume a completion credit. Counting them is
+ * what lets nvschedfree know every forked child has executed its final
+ * semrelease before gcsem is freed; see gcdrain.
+ */
+static int
+gcwait(NvScheduler *s, ulong ms)
+{
+	int rc;
+
+	rc = tsemacquire(s->gcsem, ms);
+	if(rc > 0)
+		s->gccredits++;
+	return rc;
 }
 
 /*
@@ -627,8 +710,9 @@ collect(NvScheduler *s, NvExec *e, int demand, int allowoffload)
 			return;
 		}
 		if(pid == 0)
-			collectorchild(e, s->gcsem, s->gchold);	/* never returns */
+			collectorchild(e, demand, s->gcsem, s->gchold);	/* never returns */
 		/* Parent: completion is discovered lazily by gcfold. */
+		s->gclaunched++;
 		return;
 	}
 	start = s->profile ? uptime() : 0;
@@ -688,7 +772,7 @@ gcfold(NvScheduler *s, NvExec *e)
 	lock(&e->heap.lock);
 	idle = e->heap.owner == NvHeapIdle;
 	if(idle){
-		retry = e->gcretry;
+		retry = e->gcresult;	/* R3-F05: the child's report for either path */
 		live = e->livewords;
 	}
 	unlock(&e->heap.lock);
@@ -733,7 +817,7 @@ gcfoldall(NvScheduler *s)
 
 	r = &s->runtime;
 	for(i = 0; i < r->nslot; i++){
-		e = r->process[i].exec;
+		e = nvprocat(r, i)->exec;
 		if(e != nil && e->offlaunched)
 			gcfold(s, e);
 	}
@@ -762,7 +846,7 @@ finddispatchable(NvScheduler *s, ulong *outslot)
 	for(tries = 0; tries < bound; tries++){
 		if(!nvprocrunhead(r, &slot))
 			return 0;
-		p = &r->process[slot];
+		p = nvprocat(r, slot);
 		e = p->exec;
 		if(e == nil){
 			/* Let the caller's existing nil-exec error check fire. */
@@ -876,7 +960,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 			s->gcidlestep(s);
 
 		for(i = 0; i < r->nslot; i++)
-			if(r->process[i].state == Prrunning){
+			if(nvprocat(r, i)->state == Prrunning){
 				snprint(err, nerr, "process left running outside scheduler dispatch");
 				return NvSchedError;
 			}
@@ -906,7 +990,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		 * treatment of the same flag. */
 		sweeplaunched = 0;
 		for(i = 0; i < r->nslot; i++){
-			p = &r->process[i];
+			p = nvprocat(r, i);
 			e = p->exec;
 			if(p->state == Prwaiting && e != nil && e->heap.cur != nil &&
 			   !e->offlaunched &&
@@ -927,7 +1011,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		havedeadline = 0;
 		earliest = 0;
 		for(i = 0; i < r->nslot; i++){
-			p = &r->process[i];
+			p = nvprocat(r, i);
 			if(p->state != Prwaiting || !p->hasdeadline)
 				continue;
 			if(!havedeadline || p->deadline < earliest){
@@ -976,7 +1060,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 			s->clock.wait(s->clock.aux, earliest);
 			nwake = 0;
 			for(i = 0; i < r->nslot; i++){
-				p = &r->process[i];
+				p = nvprocat(r, i);
 				if(p->state == Prwaiting && p->hasdeadline && p->deadline <= earliest){
 					if(nvprocwake(r, i) < 0){
 						snprint(err, nerr, "deadline wake of a non-waiting process");
@@ -1010,7 +1094,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		 * immediate recheck below instead of costing a full wait
 		 * period.
 		 */
-		while(tsemacquire(s->gcsem, 0) > 0)
+		while(gcwait(s, 0) > 0)
 			;
 		gcfoldall(s);
 		if(s->gcoutstanding == 0)
@@ -1033,7 +1117,7 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 			if(now >= earliest){
 				nwake = 0;
 				for(i = 0; i < r->nslot; i++){
-					p = &r->process[i];
+					p = nvprocat(r, i);
 					if(p->state == Prwaiting && p->hasdeadline && p->deadline <= now){
 						if(nvprocwake(r, i) < 0){
 							snprint(err, nerr, "deadline wake of a non-waiting process");
@@ -1046,12 +1130,12 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 					s->timerwakes += nwake;
 				return NvSchedProgress;
 			}
-			tsemacquire(s->gcsem, deadlinems(s, earliest));
+			gcwait(s, deadlinems(s, earliest));
 		}else
-			tsemacquire(s->gcsem, NvGcwaitms);
+			gcwait(s, NvGcwaitms);
 		return NvSchedProgress;
 	}
-	p = &r->process[slot];
+	p = nvprocat(r, slot);
 	if(p->exec == nil){
 		snprint(err, nerr, "runnable process has no execution state");
 		return NvSchedError;
@@ -1071,8 +1155,9 @@ nvschedstep(NvScheduler *s, char *err, int nerr)
 		s->execns += uptime()-start;
 	s->reductions += e->reductions - before;
 	s->currentvalid = 0;
-	/* Process operations may grow the slot table; never retain its old address. */
-	p = &r->process[slot];
+	/* D082: the segmented table never moves a slot, so this re-fetch is
+	 * merely harmless, not required as it was before. */
+	p = nvprocat(r, slot);
 	if(state == NvCollect){
 		if(p->state != Prrunning || nvprocyield(r, pid, err, nerr) < 0)
 			return NvSchedError;

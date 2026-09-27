@@ -27,7 +27,7 @@ Full map:
 - `docs/README.md`: index of `docs/`, marking which files are normative.
 - `docs/architecture.md`: component overview with pointers to source and decisions (not normative).
 - `docs/semantics.md`: compact normative language contract.
-- `docs/decisions.md`: compact decision records (D001-D079).
+- `docs/decisions.md`: compact decision records (D001-D080).
 - `docs/language-semantics.md`, `docs/runtime.md`, `docs/distribution.md`, `docs/language-philosophy.md`, `docs/future-work.md`: design rationale split from `nervous_design.md`. They are not normative and still use superseded syntax; see each file's header note.
 - `docs/questions.md`: unresolved semantic questions by owning milestone.
 - `docs/format.md`: canonical formatting contract and current limitations.
@@ -64,11 +64,13 @@ Distribution, maps, floats, links, monitors, general FFI, code replacement, and 
 
 Milestones 00-08 and reviews R1-R2 are complete. Milestone 08 (process-local heaps and garbage collection, including off-process collection for large live sets) closed with M08-T04d: `docs/decisions.md`'s D061-D075 record the settled design, from tagged-term representation through the final `gcoffload` default (0, never off-process -- a real crossover was measured but only bracketed, not located, so no positive default is supported by the evidence; see D075 and `bench/README.md`). The latest benchmark evidence is in `bench/README.md`.
 
-Milestone 09 (Binaries) is in progress. D076-D079 settle the design. T01-T04 are implemented and accepted: runtime, frontend, compiler lowering, and tests. They include the exit-criterion example `examples/protocol.nv`, which runs from source and from saved bytecode. Only T05 remains, a latency-isolation measurement that prepares for R3. The mandatory R3 review follows milestone 09 and gates milestone 10 (Multicore). `STATUS.md` is authoritative for current assignments and resumption.
+Milestones 00-09 and reviews R1-R3 are complete. R3 (memory and representation) closed with six findings, all fixed with regressions: D080 charges term-traversal work (`==`, `print`, boundary copies) to reductions at 8 visits each, with an optional `-w` ceiling, so no instruction holds the scheduler for free; the closing suite run under `nervous_gcstress=1 nervous_gcoffload=1` exposed that off-process idle-sweep collections had never collected anything (R3-F05, D074 amendment), fixed alongside a teardown use-after-free of the completion semaphore (R3-F06). The three `run.rc` invocations under "Inline garbage collection" are the regression bar. `milestones/R3-memory-review.md` carries the coverage map and the properties R4 inherits.
+
+Milestone 10 (Multicore: `rfork` scheduler processes, per-scheduler run queues, work movement at safe points, with the mandatory R4 review inside its acceptance) is next and not yet started. `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md` ("M09-Tasks (in progress)") and `milestones/09-binaries.md` before continuing. D076-D079 record the binary design, and D061-D075 the milestone-08 memory design it builds on. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
+Read `STATUS.md`, `milestones/10-multicore.md`, and `docs/questions.md` ("Milestone 10") before continuing. D068/D074 (heap ownership and the collector protocol), D080 (work charging) and D070 record what milestone 10 builds on; D061-D079 the memory and binary designs beneath them. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
 
 ## Try it
 
@@ -87,11 +89,16 @@ Execution now collects automatically at instruction boundaries. `-H words` sets 
 ./nervous -G -r examples/rpc.nv main
 rc tests/run.rc
 nervous_gcstress=1 rc tests/run.rc
+nervous_gcstress=1 nervous_gcoffload=1 rc tests/run.rc
 ```
+
+The three `run.rc` lines are the regression bar (R3, `milestones/R3-memory-review.md`): normal execution, every reservation collecting inline, and every real collection running in a forked collector proc. All three must pass before a change is accepted.
 
 Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also enables it. Other nonempty environment values produce a diagnostic naming `nervous_gcstress`. The repaired runners use `rfork e` to preserve the inherited setting in a private environment. The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. This inline checkpoint is accepted (D072); off-process collection (D074) is also implemented, accepted (M08-T04c), and policy-tuned (M08-T04d, D075).
 
 `-o words` (D074) sets the off-process collection threshold: a heap with at least `words` used-plus-adopted words collects in a separate forked proc instead of inline, so one large collection pauses only its own process. `0` (the default) never offloads; `1` forces every real collection off-process. Only `-r`/`-X` build a scheduler, so unlike `-H`/`-G` this has no effect under `-x`/`-t`. `$nervous_gcoffload` supplies the default the same way `$nervous_gcstress` does for `-G`. The default stays `0`: M08-T04d measured a real crossover (off-process hurts at a 50000-word live set, helps at 500000) but only bracketed it, not located it, so no positive default is supported by the evidence (D075, `bench/README.md`). Every test and benchmark in this tree hardcodes `gcoffload = 0` at its own `NvLimits` construction, independent of this CLI default either way.
+
+`-w visits` (D080) caps the node visits one traversing instruction (`==`, `print`/`eprint`, the root `return`/`exit` copy, `spawn`'s argument copy) may make; a traversal beyond it faults that process with `system_limit`, the same way the depth ceiling does. `0` (the default) is no cap. Independently of the cap, those instructions always charge one reduction per 8 visits, so `nervous -s` reduction totals for programs heavy in `==` are slightly higher than before D080. Like `-o`, this applies to `-r`/`-X` only.
 
 ## Working with multiple agents
 

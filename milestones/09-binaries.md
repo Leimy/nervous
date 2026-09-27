@@ -54,7 +54,7 @@ General unaligned bit strings, shared large-binary storage, compression, text se
 
 ## Implementation state
 
-T01-T04 implemented and accepted (user confirmed `rc tests/run.rc` passes); T05 (latency measurement) remains. Deviations from the settled interfaces below, as the plan asks to report:
+**Milestone complete.** T01-T04 implemented and accepted (user confirmed `rc tests/run.rc` passes); T05 (latency measurement) run by the user and recorded in `bench/README.md` ("M09-T05", "First run"). T05's result -- one `==` on a 16-deep shared term stalls peers ~27ms median, unbounded by the reduction quantum -- is handed to R3 as its latency-isolation leg. Deviations from the settled interfaces below, as the plan asks to report:
 
 - The AST kinds are `Ebinagg` (aggregate) and `Ebinseg` (segment), not `Ebin`. No `flags` field was added to `Expr`: a segment packs its shape into `ival` as `(kind<<8) | (width<<2) | (signed<<1) | little`, with kind `Binsegint`/`Binsegsized`/`Binsegrest` (`include/nervous.h`); a sized segment's size is the expression in `right` (an `Eint` or `Evar` in patterns, any primary or unary expression in construction). Note that the opcode `width-flags` operand uses the other bit order (bit 0 signed, bit 1 little); `lib/compile.c` converts.
 - Size direction is checked twice: `nvpatternfromexpr` rejects a size bound by the same or a later segment of one binary, and `nvpatterncode` (`lib/patbc.c`) rejects any size variable not yet bound when its segment is lowered, which also catches a size bound later in an enclosing pattern (`${<<p:n/binary>>, n}`).

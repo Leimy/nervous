@@ -217,6 +217,12 @@ fault(NvExec *e, char *s)
 int
 nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biobuf *trace, int traceon, char *err, int nerr)
 {
+	return nvexecinitw(e, m, entry, arg, maxheap, trace, traceon, nil, err, nerr);
+}
+
+int
+nvexecinitw(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biobuf *trace, int traceon, NvWork *w, char *err, int nerr)
+{
 	int i, idx, rc;
 	NvTerm copied;
 
@@ -254,7 +260,8 @@ nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biob
 		nvexecfree(e);
 		return -1;
 	}
-	rc = nvheapcopy(&e->heap, arg, &copied);
+	/* D080: the spawner, if any, pays for and bounds this copy. */
+	rc = nvheapcopyw(&e->heap, arg, w, &copied);
 	if(rc < 0){
 		snprint(err,nerr, rc == NvTermlimit || e->heap.exhausted ? "system_limit" : "out_of_memory");
 		nvexecfree(e);
@@ -294,6 +301,13 @@ void
 nvexecsethost(NvExec *e, NvExecHost *host)
 {
 	e->host = host;
+}
+
+void
+nvexecsetworklimit(NvExec *e, uvlong max)
+{
+	if(e != nil)
+		e->work.max = max;
 }
 
 /* Pure arithmetic preflight: only a full-range result needs heap words. */
@@ -587,7 +601,7 @@ run(NvExec *e, uvlong quantum)
 		case Oreturn:
 			callerfp = (ulong)e->stack[e->fp+NvFramecaller];
 			if(callerfp == NvNoframe){
-				rc = nvfragcopy(regs[insn->a], ~0ULL, &e->result);
+				rc = nvfragcopyw(regs[insn->a], ~0ULL, &e->work, &e->result);
 				if(rc == NvTermlimit) return fault(e,"system_limit");
 				if(rc < 0) return fault(e,"out_of_memory");
 				e->state = NvDone;
@@ -612,7 +626,8 @@ run(NvExec *e, uvlong quantum)
 			k = &e->module->konst[insn->b];
 			setpc(e, nvtermkind(regs[insn->a]) == Vint && nvtermint(regs[insn->a]) == k->ival ? pc+1 : insn->c); break;
 		case Otesteq:
-			eq = nvtermequal(regs[insn->a], regs[insn->b]);
+			/* D080: visits are charged below; over the ceiling is system_limit. */
+			eq = nvtermequalw(regs[insn->a], regs[insn->b], &e->work);
 			if(eq < 0) return fault(e,"system_limit");
 			setpc(e, eq ? pc+1 : insn->c); break;
 		case Otestarity:
@@ -719,7 +734,7 @@ run(NvExec *e, uvlong quantum)
 			if(found == 0){ setpc(e, insn->a); return NvYield; }
 			setpc(e, pc+1); break;
 		case Oexit:
-			rc = nvfragcopy(regs[insn->a], ~0ULL, &e->exitreason);
+			rc = nvfragcopyw(regs[insn->a], ~0ULL, &e->work, &e->exitreason);
 			if(rc == NvTermlimit) return fault(e,"system_limit");
 			if(rc < 0) return fault(e,"out_of_memory");
 			e->state = NvExit; return NvExit;
@@ -852,6 +867,21 @@ run(NvExec *e, uvlong quantum)
 			 * failure instead of a silent spin on an unadvanced pc.
 			 */
 			return fault(e,"bad_opcode");
+		}
+		/*
+		 * D080: charge the traversal work this instruction did (its own
+		 * equality, or a print/spawn callback's copy or print) as whole
+		 * reductions, keeping the remainder for the next instruction.
+		 * This is what lets one expensive instruction end its quantum:
+		 * `used` may now exceed `quantum`, and the loop condition sees
+		 * it. Instructions that return above (yield, fault, done, exit)
+		 * skip this; none of them charged work except the terminal
+		 * return/exit copies, whose process is finished either way.
+		 */
+		if(e->work.count >= NvWorkunit){
+			used += e->work.count/NvWorkunit;
+			e->reductions += e->work.count/NvWorkunit;
+			e->work.count %= NvWorkunit;
 		}
 	}
 	return NvYield;

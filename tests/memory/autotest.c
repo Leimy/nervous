@@ -71,7 +71,8 @@ tablegrowth(void)
 		if(i == 3)
 			check(nvprocsend(&r, pid[3], nvint(nil, 42), err, sizeof err) == 1, "growth message");
 	}
-	check(r.nslot == 200 && r.nalloc == 256 && r.tablegrows == 5 && r.slotprobes == 0, "table growth/search is not amortized");
+	/* was: r.nslot == 200 && r.nalloc == 256 && r.tablegrows == 5 && r.slotprobes == 0 */
+	check(r.nslot == 200 && r.nchunk == 1 && r.tablegrows == 1 && r.slotprobes == 0, "table growth/search is not amortized");
 	check(r.nrunnable == 200 && r.runhead == 0 && r.runtail == 199, "growth damaged queue");
 	check(nvprocspawn(&r, &p, err, sizeof err) < 0 && r.nslot == 200, "spare capacity bypassed live limit");
 	check(nvprocpop(&r, pid[3], &msg, err, sizeof err) == 1 && nvtermint(msg->root) == 42, "growth damaged mailbox");
@@ -80,26 +81,30 @@ tablegrowth(void)
 	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 3, "lowest-free hint skipped slot");
 	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 150, "next lowest-free slot");
 	check(!nvprocalive(&r, pid[3]) && !nvprocalive(&r, pid[150]), "reused stale generation");
-	check(r.runtail == 150 && r.process[150].runprev == 3 && r.nrunnable == 200, "reuse queue order");
-	r.process[3].generation = NvMaxgeneration;
+	check(r.runtail == 150 && nvprocat(&r, 150)->runprev == 3 && r.nrunnable == 200, "reuse queue order");
+	nvprocat(&r, 3)->generation = NvMaxgeneration;
 	p = nvpid(3, NvMaxgeneration);
 	check(nvprocexit(&r, p) == 1, "retirement setup");
-	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 200 && r.nslot == 201 && r.nalloc == 256 && r.process[3].state == Prretired, "retired slot confused capacity/live limits");
+	/* was: nvpidslot(q) == 200 && r.nslot == 201 && r.nalloc == 256 && r.process[3].state == Prretired */
+	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 200 && r.nslot == 201 && r.nchunk == 1 && nvprocat(&r, 3)->state == Prretired, "retired slot confused capacity/live limits");
 	/* Queue links survive both growth and removal from the middle. */
 	for(i = 0; i < 200; i++){
 		check(nvprocrunhead(&r, &slot), "missing queue member");
-		p = nvpid(slot, r.process[slot].generation);
+		p = nvpid(slot, nvprocat(&r, slot)->generation);
 		check(nvprocexit(&r, p) == 1, "queue drain");
 	}
 	check(r.nlive == 0 && r.nrunnable == 0 && r.freehint == 0, "drain/hint state");
 	nvruntimefree(&r);
-	/* A retired slot can also force growth above a one-process limit. */
+	/* A retired slot still needs a slot beyond the one-process LIVE limit
+	 * (nslot 2), even though D082 no longer grows the table for it. */
 	l.maxprocess = 1;
 	check(nvruntimeinit(&r, &l, 1, err, sizeof err) == 0, err);
-	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && r.nalloc == 1, "tiny table capacity");
-	r.process[0].generation = NvMaxgeneration;
+	/* was: r.nalloc == 1 */
+	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && r.nchunk == 1, "tiny table capacity");
+	nvprocat(&r, 0)->generation = NvMaxgeneration;
 	check(nvprocexit(&r, nvpid(0, NvMaxgeneration)) == 1, "tiny retirement");
-	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 1 && r.nalloc == 2, "tiny retired-table growth");
+	/* was: nvpidslot(p) == 1 && r.nalloc == 2 */
+	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 1 && r.nslot == 2 && r.nchunk == 1, "tiny retired-table growth");
 	nvruntimefree(&r);
 	print("ok - geometric table growth and free hints preserve limits, retirement, queues and mailboxes\n");
 }
@@ -141,7 +146,7 @@ loops(void)
 			peak = cap = 0;
 			for(step = 0; step < 1000000 && state == NvSchedProgress; step++){
 				state = nvschedstep(&s, err, sizeof err);
-				e = s.runtime.process[nvpidslot(pid)].exec;
+				e = nvprocat(&s.runtime, nvpidslot(pid))->exec;
 				if(e != nil){
 					check(e->heap.full == nil && e->heap.managed, "managed heap grew chunks");
 					if(e->heap.words+e->nstack > peak) peak = e->heap.words+e->nstack;
@@ -206,7 +211,7 @@ requests(void)
 	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.runtime.nrunnable==2, "collection lost or duplicated runnable owner");
 	check(nvprocrunhead(&s.runtime,&head) && head==nvpidslot(second), "collecting process bypassed queued peer");
 	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.completed==1, "peer did not make progress before retry");
-	check(s.runtime.process[nvpidslot(first)].exec->reductions==0, "owner executed before queued peer");
+	check(nvprocat(&s.runtime, nvpidslot(first))->exec->reductions==0, "owner executed before queued peer");
 	nvschedfree(&s);
 	/* The same retained-capacity reservation applies to a non-tail push. */
 	f[0].nreg=2; f[0].ninsn=2; f[1].insn=code+2;
@@ -284,10 +289,10 @@ receivetake(void)
 		check(nvschedspawnroot(&s,"receiver",arg,&pid,err,sizeof err)==0,err);
 		check(nvprocsend(&s.runtime,pid,arg,err,sizeof err)==1,"queue candidate");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"begin scan");
-		p=&s.runtime.process[nvpidslot(pid)]; candidate=p->scan;
+		p=nvprocat(&s.runtime, nvpidslot(pid)); candidate=p->scan;
 		check(candidate!=nil && p->mailboxwords==2,"candidate setup");
 		nvschedmemory(&s, &mem);
-		check(mem.tablebytes == (uvlong)s.runtime.nalloc*sizeof(NvProcess) && mem.nexec == 1 && mem.execbytes == sizeof(NvExec), "snapshot table/exec accounting");
+		check(mem.tablebytes == (uvlong)s.runtime.nchunk*NvProcchunk*sizeof(NvProcess) && mem.nexec == 1 && mem.execbytes == sizeof(NvExec), "snapshot table/exec accounting");
 		check(mem.nmailbox == 1 && mem.mailboxbytes == sizeof(NvFrag)+sizeof(NvTerm) && mem.nadopted == 0, "snapshot queued fragment accounting");
 		check(mem.stackbytes == 64*sizeof(NvTerm) && mem.heapused == sizeof(NvTerm) && mem.heapbytes == sizeof(NvChunk)+64*sizeof(NvTerm), "snapshot capacity versus used");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"take reservation");
@@ -338,13 +343,224 @@ idlecollect(void)
 	limits(&l,1024,0);
 	check(nvschedinit(&s,&m,&l,1,1000,err,sizeof err)==0,err);
 	check(nvschedspawnroot(&s,"waiter",arg,&pid,err,sizeof err)==0,err);
-	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.runtime.process[nvpidslot(pid)].state==Prwaiting,"waiter did not block");
-	e=s.runtime.process[nvpidslot(pid)].exec; before=e->reductions;
+	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && nvprocat(&s.runtime, nvpidslot(pid))->state==Prwaiting,"waiter did not block");
+	e=nvprocat(&s.runtime, nvpidslot(pid))->exec; before=e->reductions;
 	check(e->heap.words==41 && s.collections==0,"waiter demand-collected prematurely");
 	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.collections==1 && e->heap.words==1 && e->reductions==before,"idle collection did not reclaim without execution");
 	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.collections==1,"unchanged waiter recollected");
 	nvschedfree(&s); nvheapfree(&h);
 	print("ok - an idle waiting process gives back garbage without executing or spinning\n");
+}
+
+/*
+ * R3 gap 3e: a spawn whose argument copy cannot fit the child's own
+ * maxheap budget must fault the SPAWNING process with "system_limit"
+ * (not merely the child), free the child's exec/heap/table slot
+ * completely (no leaked slot), and leave the runtime with no live
+ * processes once the spawner itself is reaped for the same fault.
+ *
+ * The margin trick: nvexecinitw charges every process's own initial
+ * retained stack capacity (a power-of-two floor of 64 words, doubling
+ * only if the entry function's own register count needs more --
+ * lib/exec.c growstack/stackcap) against the SAME maxheap budget as
+ * its heap words, before the argument copy even starts (D066: "maxheap
+ * is the per-process word budget: heap in use plus adopted fragments
+ * plus retained frame-stack capacity"). So root's entry function is
+ * tiny (nreg=4, stack stays at the 64-word floor) while child's entry
+ * function has NvMaxreg (256) registers, forcing its floor one
+ * doubling higher (512) -- a maxheap comfortably big enough for root
+ * to build and hold the whole argument itself is still too small for
+ * the CHILD to redo the equivalent copy on top of its own much bigger
+ * stack charge.
+ *
+ * The argument is a depth-200 chain of one-element tuples
+ * (${${${...1...}}}), not a flat 200-element tuple: a flat tuple's
+ * elements must all sit in contiguous registers for one Otuple
+ * instruction, which would force ROOT's own register count up too
+ * (undoing the asymmetry above); a chain needs only a few reused
+ * registers per level (D061: construction never bounds depth). 200
+ * levels stays safely under NvMaxtermdepth (256), so the copy failure
+ * below is genuinely the maxheap word budget, not the unrelated depth
+ * ceiling -- each level costs exactly 2 words (a 1-element tuple: 1
+ * header + 1 body word; gctest.c's shapes() confirms this "2 words per
+ * level" costing for the identical chain shape).
+ *
+ * Numbers (all exact, from lib/exec.c growstack/prepare and
+ * lib/value.c nvheapalloc/heapcopy):
+ *   root:  stack floor 64 (nreg=4 fits in one 64-word frame) + prior
+ *          live 1 (its own empty-tuple spawn argument) + worst-case
+ *          charge 2 (its very last Otuple, after 199*2=398 words
+ *          already built) = 465 words needed at most -- maxheap=700
+ *          leaves 235 words of slack, so root completes the whole
+ *          200-level build and reaches the Ospawn instruction.
+ *   child: stack floor 512 (nreg=256 needs 4+256=260 words: 256 itself
+ *          is not enough, so stackcap doubles once more to 512) +
+ *          prior live 0 (a fresh heap) + worst-case charge 2 (its very
+ *          last copied level) = 912 words needed at most -- maxheap=700
+ *          is 212 words short of that, so nvheapcopyw's nvheapalloc
+ *          call for some level (not necessarily the last one) returns
+ *          nil, setting heap.exhausted, well before either process
+ *          could ever reach the depth ceiling.
+ * Both figures leave generous (>200-word) margins on both sides of
+ * maxheap=700, so small errors in this accounting would have to be
+ * large to flip either outcome.
+ */
+static void
+spawncopyfail(void)
+{
+	NvModule m;
+	NvFunc f[2];
+	NvInsn code[10];
+	NvConst k[4];
+	NvHeap h;
+	NvLimits l;
+	NvScheduler s;
+	NvMemstats mem;
+	NvTerm arg, pid;
+	char err[256];
+	int stress, state, step;
+
+	memset(&m, 0, sizeof m);
+	memset(f, 0, sizeof f);
+	memset(code, 0, sizeof code);
+	memset(k, 0, sizeof k);
+	k[0].kind = Kint; k[0].ival = 1;
+	k[1].kind = Kint; k[1].ival = 200;	/* chain depth N; see comment above */
+	k[2].kind = Kint; k[2].ival = 0;
+	k[3].kind = Kfunc; k[3].text = "child";
+	m.nconst = 4; m.konst = k; m.nfunc = 2; m.func = f;
+	f[0].name = "root"; f[0].nreg = 4; f[0].ninsn = 9; f[0].insn = code;
+	code[0].op = Oloadk; code[0].a = 0; code[0].b = 0;			/* r0 := 1 */
+	code[1].op = Oloadk; code[1].a = 1; code[1].b = 1;			/* r1 := 200 */
+	code[2].op = Oloadk; code[2].a = 2; code[2].b = 0;			/* r2 := 1 (decrement constant) */
+	code[3].op = Otestint; code[3].a = 1; code[3].b = 2; code[3].c = 6;	/* r1==0 -> fall to spawn(pc 4); else loop body (pc 6) */
+	code[4].op = Ospawn; code[4].a = 3; code[4].b = 3; code[4].c = 0;	/* r3 := spawn(child, r0) */
+	code[5].op = Oreturn; code[5].a = 3;					/* only reached if spawn somehow succeeded */
+	code[6].op = Otuple; code[6].a = 0; code[6].b = 0; code[6].c = 1;	/* r0 := ${r0} */
+	code[7].op = Osub; code[7].a = 1; code[7].b = 1; code[7].c = 2;	/* r1 := r1 - r2 */
+	code[8].op = Ojump; code[8].a = 3;
+	f[1].name = "child"; f[1].nreg = NvMaxreg; f[1].ninsn = 1; f[1].insn = code+9;
+	code[9].op = Oreturn; code[9].a = 0;	/* never actually reached: the copy fails first */
+
+	nvheapinit(&h, 0);
+	arg = nvtuple(&h, nil, 0);
+	check(arg != NvNil, "spawncopyfail argument");
+	for(stress = 0; stress <= 1; stress++){
+		limits(&l, 700, stress);
+		check(nvschedinit(&s, &m, &l, 1, 1000, err, sizeof err) == 0, err);
+		check(nvschedspawnroot(&s, "root", arg, &pid, err, sizeof err) == 0, err);
+		state = NvSchedProgress;
+		for(step = 0; step < 100000 && state == NvSchedProgress; step++)
+			state = nvschedstep(&s, err, sizeof err);
+		check(state == NvSchedDone, "scheduler did not finish");
+		check(s.rootstate == NvRootFault && strcmp(s.rootfault, "system_limit") == 0,
+			"failed spawn argument copy did not fault the spawner with system_limit");
+		check(s.runtime.nlive == 0,
+			"a live process leaked after the failed spawn and the spawner's own fault-exit");
+		nvschedmemory(&s, &mem);
+		check(mem.nexec == 0 && mem.heapbytes == 0,
+			"the failed child's exec/heap (or the reaped spawner's own) was not fully freed");
+		nvschedfree(&s);
+	}
+	nvheapfree(&h);
+	print("ok - a spawn argument copy too big for the child's own maxheap faults the spawner with system_limit and frees everything\n");
+}
+
+/*
+ * R3 gap 4: memory proportional to live data. D069/lib/gc.c spacecap:
+ * to-space capacity is the smallest power of two >= 64 (Minspace) in
+ * which live+need is at most half, and it never shrinks. A process
+ * that holds a FIXED live set while repeatedly allocating and dropping
+ * garbage should therefore have its heap capacity settle at whatever
+ * the first real collection chooses and stay there forever after --
+ * that equality, sampled across many collections, is exactly the
+ * evidence bench/README.md's largelive.c narrates but never asserts as
+ * a pass/fail property (it is a benchmark, not a regression).
+ *
+ * The live set is a 20-element tuple of small ints (21 words: 1 header
+ * + 20 immediate elements, no boxing needed), carried unchanged through
+ * a tail-recursive loop; each iteration also builds and immediately
+ * drops an 8-element tuple (9 words) as garbage.
+ *
+ * The capacity is NOT constant from the very first collection: main's
+ * first collection sees live 1 + need 21 = 22 words and sizes 64, but
+ * inside churn the worst reservation sees the incoming argument tuple
+ * (3) + fixed (21) + the garbage tuple still sitting in its register (9)
+ * + the outgoing argument tuple's need (3) = 36 > 32, so the collector
+ * doubles once to 128 within the first loop iteration. After that
+ * nothing in the loop's live set changes, so the property under test is
+ * "settles, then never moves": sampling begins once the loop has been
+ * through several collections (Settleafter), and every later sample
+ * must equal the first one taken. A separate bound (<= 256 words of
+ * chunk) catches a heap that settled somewhere silly.
+ *
+ * gcstress forces a collection at every allocating instruction AND
+ * every call/tailcall reservation (lib/exec.c prepare(): Ocall/Otailcall
+ * always set active=1, so gcstress applies even when the stack charge
+ * is 0), so 60 outer iterations (each: one tailcall into the next
+ * churn clause, one Otuple building the garbage tuple) is far more than
+ * the 20 real collections this test is required to force.
+ */
+enum { Settleafter = 8 };
+static void
+churnflat(void)
+{
+	char *src =
+		"fn churn(fixed, 0) { fixed }\n"
+		"fn churn(fixed, remaining) {\n"
+		"  ${1, 2, 3, 4, 5, 6, 7, 8};\n"
+		"  churn(fixed, remaining - 1)\n"
+		"}\n"
+		"fn main() {\n"
+		"  churn(${1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, 60)\n"
+		"}\n";
+	NvModule *m;
+	NvHeap h;
+	NvTerm arg, pid, result;
+	NvLimits l;
+	NvScheduler s;
+	NvMemstats mem;
+	char err[256];
+	uvlong capbytes;
+	int seenfirst, state, step, i;
+
+	m = compile(src);
+	nvheapinit(&h, 0);
+	arg = nvtuple(&h, nil, 0);
+	check(arg != NvNil, "churn argument");
+	limits(&l, 1024, 1);
+	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
+	check(nvschedspawnroot(&s, "main", arg, &pid, err, sizeof err) == 0, err);
+	seenfirst = 0;
+	capbytes = 0;
+	state = NvSchedProgress;
+	for(step = 0; step < 100000 && state == NvSchedProgress; step++){
+		state = nvschedstep(&s, err, sizeof err);
+		check(state != NvSchedError, err);
+		nvschedmemory(&s, &mem);
+		if(mem.nexec == 0)
+			continue;	/* not dispatched yet, or already reaped this step */
+		if(!seenfirst && s.collections >= Settleafter){
+			seenfirst = 1;
+			capbytes = mem.heapbytes;
+			check(capbytes <= sizeof(NvChunk)+256*sizeof(NvTerm), "heap capacity settled far above the live set");
+		}else if(seenfirst)
+			check(mem.heapbytes == capbytes, "heap capacity changed after the live set had settled");
+	}
+	check(state == NvSchedDone, "scheduler did not finish");
+	check(seenfirst, "test never observed enough collections to sample");
+	check(s.collections >= 20, "test did not force at least 20 collections");
+	check(s.gcfailed == 0, "unexpected collection failure under a comfortable maxheap");
+	check(s.rootstate == NvRootDone && s.rootvalue != nil, "churn did not complete normally");
+	result = s.rootvalue->root;
+	check(nvtermkind(result) == Vtuple && nvtuplelen(result) == 20, "fixed live set did not survive as the root result");
+	for(i = 0; i < 20; i++)
+		check(nvtermkind(nvtupleelem(result, i)) == Vint && nvtermint(nvtupleelem(result, i)) == i+1,
+			"fixed live set element corrupted across many collections");
+	nvschedfree(&s);
+	nvheapfree(&h);
+	nvmodulefree(m);
+	print("ok - a fixed live set churning garbage keeps heap capacity constant across at least 20 collections\n");
 }
 
 void
@@ -355,6 +571,8 @@ main(void)
 	guardlimit();
 	receivetake();
 	idlecollect();
+	spawncopyfail();
+	churnflat();
 	loops();
 	print("all automatic inline collector tests passed\n");
 	exits(nil);

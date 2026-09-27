@@ -103,17 +103,39 @@ struct NvProcess {
 	NvExec *exec;
 };
 
+/*
+ * D082: the process table is segmented. Slots live in fixed-size chunks
+ * reached through an array of chunk pointers; growth appends a chunk and
+ * never moves an existing slot, so an NvProcess* is stable for as long
+ * as the slot exists -- the property a second scheduler proc needs and
+ * the old realloc'd table (whose "re-fetch by slot after anything that
+ * may spawn" discipline no other proc can honor) could not give. Slot
+ * indices, PIDs and D059's index-threaded queue links are unchanged;
+ * nvprocat costs one extra indirection. Only the chunk pointer array
+ * itself is ever realloc'd, and it holds no slot.
+ *
+ * nvprocat is a macro (Plan 9 C has no inline) and evaluates `slot`
+ * twice: the argument must be side-effect free. `nvprocat(r, n++)` is
+ * wrong and was the first D082 bug (the root spawned into one slot and
+ * was queued under another).
+ */
+enum {
+	NvProcshift = 10,
+	NvProcchunk = 1<<NvProcshift,	/* slots per chunk */
+};
+#define nvprocat(r, slot)	((r)->chunk[(slot)>>NvProcshift] + ((slot)&(NvProcchunk-1)))
+
 struct NvRuntime {
 	NvLimits limits;
-	NvProcess *process;
+	NvProcess **chunk;	/* D082: nchunk chunk pointers, each NvProcchunk slots */
+	ulong nchunk;
 	ulong nslot;		/* initialized slots, including exited/retired */
-	ulong nalloc;		/* allocated capacity; tail is not initialized */
 	ulong freehint;		/* no reusable slot below this index */
 	ulong nlive;
 	uvlong slotprobes;	/* slots examined while searching for reuse */
-	uvlong tablegrows;	/* successful allocation/growth calls */
-	uvlong tablemoves;	/* growth calls that changed the base address */
-	uvlong tablemovebytes;	/* old requested capacity bytes on moved growths */
+	uvlong tablegrows;	/* successful chunk appends (D082) */
+	uvlong tablemoves;	/* retired by D082: always 0; kept so `-s` output shape is unchanged */
+	uvlong tablemovebytes;	/* retired by D082: always 0 */
 	/* D059: FIFO of Prrunnable slots; NvNoslot when empty. */
 	ulong runhead;
 	ulong runtail;

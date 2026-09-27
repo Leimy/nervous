@@ -371,6 +371,111 @@ bintests(void)
 	nvheapfree(&h);
 }
 
+/* x0 = 5; x(k+1) = ${x(k), x(k)}: d tuple objects, 2^(d+1)-1 node visits. */
+static NvTerm
+chain(NvHeap *h, int d)
+{
+	NvTerm cur, elem[2];
+	int i;
+
+	cur = nvint(nil, 5);
+	for(i = 0; i < d; i++){
+		elem[0] = cur;
+		elem[1] = cur;
+		cur = nvtuple(h, elem, 2);
+		if(cur == NvNil)
+			fail("work chain alloc");
+	}
+	return cur;
+}
+
+/*
+ * D080: traversal work is charged to reductions (NvWorkunit visits per
+ * reduction) and bounded per traversal by nvexecsetworklimit. The
+ * argument is ${a, b}, two independently built depth-8 shared chains;
+ * nvexecinit's copy unshares them (255 tuples each in the process heap)
+ * but the visit count of comparing them is the same either way: 511.
+ */
+static void
+worktests(void)
+{
+	NvHeap h;
+	NvTerm elem[2], arg;
+	NvModule m; NvFunc f; NvInsn insn[8]; NvConst konst[2];
+	NvExec exec;
+	int st;
+
+	nvheapinit(&h, 0);
+	elem[0] = chain(&h, 8);
+	elem[1] = chain(&h, 8);
+	arg = nvtuple(&h, elem, 2);
+	if(arg == NvNil) fail("work arg");
+
+	/* r1 := arg[0]; r2 := arg[1]; testeq r1 r2 -> 5; r0 := 'eq; return; 5: r0 := 'ne; return */
+	memset(&m,0,sizeof m); memset(&f,0,sizeof f); memset(insn,0,sizeof insn); memset(konst,0,sizeof konst);
+	konst[0].kind=Katom; konst[0].text="eq";
+	konst[1].kind=Katom; konst[1].text="ne";
+	f.name="w"; f.nreg=3; f.ninsn=7; f.insn=insn;
+	insn[0].op=Ogetelem; insn[0].a=1; insn[0].b=0; insn[0].c=0;
+	insn[1].op=Ogetelem; insn[1].a=2; insn[1].b=0; insn[1].c=1;
+	insn[2].op=Otesteq;  insn[2].a=1; insn[2].b=2; insn[2].c=5;
+	insn[3].op=Oloadk;   insn[3].a=0; insn[3].b=0;
+	insn[4].op=Oreturn;  insn[4].a=0;
+	insn[5].op=Oloadk;   insn[5].a=0; insn[5].b=1;
+	insn[6].op=Oreturn;  insn[6].a=0;
+	m.nconst=2; m.konst=konst; m.nfunc=1; m.func=&f;
+
+	/* 1. Charging: one 511-visit testeq ends a 10-reduction quantum. */
+	if(nvexecinit(&exec,&m,"w",arg,0,nil,0,nil,0)<0) fail("work 1 init");
+	if(exec.work.count!=0) fail("work 1: host-initiated argument copy was charged");
+	st = nvexecrun(&exec, 10);
+	if(st!=NvYield) fail("work 1: expensive testeq did not end the quantum");
+	/* getelem, getelem, testeq = 3; 511 visits = 63 reductions, remainder 7 */
+	if(exec.reductions!=66 || exec.work.count!=7) fail("work 1: charge accounting");
+	st = nvexecrun(&exec, 10);
+	if(st!=NvDone || !binisatom(exec.result->root,"eq")) fail("work 1: result");
+	if(exec.reductions!=68) fail("work 1: total reductions");
+	nvexecfree(&exec);
+	print("ok - traversal work is charged as reductions and ends the quantum\n");
+
+	/* 2. Ceiling on testeq: 100 visits allowed, 511 needed -> system_limit. */
+	if(nvexecinit(&exec,&m,"w",arg,0,nil,0,nil,0)<0) fail("work 2 init");
+	nvexecsetworklimit(&exec, 100);
+	st = nvexecrun(&exec, 1000);
+	if(st!=NvFault || strcmp(exec.fault,"system_limit")!=0) fail("work 2: ceiling did not fault system_limit");
+	nvexecfree(&exec);
+
+	/* 3. The ceiling is exact: 511 visits pass at 511, fault at 510. */
+	if(nvexecinit(&exec,&m,"w",arg,0,nil,0,nil,0)<0) fail("work 3a init");
+	nvexecsetworklimit(&exec, 511);
+	if(nvexecrun(&exec,1000)!=NvDone || !binisatom(exec.result->root,"eq")) fail("work 3a: 511 visits under a 511 ceiling");
+	nvexecfree(&exec);
+	if(nvexecinit(&exec,&m,"w",arg,0,nil,0,nil,0)<0) fail("work 3b init");
+	nvexecsetworklimit(&exec, 510);
+	if(nvexecrun(&exec,1000)!=NvFault || strcmp(exec.fault,"system_limit")!=0) fail("work 3b: 511 visits over a 510 ceiling");
+	nvexecfree(&exec);
+	print("ok - work ceiling faults system_limit at exactly max+1 visits\n");
+
+	/* 4. The root return copy is counted and bounded too. */
+	memset(&m,0,sizeof m); memset(&f,0,sizeof f); memset(insn,0,sizeof insn);
+	f.name="ret"; f.nreg=2; f.ninsn=2; f.insn=insn;
+	insn[0].op=Ogetelem; insn[0].a=1; insn[0].b=0; insn[0].c=0;
+	insn[1].op=Oreturn;  insn[1].a=1;
+	m.nfunc=1; m.func=&f;
+	if(nvexecinit(&exec,&m,"ret",arg,0,nil,0,nil,0)<0) fail("work 4a init");
+	nvexecsetworklimit(&exec, 100);
+	if(nvexecrun(&exec,1000)!=NvFault || strcmp(exec.fault,"system_limit")!=0) fail("work 4a: return copy over the ceiling");
+	if(exec.result!=nil) fail("work 4a: refused copy left a result");
+	nvexecfree(&exec);
+	if(nvexecinit(&exec,&m,"ret",arg,0,nil,0,nil,0)<0) fail("work 4b init");
+	nvexecsetworklimit(&exec, 1000);
+	if(nvexecrun(&exec,1000)!=NvDone || nvtermkind(exec.result->root)!=Vtuple) fail("work 4b: return copy under the ceiling");
+	nvexecfree(&exec);
+	print("ok - root return copy is bounded by the work ceiling\n");
+
+	nvheapfree(&h);
+}
+
 void
 main(void)
 {
@@ -454,8 +559,26 @@ main(void)
 	if(nvexecrun(&exec,2*(NvMaxtermdepth+2)-1)!=NvYield) fail("term-limit growth did not yield");
 	insn[1].op=Oreturn; insn[1].a=1; insn[1].b=0; insn[1].c=0;
 	if(nvexecrun(&exec,1)!=NvFault || strcmp(exec.fault,"system_limit")!=0) fail("term depth fault reason");
+	if(exec.result!=nil) fail("refused root return copy left a result");
 	nvexecfree(&exec);
 	print("ok - term depth is enforced at the return boundary, not construction\n");
+
+	/*
+	 * R3 ownership transition 3f, the other half: `exit reason` copies its
+	 * reason out through the same nvfragcopy boundary as the root return.
+	 * Same growth, same patch, but into Oexit: the copy must be refused
+	 * with system_limit and must leave exitreason nil, so a failed exit
+	 * transfer neither leaks a half-built fragment nor reports a reason
+	 * that was never fully copied.
+	 */
+	insn[1].op=Otailcall; insn[1].a=0; insn[1].b=1; insn[1].c=0;
+	if(nvexecinit(&exec,&m,"grow",arg,0,nil,0,err,sizeof err)<0) fail("exit-depth init");
+	if(nvexecrun(&exec,2*(NvMaxtermdepth+2)-1)!=NvYield) fail("exit-depth growth did not yield");
+	insn[1].op=Oexit; insn[1].a=1; insn[1].b=0; insn[1].c=0;
+	if(nvexecrun(&exec,1)!=NvFault || strcmp(exec.fault,"system_limit")!=0) fail("exit depth fault reason");
+	if(exec.exitreason!=nil) fail("refused exit reason copy left a reason");
+	nvexecfree(&exec);
+	print("ok - term depth is enforced at the exit boundary too\n");
 
 	memset(&m,0,sizeof m); memset(&f,0,sizeof f); memset(insn,0,sizeof insn); memset(konst,0,sizeof konst);
 	konst[0].kind=Kint; konst[0].ival=42;
@@ -471,6 +594,7 @@ main(void)
 	/* nvexecfree owns and frees exec.result since we never took it. */
 	nvexecfree(&exec);
 	bintests();
+	worktests();
 	nvheapfree(&h);
 	print("all resumable execution tests passed\n");
 	exits(nil);

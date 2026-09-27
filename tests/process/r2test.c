@@ -136,13 +136,13 @@ h1regression(void)
 
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1,
 		"h1: receive matches immediately and completes without ever blocking");
-	check(sched.runtime.process[slot].state == Prexited, "h1: slot exited");
-	check(sched.runtime.process[slot].hasdeadline == 0 && sched.runtime.process[slot].deadline == 0,
+	check(nvprocat(&sched.runtime, slot)->state == Prexited, "h1: slot exited");
+	check(nvprocat(&sched.runtime, slot)->hasdeadline == 0 && nvprocat(&sched.runtime, slot)->deadline == 0,
 		"h1: nvprocexit cleared the armed-but-never-consumed deadline");
 
 	check(nvschedspawn(&sched, "done", arg, &pid2, err, sizeof err) == 0, "h1: spawn done into reused slot");
 	check(nvpidslot(pid2) == slot, "h1: confirmed slot reuse");
-	check(sched.runtime.process[slot].hasdeadline == 0 && sched.runtime.process[slot].deadline == 0,
+	check(nvprocat(&sched.runtime, slot)->hasdeadline == 0 && nvprocat(&sched.runtime, slot)->deadline == 0,
 		"h1: reused slot does not inherit a stale deadline");
 	state = NvSchedProgress;
 	while(state == NvSchedProgress)
@@ -219,9 +219,9 @@ crossreceiveleak(void)
 	 * the handful of instructions this requires.
 	 */
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress &&
-		sched.runtime.process[slot].state == Prwaiting,
+		nvprocat(&sched.runtime, slot)->state == Prwaiting,
 		"cross: outer receive matches, inner plain receive blocks");
-	check(sched.runtime.process[slot].hasdeadline == 0,
+	check(nvprocat(&sched.runtime, slot)->hasdeadline == 0,
 		"cross: nvprocrecvwait cleared the stale deadline left by the matched outer receive");
 
 	/* With hasdeadline correctly cleared, an idle step reports deadlock, not a phantom timer. */
@@ -296,12 +296,12 @@ midscanappend(void)
 	 * neither matched nor exhausted. Step one instruction at a time
 	 * until that point, checking the process never blocks on the way.
 	 */
-	for(i = 0; i < 4 && !sched.runtime.process[slot].scanning; i++)
+	for(i = 0; i < 4 && !nvprocat(&sched.runtime, slot)->scanning; i++)
 		check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress &&
-			sched.runtime.process[slot].state != Prwaiting,
+			nvprocat(&sched.runtime, slot)->state != Prwaiting,
 			"midscan: single-stepping toward recvbegin");
-	check(sched.runtime.process[slot].scanning == 1 &&
-		sched.runtime.process[slot].scan != nil,
+	check(nvprocat(&sched.runtime, slot)->scanning == 1 &&
+		nvprocat(&sched.runtime, slot)->scan != nil,
 		"midscan: scan is mid-flight right after recvbegin");
 	msg = nvatom("c");
 	check(nvtermkind(msg) == Vatom, "midscan: matching message");
@@ -378,7 +378,7 @@ sendthenexit(void)
 	 * runs again.
 	 */
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress &&
-		sched.runtime.process[nvpidslot(rootpid)].state == Prwaiting,
+		nvprocat(&sched.runtime, nvpidslot(rootpid))->state == Prwaiting,
 		"sendexit: receiver blocks first");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1,
 		"sendexit: sender sends, wakes the receiver, and exits normally");
@@ -475,16 +475,16 @@ belowcursorfairness(void)
 	 */
 	for(i = 0; i < (int)sched.runtime.nslot; i++)
 		check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "belowcursor: sweep step");
-	check(sched.runtime.process[nvpidslot(pidB)].exec != nil &&
-		sched.runtime.process[nvpidslot(pidB)].exec->reductions > 0, "belowcursor: B was dispatched");
-	check(sched.runtime.process[nvpidslot(pidC)].exec != nil &&
-		sched.runtime.process[nvpidslot(pidC)].exec->reductions > 0, "belowcursor: C was dispatched");
-	check(sched.runtime.process[nvpidslot(pidD)].exec != nil &&
-		sched.runtime.process[nvpidslot(pidD)].exec->reductions > 0,
+	check(nvprocat(&sched.runtime, nvpidslot(pidB))->exec != nil &&
+		nvprocat(&sched.runtime, nvpidslot(pidB))->exec->reductions > 0, "belowcursor: B was dispatched");
+	check(nvprocat(&sched.runtime, nvpidslot(pidC))->exec != nil &&
+		nvprocat(&sched.runtime, nvpidslot(pidC))->exec->reductions > 0, "belowcursor: C was dispatched");
+	check(nvprocat(&sched.runtime, nvpidslot(pidD))->exec != nil &&
+		nvprocat(&sched.runtime, nvpidslot(pidD))->exec->reductions > 0,
 		"belowcursor: D was dispatched despite landing below the cursor");
-	check(sched.runtime.process[nvpidslot(pidB)].state == Prwaiting &&
-		sched.runtime.process[nvpidslot(pidC)].state == Prwaiting &&
-		sched.runtime.process[nvpidslot(pidD)].state == Prwaiting,
+	check(nvprocat(&sched.runtime, nvpidslot(pidB))->state == Prwaiting &&
+		nvprocat(&sched.runtime, nvpidslot(pidC))->state == Prwaiting &&
+		nvprocat(&sched.runtime, nvpidslot(pidD))->state == Prwaiting,
 		"belowcursor: B, C, and D are all blocked on their own receive, none skipped or corrupted");
 
 	nvschedfree(&sched);
@@ -563,7 +563,7 @@ tinylimits(void)
 			"tiny: second send rejected while the one slot is full");
 		check(nvprocpop(&r, pid1, &got, err, sizeof err) == 1, "tiny: pop frees the budget");
 		nvfragfree(got);
-		check(r.process[nvpidslot(pid1)].mailboxwords == 0,
+		check(nvprocat(&r, nvpidslot(pid1))->mailboxwords == 0,
 			"tiny: mailboxwords returns to exactly zero every cycle, no drift");
 	}
 	nvruntimefree(&r);
@@ -788,7 +788,7 @@ guardboundaries(void)
 		state = NvSchedProgress;
 		for(step = 0; step < 10000 && state == NvSchedProgress; step++){
 			state = nvschedstep(&sched, err, sizeof err);
-			e = sched.runtime.process[nvpidslot(pid)].exec;
+			e = nvprocat(&sched.runtime, nvpidslot(pid))->exec;
 			if(e != nil && e->guardfail >= 0)
 				sawguard = 1;
 		}

@@ -1,0 +1,58 @@
+#!/bin/rc
+# M09-T05 latency-isolation measurement (R3 preparation). Run from any
+# directory after mk benchmarks. Each command is a fresh host process.
+# Measurement only: no runtime behavior or default is changed.
+#
+# Usage: rc bench/latency.rc [repeat]
+# repeat (default 1) is how many times each hop row runs back to back.
+#
+# Part 1 (no arguments): host-side cost of nvtermequal, nvtermprint and
+# nvfragcopy on shared ${x,x} chains. These traversals do not detect
+# sharing, so cost doubles per level of depth. The depth-24 rows dominate
+# the runtime (a few minutes; nvfragcopy allocates ~400MB per sample
+# there), then a linear-chain probe shows the depth-256 limit.
+#
+# Part 2 (hop depth peers rounds): peer round-trip latency before and
+# while a hog process evaluates a == b on two independent depth-d chains.
+# Before D080 one equality was one reduction however many nodes it walked,
+# so a hog dispatch ran many exponential-cost equalities before a peer got
+# the scheduler; since D080 the visits are charged (8 per reduction), so
+# one deep equality should end the hog's quantum by itself.
+# Compare "loaded" with "baseline" within a run, and with the printed host
+# cost of one equality at that depth. peers/rounds shrink as depth grows
+# to keep each row to seconds even if a whole quantum runs between peers.
+rfork E
+
+repeat=1
+if(! ~ $#* 0)
+	repeat=$1
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+if(! test -x $benchdir/latency){
+	echo $0: build with '''mk benchmarks''' first >[1=2]
+	exit no-binary
+}
+
+fn hop {
+	for(i in `{seq 1 $repeat}){
+		echo '== latency hop run' $i/$repeat 'depth peers rounds:' $*
+		$benchdir/latency hop $* || exit latency
+		echo
+	}
+}
+
+echo '== latency part 1: term-API cost on shared chains'
+$benchdir/latency || exit latency
+echo
+
+hop 8 4 500
+hop 12 4 200
+hop 16 2 50
+exit ''

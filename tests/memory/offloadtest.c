@@ -167,12 +167,12 @@ holdbasic(void)
 	limits(&l, 1);
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	check(nvschedspawnroot(&s, "holder", nvtuple(&hostheap, nil, 0), &pid, err, sizeof err) == 0, err);
-	e = s.runtime.process[nvpidslot(pid)].exec;
+	e = nvprocat(&s.runtime, nvpidslot(pid))->exec;
 	e->gcstress = 1;
 
 	nvschedgchold(&s, 1);
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "launch step");
-	p = &s.runtime.process[nvpidslot(pid)];
+	p = nvprocat(&s.runtime, nvpidslot(pid));
 	check(e->heap.owner == NvHeapCollecting, "heap not marked collecting immediately after launch");
 	check(e->offlaunched, "offlaunched not set immediately after launch");
 	check(s.gcoutstanding == 1, "gcoutstanding not incremented immediately after launch");
@@ -255,7 +255,7 @@ holddeadline(void)
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	nvschedsetclock(&s, &clock);
 	check(nvschedspawn(&s, "holder", nvtuple(&hostheap, nil, 0), &holderpid, err, sizeof err) == 0, err);
-	he = s.runtime.process[nvpidslot(holderpid)].exec;
+	he = nvprocat(&s.runtime, nvpidslot(holderpid))->exec;
 	he->gcstress = 1;
 	check(nvschedspawnroot(&s, "waiter", nvtuple(&hostheap, nil, 0), &waiterpid, err, sizeof err) == 0, err);
 
@@ -263,10 +263,10 @@ holddeadline(void)
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "holder launch step");
 	check(he->heap.owner == NvHeapCollecting && s.gcoutstanding == 1, "holder collector not launched");
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress &&
-		s.runtime.process[nvpidslot(waiterpid)].state == Prwaiting,
+		nvprocat(&s.runtime, nvpidslot(waiterpid))->state == Prwaiting,
 		"waiter did not block on its deadline receive");
-	check(s.runtime.process[nvpidslot(waiterpid)].hasdeadline &&
-		s.runtime.process[nvpidslot(waiterpid)].deadline == 1005, "deadline not armed as expected");
+	check(nvprocat(&s.runtime, nvpidslot(waiterpid))->hasdeadline &&
+		nvprocat(&s.runtime, nvpidslot(waiterpid))->deadline == 1005, "deadline not armed as expected");
 
 	/* Advance the fake clock directly: no scheduler call, so this cannot
 	 * race anything. holder's collector is still held throughout. */
@@ -325,7 +325,7 @@ holdteardown(void)
 	limits(&l, 1);
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	check(nvschedspawnroot(&s, "holder", nvtuple(&hostheap, nil, 0), &pid, err, sizeof err) == 0, err);
-	e = s.runtime.process[nvpidslot(pid)].exec;
+	e = nvprocat(&s.runtime, nvpidslot(pid))->exec;
 	e->gcstress = 1;
 
 	nvschedgchold(&s, 1);
@@ -371,7 +371,7 @@ holdall(void)
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	for(i = 0; i < N; i++){
 		check(nvschedspawn(&s, "holder", nvtuple(&hostheap, nil, 0), &pid[i], err, sizeof err) == 0, err);
-		e[i] = s.runtime.process[nvpidslot(pid[i])].exec;
+		e[i] = nvprocat(&s.runtime, nvpidslot(pid[i]))->exec;
 		e[i]->gcstress = 1;
 	}
 
@@ -454,13 +454,13 @@ holdsweepcap(void)
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	for(i = 0; i < N; i++){
 		check(nvschedspawn(&s, "dirty", nvtuple(&hostheap, nil, 0), &pid[i], err, sizeof err) == 0, err);
-		e[i] = s.runtime.process[nvpidslot(pid[i])].exec;
+		e[i] = nvprocat(&s.runtime, nvpidslot(pid[i]))->exec;
 	}
 	/* Dispatch each once: builds its tuple (fits without collecting)
 	 * then blocks in receive, dirty and waiting. */
 	for(i = 0; i < N; i++)
 		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress &&
-			s.runtime.process[nvpidslot(pid[i])].state == Prwaiting,
+			nvprocat(&s.runtime, nvpidslot(pid[i]))->state == Prwaiting,
 			"dirty process did not block");
 
 	nvschedgchold(&s, 1);
@@ -499,6 +499,8 @@ holdsweepcap(void)
 	check(state == NvSchedDone, "scheduler did not finish");
 	check(s.completed == N, "not every dirty process completed");
 	check(s.gcoutstanding == 0, "gcoutstanding did not drain to zero");
+	/* R3-F05: the offloaded waiters must have been collected for real, like the inline ones. */
+	check(s.gcfailed == 0 && s.collections >= N, "an offloaded idle-sweep collection did not collect");
 
 	nvschedfree(&s);
 	nvmodulefree(m);
@@ -536,10 +538,10 @@ holddeadlock(void)
 	limits(&l, 1);
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	check(nvschedspawn(&s, "dirty", nvtuple(&hostheap, nil, 0), &pid, err, sizeof err) == 0, err);
-	e = s.runtime.process[nvpidslot(pid)].exec;
+	e = nvprocat(&s.runtime, nvpidslot(pid))->exec;
 
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress &&
-		s.runtime.process[nvpidslot(pid)].state == Prwaiting,
+		nvprocat(&s.runtime, nvpidslot(pid))->state == Prwaiting,
 		"dirty process did not block");
 
 	nvschedgchold(&s, 1);
@@ -547,7 +549,7 @@ holddeadlock(void)
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "idle sweep step");
 	check(e->heap.owner == NvHeapCollecting && e->offlaunched && s.gcoutstanding == 1,
 		"waiting process's collector was not launched off-process");
-	check(s.runtime.process[nvpidslot(pid)].state == Prwaiting,
+	check(nvprocat(&s.runtime, nvpidslot(pid))->state == Prwaiting,
 		"D067: opportunistic collection touched lifecycle state");
 
 	for(i = 0; i < 3; i++)
@@ -557,6 +559,23 @@ holddeadlock(void)
 	nvschedgchold(&s, 0);
 	reapflag(&s, &e->offlaunched, err, sizeof err);
 	check(!e->offlaunched && e->heap.owner == NvHeapIdle, "collector never completed after release");
+
+	/*
+	 * R3-F05 regression: an idle-sweep launch has no pending demand
+	 * request, and nvexecgc returns without collecting when there is
+	 * none. The original collector child called nvexecgc regardless, so
+	 * every off-process idle collection collected nothing, folded as a
+	 * failure, and left the process eligible for another launch on the
+	 * next idle pass -- which made the NvSchedIdle check below a race
+	 * against the second no-op child's publish time (it failed under
+	 * the loaded gcstress+gcoffload suite run and passed otherwise).
+	 * The collection must have happened and been credited, and the
+	 * live watermark must now match, so the sweep has nothing to do.
+	 */
+	check(s.collections == 1 && s.gcfailed == 0,
+		"idle-sweep off-process collection was not performed and credited exactly once");
+	check(e->livewords == e->heap.words,
+		"idle-sweep off-process collection left the live watermark stale");
 
 	/*
 	 * The fix under test: with no message ever sent and no deadline
@@ -608,12 +627,13 @@ gcidlestephook(NvScheduler *s)
 
 	r = &s->runtime;
 	for(i = 0; i < r->nslot; i++){
-		e = r->process[i].exec;
+		e = nvprocat(r, i)->exec;
 		if(e == nil || !e->offlaunched)
 			continue;
 		lock(&e->heap.lock);
 		e->heap.owner = NvHeapIdle;
 		e->gcretry = 1;
+		e->gcresult = 1;	/* R3-F05: what the fold reads */
 		e->livewords = 1;
 		unlock(&e->heap.lock);
 	}
@@ -643,7 +663,7 @@ holdfalseidle(void)
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
 	for(i = 0; i < N; i++){
 		check(nvschedspawn(&s, "holder", nvtuple(&hostheap, nil, 0), &pid[i], err, sizeof err) == 0, err);
-		e[i] = s.runtime.process[nvpidslot(pid[i])].exec;
+		e[i] = nvprocat(&s.runtime, nvpidslot(pid[i]))->exec;
 		e[i]->gcstress = 1;
 	}
 
@@ -726,7 +746,7 @@ nooffloaddefault(void)
 	n0 = nvint(&hostheap, 200);
 	arg = nvtuple(&hostheap, &n0, 1);
 	check(nvschedspawnroot(&s, "loop", arg, &pid, err, sizeof err) == 0, err);
-	e = s.runtime.process[nvpidslot(pid)].exec;
+	e = nvprocat(&s.runtime, nvpidslot(pid))->exec;
 	e->gcstress = 1;
 
 	check(drive(&s, err, sizeof err) == NvSchedDone, "scheduler did not finish");

@@ -142,7 +142,7 @@ verifyinsn(NvModule *m, NvFunc *f, int pc, NvInsn *i, char *err, int nerr)
 		break;
 	case Obinappint:
 		if(!regok(f,i->a) || !regok(f,i->b) || !regok(f,i->c) ||
-		   !binwidthok(i->d>>2) || (i->d&3) > 3)
+		   !binwidthok(i->d>>2))
 			return bad(err,nerr,f,pc,"bad binappint operand");
 		break;
 	case Obinappbin:
@@ -157,7 +157,7 @@ verifyinsn(NvModule *m, NvFunc *f, int pc, NvInsn *i, char *err, int nerr)
 		if(!regok(f,i->a) || !targetok(f,i->b)) return bad(err,nerr,f,pc,"bad bintestbinary operand");
 		break;
 	case Obinintget:
-		if(!regok(f,i->a) || !targetok(f,i->b) || !binwidthok(i->c>>2) || (i->c&3) > 3)
+		if(!regok(f,i->a) || !targetok(f,i->b) || !binwidthok(i->c>>2))
 			return bad(err,nerr,f,pc,"bad binintget operand");
 		break;
 	case Obinbinget:
