@@ -1,0 +1,53 @@
+// Multicore required test 3 (milestone 10, D083): a process's PID and heap
+// survive migration between schedulers.  main spawns k workers and sends
+// each the pid `spawn` returned for it.  Every worker then churns -- sends
+// itself a tick and receives it, `rounds` times, so it is repeatedly
+// runnable in a queue with a backlog while other schedulers go idle and
+// steal -- and finally compares `self` against the pid its parent saw at
+// spawn time.  Root value 'ok; ${'pid_changed, count} if any worker's
+// identity moved; ${'lost, k} if k workers never reported.  Whether steals
+// actually happened is visible in `-s` (`steals N taken`); this fixture
+// checks only that they were harmless.
+//
+//   nervous -s -p 4 -r tests/multicore/migrate.nv main    (k = 50, rounds = 500)
+//   nervous -s -p 2 -r tests/multicore/migrate.nv main 200 2000
+
+fn main() { main(50, 500) }
+
+fn main(k, rounds) {
+	start(self, k, rounds);
+	collect(k, 0)
+}
+
+fn start(m, 0, rounds) { 'ok }
+fn start(m, k, rounds) {
+	w = spawn worker(m, rounds);
+	w ! ${'you, w};
+	start(m, k - 1, rounds)
+}
+
+fn collect(0, 0) { 'ok }
+fn collect(0, bad) { ${'pid_changed, bad} }
+fn collect(k, bad) {
+	receive {
+		'ok => collect(k - 1, bad);
+		'bad => collect(k - 1, bad + 1);
+		after 5000000000 => ${'lost, k}
+	}
+}
+
+fn worker(m, rounds) {
+	receive {
+		${'you, me} => churn(m, me, rounds)
+	}
+}
+
+fn churn(m, me, 0) {
+	if me == self { m ! 'ok } else { m ! 'bad }
+}
+fn churn(m, me, n) {
+	self ! ${'tick, n};
+	receive {
+		${'tick, k} when k == n => churn(m, me, n - 1)
+	}
+}

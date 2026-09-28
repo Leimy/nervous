@@ -54,7 +54,7 @@ run(NvHeap *heap, NvIO *io, char *entry, NvModule *m, NvLimits *limits, uvlong i
 		i++;
 	}while(state == NvSchedProgress);
 	check(state == NvSchedDone, "fixture scheduler reaches done");
-	*dispatches = sched.dispatches;
+	*dispatches = sched.sched[0]->dispatches;
 	*completed = sched.completed;
 	*faulted = sched.faulted;
 	*steps = i;

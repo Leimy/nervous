@@ -1,0 +1,57 @@
+// Multicore required test 2 (milestone 10, D036/D081): per-sender message
+// order survives cross-scheduler delivery.  Three senders each send
+// ${'m, self, 1..n} to one receiver.  The receiver first registers the
+// three sender pids from their 'hello messages -- which may arrive in any
+// order, and behind which 'm messages are already queueing, so selective
+// receive preservation is exercised too -- then requires every sender's
+// sequence numbers to be exactly consecutive, using the pid bound in the
+// pattern to pick the sender's slot with a guard.  Root value 'ok.  Any
+// out-of-order message makes the receiver exit ${'order_violation, pid,
+// got} and main then reports 'receiver_died after 2 s rather than hanging.
+//
+//   nervous -p 4 -r tests/multicore/order.nv main          (n = 2000)
+//   nervous -p 2 -r tests/multicore/order.nv main 100000
+
+fn main() { main(2000) }
+
+fn main(n) {
+	r = spawn receiver(self, n);
+	spawn sender(r, n);
+	spawn sender(r, n);
+	spawn sender(r, n);
+	receive {
+		'ok => 'ok;
+		after 2000000000 => 'receiver_died
+	}
+}
+
+fn sender(r, n) {
+	r ! ${'hello, self};
+	sendall(r, 1, n)
+}
+
+fn sendall(r, i, n) when i > n { 'done }
+fn sendall(r, i, n) {
+	r ! ${'m, self, i};
+	sendall(r, i + 1, n)
+}
+
+fn receiver(m, n) {
+	receive {
+		${'hello, p1} => receive {
+			${'hello, p2} => receive {
+				${'hello, p3} => loop(m, p1, 0, p2, 0, p3, 0, 3 * n)
+			}
+		}
+	}
+}
+
+fn loop(m, p1, l1, p2, l2, p3, l3, 0) { m ! 'ok }
+fn loop(m, p1, l1, p2, l2, p3, l3, left) {
+	receive {
+		${'m, p, i} when p == p1 and i == l1 + 1 => loop(m, p1, i, p2, l2, p3, l3, left - 1);
+		${'m, p, i} when p == p2 and i == l2 + 1 => loop(m, p1, l1, p2, i, p3, l3, left - 1);
+		${'m, p, i} when p == p3 and i == l3 + 1 => loop(m, p1, l1, p2, l2, p3, i, left - 1);
+		${'m, p, i} => exit ${'order_violation, p, i}
+	}
+}

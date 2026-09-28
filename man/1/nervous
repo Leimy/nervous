@@ -15,6 +15,14 @@ nervous \- compile and run Nervous, a concurrent language and register virtual m
 .I words
 ]
 [
+.B \-w
+.I visits
+]
+[
+.B \-p
+.I schedulers
+]
+[
 .B \-a
 .I file
 |
@@ -88,7 +96,14 @@ The common flags, meaningful whenever a program actually executes
 After the run, print scheduler statistics to standard error: wall
 time, processes spawned and peak live, dispatches and reductions,
 messages sent and nanoseconds per message, collection counts, and
-host allocation high-water bytes. The wall time is measured from
+host allocation high-water bytes, followed by one
+.B "stats: sched N:"
+row per scheduler (see
+.BR \-p )
+giving that scheduler's dispatches, reductions, own and remote
+enqueues, steals taken and given, wakes sent and received, sleeps and
+total sleep time, deadline fires, runtime-lock acquisitions and wait
+time, and collections. The wall time is measured from
 just before the scheduler (or, for
 .BR \-x / \-t ,
 the standalone executor) is created, so it excludes lexing, parsing
@@ -176,6 +191,49 @@ or
 (the standalone single-process executor has no scheduler and
 therefore no off-process collection mechanism at all); it applies
 only under
+.B \-r
+and
+.BR \-X .
+.TP
+.BI \-w " visits"
+Cap the number of term nodes one traversing instruction \(em
+.BR == ,
+.BR print ,
+.BR eprint ,
+the root process's
+.BR return / exit
+copy, or a
+.BR spawn 's
+argument copy \(em may visit; a traversal that would exceed
+.I visits
+faults that process with
+.BR system_limit ,
+as the term-depth ceiling already does (D080).
+.B 0
+(the default) is no cap. Independently of the cap, those instructions
+always charge one reduction per eight nodes visited, so a process
+evaluating equality on a large shared term ends its quantum instead of
+holding the scheduler. Applies only under
+.B \-r
+and
+.BR \-X .
+.TP
+.BI \-p " schedulers"
+Run the process scheduler on
+.I schedulers
+Plan 9 processes (1 through 64; default 1), created with
+.IR rfork (2)
+sharing memory. Every language process is owned by one scheduler at a
+time: it starts on the scheduler that spawned it, a message wake
+returns it to its owner's run queue, and an idle scheduler takes work
+from another's backlog. Language semantics do not depend on
+.IR schedulers ;
+the one visible difference is that output lines from processes on
+different schedulers have no defined relative order, though a line is
+never interleaved with another (D086). With
+.B 1
+the same code runs on the calling process alone, with no locking.
+Applies only under
 .B \-r
 and
 .BR \-X .
@@ -387,6 +445,12 @@ for lexing, parsing or code generation on each run:
 .EX
 nervous -c examples/ring.nv > ring.nvbc
 nervous -s -X ring.nvbc main 1000 2000
+.EE
+.PP
+Run the prime sieve on four schedulers and see how the work spread:
+.IP
+.EX
+nervous -s -p 4 -r examples/sieve.nv main 5000 >/dev/null
 .EE
 .SH SOURCE
 .B cmd/nervous/main.c

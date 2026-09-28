@@ -4,9 +4,17 @@
 # Each run prints `nervous -s` statistics; compare "ns per message" and
 # "per peak live process" across shapes and across builds.
 #
-# usage: rc bench/run.rc [small|large]
+# usage: rc bench/run.rc [small|large|multi]
 #   small (default): every shape at a size that finishes in a few seconds.
 #   large: the D059 motivating sizes; needs enough memory for 32768+ processes.
+#   multi: D088 -- the ring, the sieve and the CPU-bound fixture at -p 1, 2
+#          and 4.  The `==` header carries `-p N` after the arguments, so
+#          benchcmp keys these rows as e.g. "ring 1000 2000 -p 2" and the
+#          -p 1 rows never collide with a `small` capture.  At -p 2/4 the
+#          dispatch and reduction counts are NOT deterministic (how often a
+#          process blocks rather than yields depends on interleaving), so
+#          benchcmp's "counts: CHANGED" on dispatches/reductions is expected
+#          there; spawned/completed/exited/sent/dropped must still match.
 
 rfork E
 
@@ -39,6 +47,15 @@ fn bench {
 	echo >[1=2]
 }
 
+# benchp N path entry args...: the same shape on N schedulers.
+fn benchp {
+	p=$1
+	shift
+	echo '==' $* -p $p >[1=2]
+	time $bin -s -p $p -r $*
+	echo >[1=2]
+}
+
 switch($size){
 case small
 	bench $root/examples/ring.nv main 10 200000
@@ -52,7 +69,13 @@ case large
 	bench $benchdir/ring-up.nv main 32768 2000
 	bench $benchdir/waiters.nv main 32768 1000000
 	bench $root/examples/sieve.nv main 20000 >/dev/null
+case multi
+	for(p in 1 2 4){
+		benchp $p $root/examples/ring.nv main 1000 2000
+		benchp $p $root/examples/sieve.nv main 5000 >/dev/null
+		benchp $p $benchdir/cpubound.nv main
+	}
 case *
-	echo usage: $0 '[small|large]' >[1=2]
+	echo usage: $0 '[small|large|multi]' >[1=2]
 	exit usage
 }

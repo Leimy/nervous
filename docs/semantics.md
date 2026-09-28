@@ -54,11 +54,15 @@ Calls, aggregate elements, and operator operands evaluate left to right. Binding
 
 ## Processes and messages
 
-Nervous processes are lightweight VM processes, not Plan 9 processes or libthread threads.
+Nervous processes are lightweight VM processes, not Plan 9 processes or libthread threads. They are executed by one or more schedulers, each a Plan 9 proc sharing the runtime's memory (`nervous -p N`, D070, D081-D089). A program cannot observe which scheduler runs it, how many there are, or when a process moves between them: every rule in this section holds identically at N=1 and at N>1, and single-scheduler execution is the same code with N=1, not a separate mode (D087). At every instant exactly one scheduler owns a process; a running process never moves, and a waiting process stays with the scheduler that owns it until it is woken there (D083).
 
 Send is asynchronous. Ordinary message terms are copied into a self-contained mailbox fragment; no mailbox points into the sender's private heap.
 
 Mailbox and message limits are word counts of the copied fragment, checked all-or-nothing during the copy (D064, D066). They are implementation budgets, not language-visible term sizes.
+
+Messages from one sender to one receiver arrive in the sender's program order; messages from different senders have no relative order (D036). This holds across schedulers: a send appends to the receiver's mailbox under one runtime lock, and one sender is one process, so its sends are serialized by its own execution (D081).
+
+A system in which no process is runnable, no receive deadline is armed, and no collection is in flight is deadlocked, and the `-r` command reports it as such (D046). With several schedulers this is decided exactly, never guessed: the last scheduler to go idle declares it under the same lock every wake takes (D085).
 
 Send is written `pid ! message` and returns the sent value, so `a ! b ! m` delivers `m` to `b` and then to `a`. Sending to a dead or stale PID drops the message and still returns it. `self` is the current PID, `mkref` is a fresh opaque unique Ref, and `exit reason` terminates the current process with an arbitrary reason term. These are keywords, not calls (D058).
 
@@ -82,7 +86,9 @@ Matching proceeds left to right with no backtracking, and its bindings are trans
 
 ## Host output
 
-`print(value)` and `eprint(value)` write a term to host stdout and stderr respectively, rendered exactly as `nvvalueprint` already renders it elsewhere (so an atom keeps its leading quote, e.g. `'hello_world`). Both are reserved intrinsics and are the only names a program may not define as functions; the process forms are keywords instead (D058). Each blocks the calling process until the write completes and returns the atom `'ok` on success; a write failure faults the process with `io_error`. Both count as one ordinary reduction (D030) and never change process lifecycle state. Because one scheduler dispatches one process per quantum, output from different processes is already totally ordered by dispatch order, with no message or buffering guarantee beyond that. See D053 through D057 for the full rationale, including why this is not and will never be a general FFI.
+`print(value)` and `eprint(value)` write a term to host stdout and stderr respectively, rendered exactly as `nvvalueprint` already renders it elsewhere (so an atom keeps its leading quote, e.g. `'hello_world`). Both are reserved intrinsics and are the only names a program may not define as functions; the process forms are keywords instead (D058). Each blocks the calling process until the write completes and returns the atom `'ok` on success; a write failure faults the process with `io_error`. Both count as one ordinary reduction (D030) and never change process lifecycle state.
+
+Ordering (D057 as restated by D086): output from one process appears in that process's program order. Output from different processes appears in dispatch order when both are dispatched by the same scheduler, and in no defined order across schedulers. A line -- the rendered value and its newline -- is never interleaved with another process's line, on any scheduler. With one scheduler (the default) every process shares that scheduler, so the guarantee is exactly D057's total dispatch order. There is no message or buffering guarantee beyond this. See D053 through D057 for the full rationale, including why this is not and will never be a general FFI.
 
 ## Failure
 

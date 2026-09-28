@@ -312,7 +312,7 @@ measurerounds(NvScheduler *s, NvTerm *peerpid, ulong peers, uvlong rounds,
 				if(state != NvSchedProgress){
 					snprint(diag, sizeof diag,
 						"unexpected scheduler state %s (%d) during round trip: round=%llud peer=%lud steps=%llud nrunnable=%lud gcoutstanding=%llud err=\"%s\"",
-						statename(state), state, r, p, steps, s->runtime.nrunnable, s->gcoutstanding, err);
+						statename(state), state, r, p, steps, s->sched[0]->runq->nrunnable, s->sched[0]->gcoutstanding, err);
 					check(0, diag);
 				}
 				steps++;

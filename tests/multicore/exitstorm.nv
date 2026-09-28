@@ -1,0 +1,52 @@
+// Multicore required test 6 (milestone 10, D037/D081): a process exiting
+// while other schedulers are sending to it is safe.  k flooders each send
+// n messages as fast as they can to one victim, which exits after `quit`
+// of them; the remaining sends land on a dead pid and must be dropped
+// without a fault, a leak, or a lost sender.  Every flooder reports how
+// many it sent when it finishes.  Root value ${'done, k * n}; ${'lost, k}
+// if a flooder never reported.  With -s, `dropped to dead pids` must be
+// k * n - quit (19900 at the defaults) and the victim's exit shows as
+// `1 exited`, not a fault.
+//
+//   nervous -s -p 4 -r tests/multicore/exitstorm.nv main   (k = 4, n = 5000, quit = 100)
+//   nervous -s -p 2 -r tests/multicore/exitstorm.nv main 8 20000 1000
+
+fn main() { main(4, 5000, 100) }
+
+fn main(k, n, quit) {
+	r = spawn victim(quit);
+	start(self, r, k, n);
+	collect(k, 0)
+}
+
+fn start(m, r, 0, n) { 'ok }
+fn start(m, r, k, n) {
+	spawn flooder(m, r, n);
+	start(m, r, k - 1, n)
+}
+
+fn flooder(m, r, n) {
+	flood(r, 1, n);
+	m ! ${'sent, n}
+}
+
+fn flood(r, i, n) when i > n { 'done }
+fn flood(r, i, n) {
+	r ! ${'msg, i};
+	flood(r, i + 1, n)
+}
+
+fn victim(0) { exit 'enough }
+fn victim(quit) {
+	receive {
+		${'msg, _} => victim(quit - 1)
+	}
+}
+
+fn collect(0, total) { ${'done, total} }
+fn collect(k, total) {
+	receive {
+		${'sent, n} => collect(k - 1, total + n);
+		after 5000000000 => ${'lost, k}
+	}
+}

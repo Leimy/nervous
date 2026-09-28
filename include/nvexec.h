@@ -95,6 +95,17 @@ struct NvExec {
 	uvlong reductions;
 	Biobuf *trace;
 	NvExecHost *host;	/* D065: shared table owned by the host; nil = no host */
+	/*
+	 * D087: the scheduler proc currently running this exec (an NvSched*,
+	 * opaque here: nvexec.h does not know the scheduler's types). Set by
+	 * the dispatching scheduler immediately before nvexecrun and cleared
+	 * immediately after, so it is valid exactly for the duration of a
+	 * quantum and every host callback made from it. host->aux is the
+	 * shared machine (NvScheduler); this is the per-proc half, which no
+	 * shared table can name once there is more than one. nil outside a
+	 * dispatch and for every standalone (host-less) exec.
+	 */
+	void *sched;
 	int traceon;
 	int state;
 	/*
@@ -189,6 +200,19 @@ int nvexecinit(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, i
  * A copy refused on work reports system_limit like one refused on depth.
  */
 int nvexecinitw(NvExec *, NvModule *, char *, NvTerm, uvlong maxheap, Biobuf *, int, NvWork *, char *, int);
+/*
+ * D090: intern, once, every atom the interpreter can name while running
+ * this module -- each Katom constant in m->konst and the runtime's four
+ * fixed atoms ('true, 'false, 'ok, 'undefined) -- so that no instruction
+ * ever writes the shared atom table. nvexecinitw calls it on every
+ * spawn (a no-op scan after the first); a multi-proc scheduler calls it
+ * once from nvschedinit, before any scheduler proc exists, so under
+ * RFMEM the table and the fixed-atom cache are read-only to every proc.
+ * Returns -1 on allocation failure. After it has succeeded for m, a
+ * NvNil atom reached by loadk/testatom is a bad_constant fault, not an
+ * intern.
+ */
+int nvexecinternmodule(NvModule *);
 void nvexecsethost(NvExec *, NvExecHost *);
 int nvexecsetframelimit(NvExec *, ulong);
 /* D080: per-traversal visit ceiling for this exec's counted traversals; 0 = none. */

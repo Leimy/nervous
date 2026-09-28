@@ -179,5 +179,31 @@ echo ok - source CLI io_error fault on a closed host output stream
 
 rm -rf $tmp
 
+# Milestone 10 (D081-D089): the multicore fixtures under tests/multicore/
+# check the required properties by their root value, at 1, 2 and 4
+# schedulers -- -p 1 is the same code with no lock and pins the fixtures
+# themselves; -p 2/4 fork real scheduler procs.  Each fixture bounds its
+# own wait with `after`, so a lost wakeup or a stalled scheduler shows up
+# as a distinct failure value within seconds, not as a hang.  See
+# tests/multicore/README.md for what each one does and does not prove.
+for(p in 1 2 4){
+	out=`{$bin -p $p -r $testroot/multicore/order.nv main} || exit multicore
+	if(! ~ $"out ok){
+		echo FAIL: multicore order -p $p returned $"out >[1=2]
+		exit multicore
+	}
+	out=`{$bin -p $p -r $testroot/multicore/migrate.nv main} || exit multicore
+	if(! ~ $"out ok){
+		echo FAIL: multicore migrate -p $p returned $"out >[1=2]
+		exit multicore
+	}
+	out=`{$bin -p $p -r $testroot/multicore/exitstorm.nv main} || exit multicore
+	if(! ~ $"out '${''done, 20000}'){
+		echo FAIL: multicore exitstorm -p $p returned $"out >[1=2]
+		exit multicore
+	}
+}
+echo ok - multicore: per-sender order, PID stability across steals, and exit under a send storm at -p 1/2/4
+
 echo all nervous regression suites passed
 exit ''

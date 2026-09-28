@@ -73,7 +73,9 @@ tablegrowth(void)
 	}
 	/* was: r.nslot == 200 && r.nalloc == 256 && r.tablegrows == 5 && r.slotprobes == 0 */
 	check(r.nslot == 200 && r.nchunk == 1 && r.tablegrows == 1 && r.slotprobes == 0, "table growth/search is not amortized");
-	check(r.nrunnable == 200 && r.runhead == 0 && r.runtail == 199, "growth damaged queue");
+	/* D083: a bare runtime has exactly one queue, scheduler 0's; every spawn here owns to it. */
+	check(r.nrunq == 1 && r.runq[0]->nrunnable == 200 && r.runq[0]->head == 0 && r.runq[0]->tail == 199, "growth damaged queue");
+	check(nvprocat(&r, 0)->owner == 0 && nvprocat(&r, 199)->owner == 0, "spawned owner");
 	check(nvprocspawn(&r, &p, err, sizeof err) < 0 && r.nslot == 200, "spare capacity bypassed live limit");
 	check(nvprocpop(&r, pid[3], &msg, err, sizeof err) == 1 && nvtermint(msg->root) == 42, "growth damaged mailbox");
 	nvfragfree(msg);
@@ -81,7 +83,7 @@ tablegrowth(void)
 	check(nvprocspawn(&r, &p, err, sizeof err) == 0 && nvpidslot(p) == 3, "lowest-free hint skipped slot");
 	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 150, "next lowest-free slot");
 	check(!nvprocalive(&r, pid[3]) && !nvprocalive(&r, pid[150]), "reused stale generation");
-	check(r.runtail == 150 && nvprocat(&r, 150)->runprev == 3 && r.nrunnable == 200, "reuse queue order");
+	check(r.runq[0]->tail == 150 && nvprocat(&r, 150)->runprev == 3 && r.runq[0]->nrunnable == 200, "reuse queue order");
 	nvprocat(&r, 3)->generation = NvMaxgeneration;
 	p = nvpid(3, NvMaxgeneration);
 	check(nvprocexit(&r, p) == 1, "retirement setup");
@@ -89,11 +91,18 @@ tablegrowth(void)
 	check(nvprocspawn(&r, &q, err, sizeof err) == 0 && nvpidslot(q) == 200 && r.nslot == 201 && r.nchunk == 1 && nvprocat(&r, 3)->state == Prretired, "retired slot confused capacity/live limits");
 	/* Queue links survive both growth and removal from the middle. */
 	for(i = 0; i < 200; i++){
-		check(nvprocrunhead(&r, &slot), "missing queue member");
+		check(nvprocrunhead(&r, 0, &slot), "missing queue member");
 		p = nvpid(slot, nvprocat(&r, slot)->generation);
 		check(nvprocexit(&r, p) == 1, "queue drain");
 	}
-	check(r.nlive == 0 && r.nrunnable == 0 && r.freehint == 0, "drain/hint state");
+	check(r.nlive == 0 && r.runq[0]->nrunnable == 0 && r.freehint == 0, "drain/hint state");
+	/* D083: a queue that does not exist is not a spawn target; scheduler 1 must be created first. */
+	check(nvprocspawnon(&r, 1, &p, err, sizeof err) < 0 && strcmp(err, "bad_scheduler") == 0 && r.nlive == 0, "spawn onto a missing queue");
+	check(nvruntimesetnrunq(&r, 2, err, sizeof err) == 0 && r.nrunq == 2 && r.runq[1]->head == NvNoslot && r.runq[1]->nrunnable == 0, "second queue");
+	check(nvprocspawnon(&r, 1, &p, err, sizeof err) == 0 && nvprocat(&r, nvpidslot(p))->owner == 1, "spawn onto the second queue");
+	check(r.runq[0]->nrunnable == 0 && r.runq[1]->nrunnable == 1 && r.runq[1]->head == nvpidslot(p) && r.runq[1]->tail == nvpidslot(p), "queued on the owner's queue only");
+	check(nvprocrunhead(&r, 0, &slot) == 0 && nvprocrunhead(&r, 1, &slot) == 1 && slot == nvpidslot(p), "run head is per queue");
+	check(nvprocexit(&r, p) == 1 && r.runq[1]->nrunnable == 0 && r.runq[1]->head == NvNoslot, "exit dequeues from the owner's queue");
 	nvruntimefree(&r);
 	/* A retired slot still needs a slot beyond the one-process LIVE limit
 	 * (nslot 2), even though D082 no longer grows the table for it. */
@@ -140,7 +149,7 @@ loops(void)
 		for(q = 0; q < 2; q++){
 			limits(&l, 1024, stress);
 			check(nvschedinit(&s, m, &l, 1, q ? 1000 : 1, err, sizeof err) == 0, err);
-			s.profile = q; /* timing must not affect reductions or side effects */
+			s.sched[0]->profile = q; /* timing must not affect reductions or side effects */
 			check(nvschedspawnroot(&s, "main", arg, &pid, err, sizeof err) == 0, err);
 			state = NvSchedProgress;
 			peak = cap = 0;
@@ -156,9 +165,9 @@ loops(void)
 			check(state == NvSchedDone && s.rootstate == NvRootDone && s.rootvalue != nil, "bounded loop completion");
 			check(nvtermkind(s.rootvalue->root) == Vatom && strcmp(nvtermatom(s.rootvalue->root), "done") == 0, "loop result");
 			check(s.runtime.nsent == 1000 && s.runtime.nextref == 1001, "send/mkref duplicated by retry");
-			check(s.collections > 0 && s.gcfailed == 0 && peak <= 1024 && cap <= 2048, "bounded memory or collection evidence");
-			if(reductions == 0) reductions = s.reductions;
-			check(s.reductions == reductions, "GC/stress/quantum changed reduction count");
+			check(s.sched[0]->collections > 0 && s.sched[0]->gcfailed == 0 && peak <= 1024 && cap <= 2048, "bounded memory or collection evidence");
+			if(reductions == 0) reductions = s.sched[0]->reductions;
+			check(s.sched[0]->reductions == reductions, "GC/stress/quantum changed reduction count");
 			nvschedfree(&s);
 		}
 	nvheapfree(&h);
@@ -208,8 +217,8 @@ requests(void)
 	check(nvschedinit(&s,&m,&l,1,1,err,sizeof err)==0,err);
 	check(nvschedspawnroot(&s,"small",arg,&first,err,sizeof err)==0,err);
 	check(nvschedspawn(&s,"large",arg,&second,err,sizeof err)==0,err);
-	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.runtime.nrunnable==2, "collection lost or duplicated runnable owner");
-	check(nvprocrunhead(&s.runtime,&head) && head==nvpidslot(second), "collecting process bypassed queued peer");
+	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.sched[0]->runq->nrunnable==2, "collection lost or duplicated runnable owner");
+	check(nvprocrunhead(&s.runtime,0,&head) && head==nvpidslot(second), "collecting process bypassed queued peer");
 	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && s.completed==1, "peer did not make progress before retry");
 	check(nvprocat(&s.runtime, nvpidslot(first))->exec->reductions==0, "owner executed before queued peer");
 	nvschedfree(&s);
@@ -297,7 +306,7 @@ receivetake(void)
 		check(mem.stackbytes == 64*sizeof(NvTerm) && mem.heapused == sizeof(NvTerm) && mem.heapbytes == sizeof(NvChunk)+64*sizeof(NvTerm), "snapshot capacity versus used");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"take reservation");
 		check(p->scan==candidate && p->head==candidate && p->mailboxwords==2 && p->exec->heap.adopted==nil,"reservation consumed candidate");
-		check(p->exec->reductions==1 && p->state==Prrunnable && s.runtime.nrunnable==1,"request charged or duplicate queue insertion");
+		check(p->exec->reductions==1 && p->state==Prrunnable && s.sched[0]->runq->nrunnable==1,"request charged or duplicate queue insertion");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedProgress,"take retry");
 		if(pass){
 			check(p->head==nil && p->mailboxwords==0 && p->exec->heap.adopted==candidate,"successful take not adopted exactly once");
@@ -308,7 +317,7 @@ receivetake(void)
 		}else
 			check(s.rootstate==NvRootFault && strcmp(s.rootfault,"system_limit")==0,"take budget fault");
 		check(nvschedstep(&s,err,sizeof err)==NvSchedDone,"receive completion");
-		check(s.gcdemand == 1 && s.gcidle == 0 && s.gcinputwords == 1 && s.execns == 0 && s.gcns == 0 && s.spawnns == 0, "collection counters or default-off timing");
+		check(s.sched[0]->gcdemand == 1 && s.sched[0]->gcidle == 0 && s.sched[0]->gcinputwords == 1 && s.sched[0]->execns == 0 && s.sched[0]->gcns == 0 && s.sched[0]->spawnns == 0, "collection counters or default-off timing");
 		nvschedmemory(&s, &mem);
 		check(mem.nexec == 0 && mem.heapbytes == 0 && mem.stackbytes == 0 && mem.mailboxbytes == 0 && mem.adoptedbytes == 0, "snapshot retains exited process storage");
 		check(mem.reportbytes == (pass ? sizeof(NvFrag)+sizeof(NvTerm) : 0), "snapshot result fragment");
@@ -345,9 +354,9 @@ idlecollect(void)
 	check(nvschedspawnroot(&s,"waiter",arg,&pid,err,sizeof err)==0,err);
 	check(nvschedstep(&s,err,sizeof err)==NvSchedProgress && nvprocat(&s.runtime, nvpidslot(pid))->state==Prwaiting,"waiter did not block");
 	e=nvprocat(&s.runtime, nvpidslot(pid))->exec; before=e->reductions;
-	check(e->heap.words==41 && s.collections==0,"waiter demand-collected prematurely");
-	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.collections==1 && e->heap.words==1 && e->reductions==before,"idle collection did not reclaim without execution");
-	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.collections==1,"unchanged waiter recollected");
+	check(e->heap.words==41 && s.sched[0]->collections==0,"waiter demand-collected prematurely");
+	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.sched[0]->collections==1 && e->heap.words==1 && e->reductions==before,"idle collection did not reclaim without execution");
+	check(nvschedstep(&s,err,sizeof err)==NvSchedIdle && s.sched[0]->collections==1,"unchanged waiter recollected");
 	nvschedfree(&s); nvheapfree(&h);
 	print("ok - an idle waiting process gives back garbage without executing or spinning\n");
 }
@@ -540,7 +549,7 @@ churnflat(void)
 		nvschedmemory(&s, &mem);
 		if(mem.nexec == 0)
 			continue;	/* not dispatched yet, or already reaped this step */
-		if(!seenfirst && s.collections >= Settleafter){
+		if(!seenfirst && s.sched[0]->collections >= Settleafter){
 			seenfirst = 1;
 			capbytes = mem.heapbytes;
 			check(capbytes <= sizeof(NvChunk)+256*sizeof(NvTerm), "heap capacity settled far above the live set");
@@ -549,8 +558,8 @@ churnflat(void)
 	}
 	check(state == NvSchedDone, "scheduler did not finish");
 	check(seenfirst, "test never observed enough collections to sample");
-	check(s.collections >= 20, "test did not force at least 20 collections");
-	check(s.gcfailed == 0, "unexpected collection failure under a comfortable maxheap");
+	check(s.sched[0]->collections >= 20, "test did not force at least 20 collections");
+	check(s.sched[0]->gcfailed == 0, "unexpected collection failure under a comfortable maxheap");
 	check(s.rootstate == NvRootDone && s.rootvalue != nil, "churn did not complete normally");
 	result = s.rootvalue->root;
 	check(nvtermkind(result) == Vtuple && nvtuplelen(result) == 20, "fixed live set did not survive as the root result");

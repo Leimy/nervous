@@ -9,7 +9,7 @@ When these conflict with anything else, these win. Among them, `decisions.md` is
 | File | Purpose |
 |------|---------|
 | `semantics.md` | The language contract as implemented: values, scope, matching, guards, functions, expressions, processes, host output, and failure |
-| `decisions.md` | Numbered decision records D001-D079. A later record may supersede an earlier one; each says so. |
+| `decisions.md` | Numbered decision records D001-D090. A later record may supersede an earlier one; each says so. |
 | `bytecode.md` | Instruction set, verification rules, and VM semantics |
 | `format.md` | Canonical formatting contract and current limitations |
 
@@ -47,5 +47,6 @@ Sections 23-31 (the abstract machine) were not split out. `bytecode.md` supersed
 - **New contributor:** start with the root `README.md` and `STATUS.md`, then `architecture.md`, `semantics.md`, and `bytecode.md`. Then read the active milestone file in `../milestones/`.
 - **Touching the frontend:** `semantics.md`, `format.md`, and D058 (current surface syntax) in `decisions.md`.
 - **Touching the runtime or GC:** `architecture.md`, then D059-D079 in `decisions.md`.
+- **Touching the scheduler or anything two procs share:** `architecture.md` "Scheduler", then D070, D074 ("Shared-memory placement"), and D081-D090 in `decisions.md`; the hazards list in `../milestones/10-multicore.md`.
 - **Reviewer:** `decisions.md`, `questions.md`, the milestone file, and `review-findings.md`.
 - **Wondering why:** the design-rationale files above, read with their header notes in mind. Check anything you intend to rely on against `decisions.md`.

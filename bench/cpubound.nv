@@ -1,0 +1,51 @@
+// CPU-bound arithmetic benchmark for multicore scalability testing.
+//
+// The fixture computes sum_{i=1}^{n} (i*i) % 7 for each worker, a pure
+// arithmetic loop with no messaging in the hot path. Workers are spawned
+// in parallel and report only their final result to the root via a single
+// message. The period-7 residue sequence 0,1,4,2,2,4,1 sums to 14 per
+// 7 numbers, so one worker with n=700000 returns 1400000 and 4 workers
+// return 5600000. This is the expected root value.
+
+fn work(i, n, acc) {
+	if i > n {
+		acc
+	} else {
+		work(i + 1, n, acc + (i * i) % 7)
+	}
+}
+
+fn worker(parent, n) {
+	total = work(1, n, 0);
+	parent ! ${'result, total};
+	'ok
+}
+
+fn start(k, n, parent) {
+	if k == 0 {
+		'ok
+	} else {
+		spawn worker(parent, n);
+		start(k - 1, n, parent)
+	}
+}
+
+fn collect(k, acc) {
+	if k == 0 {
+		acc
+	} else {
+		receive {
+			${'result, t} => collect(k - 1, acc + t)
+		}
+	}
+}
+
+fn main(workers, iters) {
+	me = self;
+	start(workers, iters, me);
+	collect(workers, 0)
+}
+
+fn main() {
+	main(4, 700000)
+}

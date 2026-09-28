@@ -220,7 +220,7 @@ measurerounds(NvScheduler *s, NvTerm *peerpid, ulong peers, uvlong rounds,
 				if(state != NvSchedProgress){
 					snprint(diag, sizeof diag,
 						"unexpected scheduler state %s (%d) during round trip: round=%llud peer=%lud steps=%llud nrunnable=%lud gcoutstanding=%llud err=\"%s\"",
-						statename(state), state, r, p, steps, s->runtime.nrunnable, s->gcoutstanding, err);
+						statename(state), state, r, p, steps, s->sched[0]->runq->nrunnable, s->sched[0]->gcoutstanding, err);
 					check(0, diag);
 				}
 				steps++;
@@ -346,10 +346,10 @@ main(int argc, char **argv)
 	elemarg[2] = nvint(nil, (vlong)iterations);
 	ownerarg = nvtuple(&h, elemarg, 3);
 	check(ownerarg != NvNil, "owner argument allocation");
-	collectionsbefore = s.collections;
-	gcinbefore = s.gcinputwords;
-	gcoutbefore = s.gcoutputwords;
-	fallbackbefore = s.gcofffallback;
+	collectionsbefore = s.sched[0]->collections;
+	gcinbefore = s.sched[0]->gcinputwords;
+	gcoutbefore = s.sched[0]->gcoutputwords;
+	fallbackbefore = s.sched[0]->gcofffallback;
 	check(nvschedspawnroot(&s, "owner", ownerarg, &ownerpid, err, sizeof err) == 0, err);
 
 	print("phase loaded: owner churning\n");
@@ -373,10 +373,10 @@ main(int argc, char **argv)
 	else
 		print("owner already exited before this report; its own collection count is unavailable (nvprocexit frees the exec)\n");
 
-	collectionsafter = s.collections;
-	gcinafter = s.gcinputwords;
-	gcoutafter = s.gcoutputwords;
-	fallbackafter = s.gcofffallback;
+	collectionsafter = s.sched[0]->collections;
+	gcinafter = s.sched[0]->gcinputwords;
+	gcoutafter = s.sched[0]->gcoutputwords;
+	fallbackafter = s.sched[0]->gcofffallback;
 	print("aggregate scheduler collections during loaded phase (owner + every peer): %llud; input words %llud; output (live) words %llud; rfork-launch fallbacks %llud\n",
 		collectionsafter-collectionsbefore, gcinafter-gcinbefore, gcoutafter-gcoutbefore,
 		fallbackafter-fallbackbefore);

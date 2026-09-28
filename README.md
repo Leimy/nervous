@@ -27,7 +27,7 @@ Full map:
 - `docs/README.md`: index of `docs/`, marking which files are normative.
 - `docs/architecture.md`: component overview with pointers to source and decisions (not normative).
 - `docs/semantics.md`: compact normative language contract.
-- `docs/decisions.md`: compact decision records (D001-D080).
+- `docs/decisions.md`: compact decision records (D001-D090).
 - `docs/language-semantics.md`, `docs/runtime.md`, `docs/distribution.md`, `docs/language-philosophy.md`, `docs/future-work.md`: design rationale split from `nervous_design.md`. They are not normative and still use superseded syntax; see each file's header note.
 - `docs/questions.md`: unresolved semantic questions by owning milestone.
 - `docs/format.md`: canonical formatting contract and current limitations.
@@ -66,11 +66,11 @@ Milestones 00-08 and reviews R1-R2 are complete. Milestone 08 (process-local hea
 
 Milestones 00-09 and reviews R1-R3 are complete. R3 (memory and representation) closed with six findings, all fixed with regressions: D080 charges term-traversal work (`==`, `print`, boundary copies) to reductions at 8 visits each, with an optional `-w` ceiling, so no instruction holds the scheduler for free; the closing suite run under `nervous_gcstress=1 nervous_gcoffload=1` exposed that off-process idle-sweep collections had never collected anything (R3-F05, D074 amendment), fixed alongside a teardown use-after-free of the completion semaphore (R3-F06). The three `run.rc` invocations under "Inline garbage collection" are the regression bar. `milestones/R3-memory-review.md` carries the coverage map and the properties R4 inherits.
 
-Milestone 10 (Multicore: `rfork` scheduler processes, per-scheduler run queues, work movement at safe points, with the mandatory R4 review inside its acceptance) is next and not yet started. `STATUS.md` is authoritative for current assignments and resumption.
+Milestone 10 (Multicore) is in progress. Its design is recorded as D081-D090; T00a (segmented process table), T00b (machine/scheduler split, ownership, counters) and T01 (N scheduler procs under one global lock, wake-to-home, stealing, the idle/wake/termination protocol, line-atomic output) have landed, so `nervous -p N` runs a program on N `rfork` schedulers sharing memory, with the three regression suites passing unchanged at N=1 and the ring, sieve and CPU-bound shapes correct at `-p 2` and `-p 4`. Still to come in M10: the per-scheduler deadline heap (T02, D084), the `-p` measurement rows (T03, D088) and any lock split they justify (T04), the `tests/multicore/` stress fixtures, and the mandatory R4 review. `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md`, `milestones/10-multicore.md`, and `docs/questions.md` ("Milestone 10") before continuing. D068/D074 (heap ownership and the collector protocol), D080 (work charging) and D070 record what milestone 10 builds on; D061-D079 the memory and binary designs beneath them. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 remains deferred to milestone 10.
+Read `STATUS.md`, `milestones/10-multicore.md` (its "M10-T01 -- landed" section says what differs from the spec), and `docs/questions.md` ("Milestone 10") before continuing. D081-D090 are the multicore design; D068/D074 (heap ownership and the collector protocol, including the shared-memory placement rule) and D070 are what it builds on; D061-D079 the memory and binary designs beneath them. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 is resolved by D084 when T02 lands.
 
 ## Try it
 
@@ -97,6 +97,18 @@ The three `run.rc` lines are the regression bar (R3, `milestones/R3-memory-revie
 Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also enables it. Other nonempty environment values produce a diagnostic naming `nervous_gcstress`. The repaired runners use `rfork e` to preserve the inherited setting in a private environment. The environment setting makes CLI invocations in the suite use stress mode; C fixtures retain their explicit settings, and the automatic-memory fixture runs both normal and stress configurations. `rc tests/memory/run.rc` isolates collector and reservation/retry tests. This inline checkpoint is accepted (D072); off-process collection (D074) is also implemented, accepted (M08-T04c), and policy-tuned (M08-T04d, D075).
 
 `-o words` (D074) sets the off-process collection threshold: a heap with at least `words` used-plus-adopted words collects in a separate forked proc instead of inline, so one large collection pauses only its own process. `0` (the default) never offloads; `1` forces every real collection off-process. Only `-r`/`-X` build a scheduler, so unlike `-H`/`-G` this has no effect under `-x`/`-t`. `$nervous_gcoffload` supplies the default the same way `$nervous_gcstress` does for `-G`. The default stays `0`: M08-T04d measured a real crossover (off-process hurts at a 50000-word live set, helps at 500000) but only bracketed it, not located it, so no positive default is supported by the evidence (D075, `bench/README.md`). Every test and benchmark in this tree hardcodes `gcoffload = 0` at its own `NvLimits` construction, independent of this CLI default either way.
+
+## Multicore
+
+`-p N` (D081-D089; 1 through 64, default 1) runs the scheduler on N Plan 9 procs created with `rfork(RFPROC|RFMEM)`. They share the process table, run queues, mailboxes and atom table; a message between processes on different schedulers is the same single copy into a malloc'd fragment it always was, appended under one global runtime lock, and the receiver reads it in place. Each process is owned by one scheduler at a time: a new process starts on its spawner's scheduler, a wake goes to the owner's queue, and an idle scheduler steals from another's backlog. Language semantics do not change with N (`docs/semantics.md`, "Processes and messages"); the one visible difference is that output lines from processes on different schedulers have no defined relative order (D086). `-p` applies to `-r`/`-X` only, like `-o` and `-w`. With `-s`, one `stats: sched N:` row per scheduler follows the totals, with the D088 counters: dispatches, own and remote enqueues, steals taken and given, wakes sent and received, sleeps and sleep time, deadline fires, lock acquisitions and wait time. For example:
+
+```rc
+./nervous -s -p 4 -r examples/sieve.nv main 5000
+./nervous -s -p 2 -r examples/ring.nv main 1000 2000
+./nervous -s -p 4 -r bench/cpubound.nv main
+```
+
+The global lock is not taken at N=1, so single-scheduler cost is unchanged (`bench/benchcmp` shows every shape within noise of the pre-multicore capture). At N>1 message-bound shapes are currently slower than N=1 -- the lock costs about eight acquisitions per ring hop -- which is the measurement the stage-2 lock split (D081, D088) is gated on. A change to `lib/sched.c` or `lib/process.c` should be checked with the three suite lines above and the three `-p` runs here.
 
 `-w visits` (D080) caps the node visits one traversing instruction (`==`, `print`/`eprint`, the root `return`/`exit` copy, `spawn`'s argument copy) may make; a traversal beyond it faults that process with `system_limit`, the same way the depth ceiling does. `0` (the default) is no cap. Independently of the cap, those instructions always charge one reduction per 8 visits, so `nervous -s` reduction totals for programs heavy in `==` are slightly higher than before D080. Like `-o`, this applies to `-r`/`-X` only.
 

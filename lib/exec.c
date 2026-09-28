@@ -132,20 +132,23 @@ pushframe(NvExec *e, int funcidx, NvTerm arg, ulong callerfp, int dst)
 }
 
 /*
- * D062: the runtime's own fixed atoms ('true, 'false, 'ok, 'undefined) are
- * interned once, on first use, and cached here as term words so every
- * later use is a load with no allocation and no table lookup.
+ * D062/D090: the runtime's own fixed atoms ('true, 'false, 'ok,
+ * 'undefined) are interned once by nvexecinternmodule -- before any
+ * instruction of any module runs -- and cached here as term words, so
+ * every use is a load with no allocation and no table lookup. D090
+ * removed the lazy first-use intern that used to live in fixedatom:
+ * these statics are shared by every scheduler proc under RFMEM, and a
+ * write here from an interpreter path would race. fixedatom is now a
+ * pure read; NvNil means the caller skipped nvexecinternmodule, which
+ * every nvexecinit path calls, so it is unreachable for a live exec.
  */
 static NvTerm cachedtrue, cachedfalse, cachedok, cachedundefined;
 
 static int
-fixedatom(NvTerm *cache, char *text, NvTerm *out)
+fixedatom(NvTerm *cache, NvTerm *out)
 {
-	if(*cache == NvNil){
-		*cache = nvatom(text);
-		if(*cache == NvNil)
-			return -1;
-	}
+	if(*cache == NvNil)
+		return -1;
 	*out = *cache;
 	return 0;
 }
@@ -153,7 +156,41 @@ fixedatom(NvTerm *cache, char *text, NvTerm *out)
 static int
 boolatom(int truth, NvTerm *out)
 {
-	return truth ? fixedatom(&cachedtrue, "true", out) : fixedatom(&cachedfalse, "false", out);
+	return fixedatom(truth ? &cachedtrue : &cachedfalse, out);
+}
+
+static int
+internfixed(NvTerm *cache, char *text)
+{
+	if(*cache == NvNil)
+		*cache = nvatom(text);
+	return *cache == NvNil ? -1 : 0;
+}
+
+int
+nvexecinternmodule(NvModule *m)
+{
+	int i;
+
+	if(internfixed(&cachedtrue, "true") < 0 || internfixed(&cachedfalse, "false") < 0 ||
+	   internfixed(&cachedok, "ok") < 0 || internfixed(&cachedundefined, "undefined") < 0)
+		return -1;
+	if(m == nil)
+		return 0;
+	/*
+	 * D062: intern every Katom constant once, here, rather than on every
+	 * loadk/testatom dispatch. m->konst is shared by every NvExec built
+	 * from this module (D042 borrows one module for its whole lifetime),
+	 * so after the first call each entry's atom is already set and this
+	 * loop is a cheap no-op scan.
+	 */
+	for(i = 0; i < m->nconst; i++)
+		if(m->konst[i].kind == Katom && m->konst[i].atom == NvNil){
+			m->konst[i].atom = nvatom(m->konst[i].text);
+			if(m->konst[i].atom == NvNil)
+				return -1;
+		}
+	return 0;
 }
 
 static int
@@ -223,22 +260,12 @@ nvexecinit(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biob
 int
 nvexecinitw(NvExec *e, NvModule *m, char *entry, NvTerm arg, uvlong maxheap, Biobuf *trace, int traceon, NvWork *w, char *err, int nerr)
 {
-	int i, idx, rc;
+	int idx, rc;
 	NvTerm copied;
 
 	memset(e, 0, sizeof *e);
-	/*
-	 * D062: intern every Katom constant once, here, rather than on every
-	 * loadk/testatom dispatch. m->konst is shared by every NvExec built
-	 * from this module (D042 borrows one module for its whole lifetime),
-	 * so after the first nvexecinit each entry's atom is already set and
-	 * this loop is a cheap no-op scan.
-	 */
-	for(i = 0; i < m->nconst; i++)
-		if(m->konst[i].kind == Katom && m->konst[i].atom == NvNil){
-			m->konst[i].atom = nvatom(m->konst[i].text);
-			if(m->konst[i].atom == NvNil){ snprint(err,nerr,"out_of_memory"); return -1; }
-		}
+	/* D062/D090: every atom this module can name, and the fixed four. */
+	if(nvexecinternmodule(m) < 0){ snprint(err,nerr,"out_of_memory"); return -1; }
 	idx = findfuncidx(m, entry);
 	if(idx < 0){ snprint(err,nerr,"bad_function"); return -1; }
 	e->module = m;
@@ -550,13 +577,10 @@ run(NvExec *e, uvlong quantum)
 				v = nvint(&e->heap, k->ival);
 				if(v == NvNil) return fault(e, nvheapexhausted(&e->heap) ? "system_limit" : "out_of_memory");
 			}else if(k->kind == Katom){
-				/* D062: interned by nvexecinit; nvatom is only a defensive fallback. */
+				/* D062/D090: interned by nvexecinternmodule before any run;
+				 * an interpreter path never writes the shared table. */
 				v = (NvTerm)k->atom;
-				if(v == NvNil){
-					v = nvatom(k->text);
-					if(v == NvNil) return fault(e,"out_of_memory");
-					k->atom = v;
-				}
+				if(v == NvNil) return fault(e,"bad_constant");
 			}else{
 				return fault(e,"bad_constant");
 			}
@@ -617,10 +641,7 @@ run(NvExec *e, uvlong quantum)
 			break;
 		case Otestatom:
 			k = &e->module->konst[insn->b];
-			if(k->atom == NvNil){
-				k->atom = nvatom(k->text);
-				if(k->atom == NvNil) return fault(e,"out_of_memory");
-			}
+			if(k->atom == NvNil) return fault(e,"bad_constant");	/* D090: see Oloadk */
 			setpc(e, regs[insn->a] == (NvTerm)k->atom ? pc+1 : insn->c); break;
 		case Otestint:
 			k = &e->module->konst[insn->b];
@@ -665,7 +686,7 @@ run(NvExec *e, uvlong quantum)
 				regs[insn->a] = v;
 			}else{
 				truth = insn->op == Olt ? left < right : insn->op == Ole ? left <= right : insn->op == Ogt ? left > right : left >= right;
-				if(boolatom(truth, &v) < 0) return fault(e,"out_of_memory");
+				if(boolatom(truth, &v) < 0) return fault(e,"bad_constant");
 				regs[insn->a] = v;
 			}
 			setpc(e, pc+1); break;
@@ -701,10 +722,10 @@ run(NvExec *e, uvlong quantum)
 			                               : e->host->recvnext(e, &v, hosterr, sizeof hosterr);
 			if(found < 0) return fault(e, hosterr[0] ? hosterr : "system_limit");
 			if(found == 0){
-				if(fixedatom(&cachedundefined, "undefined", &v) < 0) return fault(e,"out_of_memory");
+				if(fixedatom(&cachedundefined, &v) < 0) return fault(e,"bad_constant");
 			}
 			regs[insn->a] = v;
-			if(boolatom(found != 0, &v) < 0) return fault(e,"out_of_memory");
+			if(boolatom(found != 0, &v) < 0) return fault(e,"bad_constant");
 			regs[insn->b] = v;
 			setpc(e, pc+1); break;
 		case Orecvtake:
@@ -745,7 +766,7 @@ run(NvExec *e, uvlong quantum)
 			found = insn->op == Oprint ? e->host->print(e, regs[insn->b], hosterr, sizeof hosterr)
 			                           : e->host->eprint(e, regs[insn->b], hosterr, sizeof hosterr);
 			if(found < 0) return fault(e, hosterr[0] ? hosterr : "io_error");
-			if(fixedatom(&cachedok, "ok", &v) < 0) return fault(e,"out_of_memory");
+			if(fixedatom(&cachedok, &v) < 0) return fault(e,"bad_constant");
 			regs[insn->a] = v; setpc(e, pc+1); break;
 		case Onop:
 			setpc(e, pc+1); break;
@@ -754,7 +775,7 @@ run(NvExec *e, uvlong quantum)
 		case Oguardend:
 			e->guardfail = -1; setpc(e, pc+1); break;
 		case Oistype:
-			if(boolatom(nvtermkind(regs[insn->b]) == insn->c, &v) < 0) return fault(e,"out_of_memory");
+			if(boolatom(nvtermkind(regs[insn->b]) == insn->c, &v) < 0) return fault(e,"bad_constant");
 			regs[insn->a] = v; setpc(e, pc+1); break;
 		case Obinalloc:
 			/* D077: the running binary starts empty. */

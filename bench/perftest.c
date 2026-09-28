@@ -81,16 +81,16 @@ phase(NvScheduler *s, char *label, uvlong start, uintptr base)
 
 	elapsed = uptime()-start;
 	high = (uintptr)sbrk(0)-base;
-	now.dispatches = s->dispatches;
-	now.reductions = s->reductions;
+	now.dispatches = s->sched[0]->dispatches;
+	now.reductions = s->sched[0]->reductions;
 	now.sent = s->runtime.nsent;
-	now.gc = s->collections;
-	now.failed = s->gcfailed;
-	now.input = s->gcinputwords;
-	now.output = s->gcoutputwords;
-	now.execns = s->execns;
-	now.gcns = s->gcns;
-	now.spawnns = s->spawnns;
+	now.gc = s->sched[0]->collections;
+	now.failed = s->sched[0]->gcfailed;
+	now.input = s->sched[0]->gcinputwords;
+	now.output = s->sched[0]->gcoutputwords;
+	now.execns = s->sched[0]->execns;
+	now.gcns = s->sched[0]->gcns;
+	now.spawnns = s->sched[0]->spawnns;
 	sent = now.sent-prev.sent;
 	attempts = now.gc-prev.gc + now.failed-prev.failed;
 	nvschedmemory(s, &m);
@@ -100,7 +100,7 @@ phase(NvScheduler *s, char *label, uvlong start, uintptr base)
 	print("\n");
 	print("  GC: %llud successful, %llud failed; input %llud words; output %llud live words\n",
 		now.gc-prev.gc, now.failed-prev.failed, now.input-prev.input, now.output-prev.output);
-	if(s->profile){
+	if(s->sched[0]->profile){
 		print("  timed: exec %llud ns; GC %llud ns; spawn %llud ns (overlaps exec for bytecode spawn)",
 			now.execns-prev.execns, now.gcns-prev.gcns, now.spawnns-prev.spawnns);
 		if(attempts != 0) print("; %llud ns/GC attempt", (now.gcns-prev.gcns)/attempts);
@@ -176,7 +176,7 @@ main(int argc, char **argv)
 	base = (uintptr)sbrk(0);
 	start = uptime();
 	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
-	s.profile = profile;
+	s.sched[0]->profile = profile;
 	for(i = 0; i < waiters; i++)
 		check(nvschedspawn(&s, "waiter", arg, &pid, err, sizeof err) == 0, err);
 	phase(&s, "waiters-spawned", start, base);
@@ -212,7 +212,7 @@ main(int argc, char **argv)
 	check(state == NvSchedIdle && s.rootstate == NvRootDone && s.rootvalue != nil &&
 		nvtermkind(s.rootvalue->root) == Vint && nvtermint(s.rootvalue->root) == pings, "traffic result");
 	check(s.runtime.nsent-before == 2ULL*pings && s.runtime.nlive == waiters+1, "traffic count/lifecycle");
-	check(s.faulted == 0 && s.gcfailed == 0, "traffic fault or failed collection");
+	check(s.faulted == 0 && s.sched[0]->gcfailed == 0, "traffic fault or failed collection");
 	phase(&s, "traffic", start, base);
 
 	stop = nvatom("stop");

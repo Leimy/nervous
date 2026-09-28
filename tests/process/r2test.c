@@ -457,7 +457,7 @@ belowcursorfairness(void)
 	/* Dispatch A (slot 0, queue head): it returns immediately and is reaped, freeing slot 0. */
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress && sched.completed == 1,
 		"belowcursor: A completes and frees slot 0");
-	check(nvprocrunhead(&sched.runtime, &slot) && slot == nvpidslot(pidB) && sched.runtime.nrunnable == 2,
+	check(nvprocrunhead(&sched.runtime, 0, &slot) && slot == nvpidslot(pidB) && sched.sched[0]->runq->nrunnable == 2,
 		"belowcursor: B is now at the head with C behind it; A's exit left the queue intact");
 
 	/*
@@ -466,7 +466,7 @@ belowcursorfairness(void)
 	 */
 	check(nvschedspawn(&sched, "idle", arg, &pidD, err, sizeof err) == 0, "belowcursor: spawn D (idle)");
 	check(nvpidslot(pidD) == 0 && nvpidslot(pidD) < nvpidslot(pidB), "belowcursor: D reused slot 0, below B and C");
-	check(sched.runtime.runtail == nvpidslot(pidD) && sched.runtime.nrunnable == 3,
+	check(sched.sched[0]->runq->tail == nvpidslot(pidD) && sched.sched[0]->runq->nrunnable == 3,
 		"belowcursor: D joined the tail of the run queue, behind B and C");
 
 	/*

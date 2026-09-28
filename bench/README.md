@@ -472,3 +472,53 @@ Part 1 was **not** unchanged: equality came out 1.3-1.5x slower at depth >= 8 (6
 What this settles for R3/R4: a traversing instruction's cost is now visible to the scheduler as reductions, exactly and deterministically. What remains true: one equality's own latency is unchanged (746 us at depth 16, 144 ms at depth 24 in this run), which is what the `-w` ceiling exists for.
 
 Add a row here whenever a change is meant to move these numbers, with the build it was measured on.
+
+## Comparing runs: `bench/benchcmp` and `bench/runs/`
+
+The tables above were compared by hand against prose, which does not scale and has no notion of "same work, different cost". From M10 on, a `bench/run.rc` capture is saved as a file and compared by a tool:
+
+```text
+rc bench/run.rc >[2] bench/runs/<tag>-small.txt     # save a run (everything of interest is on stderr)
+bench/benchcmp bench/runs/<tag>-small.txt           # table of one run
+bench/benchcmp bench/runs/<old>.txt bench/runs/<new>.txt   # table of new, with a delta line per shape
+bench/benchcmp -t 5 old.txt new.txt                 # flag cost changes at 5% instead of the default 10%
+```
+
+`benchcmp` (`bench/benchcmp.c`, built by `mk benchmarks`) reads the `== path main args` headers and the `stats:` lines and ignores everything else. It splits the fields into two classes and treats them differently, which is the rule every section above states in prose: **counts** (spawned, peak live, completed, faulted, exited, dispatches, reductions, messages sent, dropped, collections, GC failed, atoms) must match exactly between two runs, or the program did different work and the cost columns are not comparable -- any difference is printed as `counts: CHANGED name old->new` and the exit status is `counts`; **costs** (wall, ns/message, host high-water, bytes per peak process) are measurements, printed as `old->new (+N.N%)` and flagged with `!` past the threshold. The last line is `N shapes compared, M count changes, K cost flags`. A field missing from a truncated capture prints `-` and is skipped in deltas, never treated as zero.
+
+Saved captures: `T00b-small.txt` (below) is the first. The T04b/T04p runs above exist only as README tables, so the first tool-based comparison will be against T00b.
+
+## M10-T00b step 1: NvSched split (first saved capture)
+
+User ran `rc bench/run.rc` on the T00b-step-1 working tree (segmented process table D082 from T00a, `NvSched` split with `nsched = 1`) and supplied the output via `/dev/snarf`; saved as `bench/runs/T00b-small.txt`. One run per row. Compared by hand against the T04p table, the last whole-program `run.rc` row above:
+
+| shape | messages | wall | ns/msg | T04p ns/msg | change | high-water | T04p high-water | change |
+|---|---|---|---|---|---|---|---|---|
+| ring 10 x 200000 | 2200011 | 0.902 s | 410 | 731 | -44% | 98488 | 20680 | +376% |
+| ring 1000 x 2000 | 2003001 | 0.764 s | 381 | 672 | -43% | 2286432 | 2210024 | +3.5% |
+| ring-up 1000 x 2000 | 2004001 | 0.760 s | 379 | 676 | -44% | 2344336 | 2317560 | +1.2% |
+| waiters 1000 x 100000 | 201001 | 0.072 s | 360 | 648 | -44% | 1740480 | 1755064 | -0.8% |
+| waiters 10000 x 100000 | 210001 | 0.085 s | 405 | 725 | -44% | 17458568 | 17975288 | -2.9% |
+| sieve 5000 | 234091 | 0.126 s | 542 | 979 | -45% | 756112 | 713568 | +6.0% |
+
+Read: message and collection counts are identical to the T04b/T04p runs digit for digit, with zero faults and zero GC failures, so the bytecode work and collection frequency are unchanged and the cost columns are comparable. Ring-up and ring-down agree within 0.5% (D059 holds). Two results are not noise but are also **not** attributable to T00a/T00b:
+
+- **The uniform ~44% per-message speedup** spans everything between T04p and this tree -- all of M09 (D080 work charging, the `VISIT` macro, exec changes) and possibly a different machine -- because no `run.rc` capture was taken after M09. Reductions per dispatch also moved (24 -> 20/21/23, sieve 169 -> 55), which is D080's reduction accounting, not a scheduling change. This capture is the new baseline; the next change that intends to move these numbers should compare against it with `benchcmp`, and any interim run on a pre-T00a tree would locate the speedup if that matters.
+- **ring 10's host high-water is 4.8x higher** (98488 vs 20680 bytes; 8953 per peak process). This is D082's chunk granularity: the segmented table allocates whole `NvProcchunk`-slot chunks, so an 11-process program pays for one full chunk it mostly does not use. At 1001 processes the effect is +1-3.5%; at 10002 it is -2.9% (chunk rounding beat the old geometric over-allocation). A known step function in the small-process footprint, not a leak; the per-process figure at 1000+ processes is the one to watch.
+
+Disposition: T00b step 1 shows no cost regression against T04p on any shape and unchanged work counts. The three suite invocations remain the correctness acceptance.
+
+## M10-T01: N schedulers under the global lock (correctness capture; T03 owns the measurement)
+
+`bench/runs/T01-small.txt` is the N=1 `run.rc` capture on the accepted T01 tree (round 3, `STATUS.md`); `bench/benchcmp bench/runs/T00b-small.txt bench/runs/T01-small.txt` reports 6 shapes compared, 0 count changes, 0 cost flags: every shape within +-2.6% on wall and ns/message. The global lock is not taken at N=1 (`NvScheduler.locking`), which is why; round 1 of T01 took it unconditionally and cost +13-17% wall on every message-bound shape, and that build's numbers are deliberately not recorded here. The one visible byte change is ring 10's high-water, +8.3% (98488 -> 106680), from the malloc'd `NvScheduler` and Biobufs the forked schedulers need (D087); it is a fixed cost, invisible at 1000+ processes.
+
+The `-p` runs below were made once each, by the user, to accept correctness -- they are not the T03 measurement, which will add `-p 1/2/4` rows to `run.rc`, fix `bench/cpubound.nv` (see below) and record repeats. They are recorded so T03 has the shape of the first numbers.
+
+| shape | -p | wall | N=1 wall | result | steals | sleeps (per sched) | lock acquisitions | note |
+|---|---|---|---|---|---|---|---|---|
+| sieve 5000 | 4 | 0.690 s | 0.129 s | correct | 168+178+148+133 taken | 4 / 6 / 3 / 3 | ~296K each | work spread evenly: 16.5K/15.9K/14.6K/14.6K dispatches |
+| ring 1000 x 2000 | 2 | 1.303 s | 0.832 s | 2000000 | 18 | 33903 / 34021 | 16.3M + 0.4M | sched 1 owns the 18 nodes it stole during build; every hop through one is a remote wake + kick + sleep |
+| ring 1000 x 2000 | 4 | 1.485 s | 0.832 s | 2000000 | 39 | ~40K / 12K / 26K / 26K | 16.0M + ~0.8M | same shape, three remote owners |
+| cpubound 4 x 700000 | 4 | 0.886 s | 0.60 s | 5600000 | 4 | 1 / 2 / 3 / 2 | ~650K total | no speedup; sched 2 got 0 dispatches |
+
+Read, briefly, since T03 will do it properly: (1) every shape is *slower* at N>1 than N=1, and the rows say where the time goes -- about 8 lock acquisitions per ring hop (the D081 stage-1 lock, uncontended: 0 ns waited, so it is the acquisition itself and the cache traffic, not queueing) plus one idle/kick/sleep cycle per cross-scheduler hop; that is the stage-2 number D081/D088 said to measure before splitting anything. (2) `cpubound.nv` cannot show a speedup as written: 215385 collections for 215393 dispatches -- each worker's 11-word live set plus one 3-word tuple per iteration fills D069's 64-word minimum space every ~20 iterations, so the fixture measures dispatch+collect, not CPU. T03 needs a variant with a bigger live set (or a measured case for a larger minimum space) before `-p` can be judged on CPU-bound work. (3) Ring at `-p 2` was 1.93 s in round 1 with ~120K steals; `NvStealmin = 2` (D083 amendment) took the steals to 18 and the wall to 1.30 s. (4) sieve `-p 4` in round 2 slept 118 times per scheduler; round 3's own-queue re-check (D085 amendment) took that to 3-6.

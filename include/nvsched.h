@@ -1,4 +1,5 @@
 typedef struct NvScheduler NvScheduler;
+typedef struct NvSched NvSched;
 typedef struct NvClock NvClock;
 typedef struct NvIO NvIO;
 typedef struct NvMemstats NvMemstats;
@@ -70,25 +71,80 @@ enum {
 	NvRootExit,
 };
 
+/* D085: why the machine stopped; NvScheduler.stopping. */
+enum {
+	NvStopNone,
+	NvStopDone,		/* nlive reached 0 */
+	NvStopIdle,		/* every scheduler idle, nothing runnable, no timer, no collector: D046 deadlock */
+	NvStopError,		/* a scheduler reported NvSchedError; text in stoperr */
+	NvStopInterrupt,	/* nvmachineinterrupt */
+};
+
 /*
- * D064: lastexit and rootvalue are fragments owned by the scheduler
- * (taken from the exiting NvExec), freed by nvschedfree. rootvalue is
- * the root's return value after NvRootDone and its exit reason after
- * NvRootExit; nil otherwise.
+ * D087 (M10-T00b): the per-scheduler-proc half of the old NvScheduler.
+ * One NvSched per scheduler proc; at N=1 there is exactly one,
+ * sched[0], and every existing entry point (nvschedstep and friends)
+ * operates on it. Everything here is touched by one scheduler proc
+ * only (or, for gcsem/gchold, by that proc and the collector children
+ * it forks). It is malloc'd by nvschedinit, never embedded: the D074
+ * lesson is that rfork(RFPROC|RFMEM) does not share a caller's stack,
+ * and NvScheduler is stack-allocated by every caller. The D088
+ * counters beyond those already here and the idle semaphore arrive in
+ * later T00b/T01 steps. Nothing here changes behavior at N=1; every
+ * -s figure keeps its meaning.
  */
-struct NvScheduler {
-	NvRuntime runtime;
-	NvModule *module;
-	NvExecHost host;	/* D065: one table shared by every process's NvExec */
-	NvClock clock;
-	NvIO io;
-	uvlong quantum;
+struct NvSched {
+	int index;		/* position in NvScheduler.sched; 0 at N=1 */
+	/*
+	 * D083/D087: this scheduler's FIFO of Prrunnable slots, the queue
+	 * every process it owns is enqueued on. Points at runtime.runq[index]
+	 * (malloc'd and owned by NvRuntime, see nvproc.h); process.c reaches
+	 * the same queue through NvProcess.owner.
+	 */
+	NvRunq *runq;
 	ulong currentslot;
 	ulong currentgeneration;
 	int currentvalid;
 	uvlong dispatches;
 	uvlong reductions;
-	uvlong timerwakes;
+	uvlong timerwakes;	/* D088 "deadline fires" */
+	/*
+	 * D088 measurement counters, per scheduler proc, aggregated by -s
+	 * at exit and never incremented through a shared word. Arrivals on
+	 * this scheduler's own queue are counted at the queue
+	 * (runq->enqueues). The rest have no event to count until M10-T01
+	 * and stay 0 here: remoteenq (enqueues this scheduler made onto
+	 * another scheduler's queue), stealstaken/stealsgiven (processes
+	 * this scheduler took from, or lost to, another), wakessent/
+	 * wakesrecv (semrelease sent to another scheduler / tsemacquire
+	 * returns that were a wake rather than a timeout), sleeps/sleepns
+	 * (idle tsemacquire waits and their total duration), lockacq/
+	 * lockwaitns (stage-1 global lock acquisitions and time spent
+	 * waiting for it). Printed from the first T00b build so the -s
+	 * row's shape is settled before any of them can move.
+	 */
+	uvlong remoteenq;
+	uvlong stealstaken;
+	uvlong stealsgiven;
+	uvlong wakessent;
+	uvlong wakesrecv;
+	uvlong sleeps;
+	uvlong sleepns;
+	uvlong lockacq;
+	uvlong lockwaitns;
+	/*
+	 * D085 (M10-T01): the idle semaphore, malloc'd like gcsem and for the
+	 * same reason; a remote waker semrelease's it when this scheduler's
+	 * idle bit is set. wakeat/wakeatvalid are what step() leaves behind
+	 * when it returns NvSchedIdle at N>1 instead of blocking: the
+	 * earliest deadline this scheduler owns, so the proc loop can bound
+	 * its sleep, and so termination detection knows this idle scheduler
+	 * still has a timer pending. Meaningless while the scheduler is
+	 * running; rewritten on every idle return.
+	 */
+	long *sem;
+	uvlong wakeat;
+	int wakeatvalid;
 	uvlong collections;
 	uvlong gcfailed;
 	uvlong lastlivewords;	/* heap words in the most recently collected process */
@@ -157,11 +213,74 @@ struct NvScheduler {
 	 * sets this field.
 	 */
 	void (*gcidlestep)(NvScheduler *);
-	uvlong maxtermwork;	/* D080: per-traversal visit ceiling for spawned processes; 0 = none */
 	int profile;		/* opt-in real monotonic elapsed timing, default off */
 	uvlong execns;		/* includes host callbacks and nested spawn time */
 	uvlong gcns;		/* demand + idle collection, excludes startup */
 	uvlong spawnns;		/* all spawn attempts; overlaps execns for bytecode spawn */
+};
+
+/*
+ * D064: lastexit and rootvalue are fragments owned by the scheduler
+ * (taken from the exiting NvExec), freed by nvschedfree. rootvalue is
+ * the root's return value after NvRootDone and its exit reason after
+ * NvRootExit; nil otherwise.
+ *
+ * D087: this is the shared "machine" half -- state every scheduler proc
+ * reads (runtime, module, host table, clock, io, limits) plus the root
+ * tracking and completion totals that are aggregated, not per proc.
+ * Per-proc state lives in sched[i] (see NvSched above); nvschedinit
+ * allocates sched[0..nsched-1] and nvschedfree releases them.
+ */
+struct NvScheduler {
+	NvRuntime runtime;
+	NvModule *module;
+	NvExecHost host;	/* D065: one table shared by every process's NvExec */
+	NvClock clock;
+	NvIO io;
+	uvlong quantum;
+	NvSched **sched;	/* D087: malloc'd array (NvMaxsched entries) of malloc'd per-proc state */
+	int nsched;		/* 1 from nvschedinit; nvschedsetnsched raises it */
+	/*
+	 * D081 stage 1 (M10-T01): the one runtime lock. Held for every
+	 * mutation of the process table, a mailbox, a run queue, a deadline
+	 * or the ref counter, and for every table scan step() makes;
+	 * released for the whole of nvexecrun, and never held across
+	 * clock.wait, tsemacquire, rfork or Bflush. It is a plain field,
+	 * not a pointer: nvmachinerun requires the NvScheduler itself to be
+	 * malloc'd (its runtime is shared state too), and the N=1 fixtures
+	 * that keep a stack NvScheduler never fork a scheduler proc, so a
+	 * stack QLock is fine there. Taken at N=1 as well, so the N=1
+	 * suites exercise the discipline (a QLock is not recursive: a
+	 * nested take deadlocks visibly instead of racing invisibly).
+	 * iolock (D086) serializes one print/eprint line and is never held
+	 * with lock.
+	 */
+	QLock lock;
+	QLock iolock;
+	/*
+	 * Whether lockrt actually takes `lock`. Set by nvschedsetnsched for
+	 * N>1 and by nvschedsetlocking (tests). Measured on M10-T01's first
+	 * landing: taking the uncontended lock at N=1 (7.4 acquisitions per
+	 * ring hop) cost 13-17% of wall time on message-heavy shapes, so
+	 * N=1 skips it; a deterministic fixture that wants the nested-take
+	 * check turns it on explicitly.
+	 */
+	int locking;
+	/*
+	 * D085: idle/termination state, all under lock. idlemask bit i is
+	 * set while scheduler i is between "found nothing to do" and "woke
+	 * from its sleep"; nidle is its population count. stopping is one of
+	 * the NvStop values below once the machine has decided to end;
+	 * stoperr carries a scheduler error's text. finished is the malloc'd
+	 * semaphore each forked scheduler proc releases once as its last
+	 * act; the main proc collects nsched-1 credits before teardown.
+	 */
+	uvlong idlemask;
+	int nidle;
+	int stopping;
+	long *finished;
+	char stoperr[128];
+	uvlong maxtermwork;	/* D080: per-traversal visit ceiling for spawned processes; 0 = none */
 	uvlong completed;
 	uvlong faulted;
 	uvlong exited;
@@ -176,6 +295,34 @@ struct NvScheduler {
 };
 
 int nvschedinit(NvScheduler *, NvModule *, NvLimits *, uvlong, uvlong, char *, int);
+/*
+ * M10-T01 (D087): configure n scheduler procs, 1..NvMaxsched. nvschedinit
+ * leaves the machine at n == 1 and every existing caller stays there.
+ * Must be called before the root is spawned and before any process
+ * exists (ownership is fixed at spawn, D083): "scheduler count fixed
+ * once a process exists" otherwise. Grows the runtime's run queues and
+ * allocates sched[1..n-1]; on failure the machine keeps its previous
+ * count and remains usable. Does not start any proc: that is
+ * nvmachinerun's job.
+ */
+int nvschedsetnsched(NvScheduler *, int n, char *, int);
+/* M10-T01: force the runtime lock on (or off) at N=1; see NvScheduler.locking. */
+void nvschedsetlocking(NvScheduler *, int on);
+/*
+ * M10-T01 (D085/D087): run the machine to completion with nsched
+ * scheduler procs: forks sched[1..nsched-1] (rfork RFPROC|RFMEM|RFNOWAIT),
+ * runs sched[0] on the calling proc, waits for every forked proc to
+ * finish, and returns NvSchedDone (nlive reached 0), NvSchedIdle (D046
+ * deadlock), or NvSchedError with the first scheduler error in err.
+ * The NvScheduler and everything it points at must be malloc'd: a
+ * forked proc shares data and heap but not the caller's stack. Root
+ * outcome is in rootstate/rootvalue as after an nvschedstep loop. At
+ * nsched == 1 nothing is forked and the result is what the nvschedstep
+ * loop would have produced. nvmachineinterrupt, callable from a note
+ * handler, makes a running machine stop with NvSchedError "interrupted".
+ */
+int nvmachinerun(NvScheduler *, char *, int);
+void nvmachineinterrupt(NvScheduler *);
 /*
  * D050: nvschedinit installs a default production clock (uptime/sleep).
  * nvschedsetclock overrides it; pass nil to restore the default. Tests

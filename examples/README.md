@@ -14,10 +14,12 @@ Current examples, roughly in reading order:
 - `protocol.nv` - binaries (milestone 09 exit criterion): a length-prefixed protocol. Frames `<<length:16, payload/binary>>` are sent to a consumer in chunks that split frames; the consumer buffers and decodes every complete frame, waiting when one is incomplete. Root value `${<<104, 105>>, <<1, 2, 3>>, <<>>, 3}`.
 - `ioserver.nv` - I/O as messages: clients send Ref-correlated requests to a device process and receive completions, never calling `print` themselves. The client code would not change if the device lived on another scheduler or another node.
 
+Every example runs unchanged under `-p N` (milestone 10); `sieve.nv` and `ring.nv` are the two used to accept multicore correctness (`nervous -s -p 4 -r examples/sieve.nv main 5000`, `nervous -s -p 2 -r examples/ring.nv main 1000 2000`). `bench/cpubound.nv` is the CPU-bound shape and lives under `bench/` because its purpose is measurement.
+
 Still wanted (in the order the language will be able to express them):
 
 - a receive-timeout example on its own;
 - a registry/key-value server (wants lists or maps to be interesting);
-- multicore process fan-out (milestone 10).
+- a multicore fan-out example whose output demonstrates, rather than merely tolerates, several schedulers -- something with observable per-scheduler behaviour (`self` distribution, `-s` rows), once `tests/multicore/` has settled the shapes.
 
 `sieve.nv`, `ring.nv`, `isolation.nv`, `ioserver.nv`, and `protocol.nv` are run by `tests/run.rc` (`isolation`/`ioserver` against goldens under `tests/process/cli/`, `protocol` against `tests/frontend/protocol.out`, both from source and from saved bytecode), so changing their output means updating the check. Edge cases and malformed programs belong under `tests/` instead.

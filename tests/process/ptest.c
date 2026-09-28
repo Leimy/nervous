@@ -257,6 +257,8 @@ main(void)
 	NvPattern pattern[2], pe[2];
 	NvPatClause clause[2];
 	NvBindings bindings;
+	NvProcess *pp;
+	ulong before;
 	char err[128];
 	int which, rc;
 
@@ -355,14 +357,45 @@ main(void)
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "dispatch waiting receiver");
 	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && nvprocat(&runtime, nvpidslot(p2))->state == Prwaiting, "receive transitions running to waiting");
 	check(nvprocyield(&runtime, p2, err, sizeof err) < 0 && strcmp(err, "bad_state") == 0, "waiting process cannot yield");
+	/*
+	 * M10-T01 (D081): nvprocdispatch marked p2 oncpu and nothing has
+	 * taken it off yet, so this models a sender on another scheduler
+	 * that sees Prwaiting while the receiver is still inside its
+	 * quantum. The wake must be deferred (pendingwake), not enqueued --
+	 * a running process on a run queue is the bug this exists to
+	 * prevent -- and a second sender in the same window must not make
+	 * it wake twice. nvprocoffcpu, which the scheduler calls when
+	 * nvexecrun returns, then performs the one enqueue.
+	 */
+	pp = nvprocat(&runtime, nvpidslot(p2));
+	before = runtime.runq[0]->nrunnable;
 	v = nvatom("wake");
-	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && nvprocat(&runtime, nvpidslot(p2))->state == Prrunnable, "send wakes waiting process once");
+	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && pp->state == Prwaiting && pp->oncpu && pp->pendingwake &&
+		runtime.runq[0]->nrunnable == before, "send to a waiting process still on the CPU defers the wake");
+	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && pp->state == Prwaiting && pp->pendingwake &&
+		runtime.runq[0]->nrunnable == before, "a second send in the same quantum defers idempotently");
+	check(nvprocoffcpu(&runtime, p2) == 1 && pp->state == Prrunnable && !pp->oncpu && !pp->pendingwake &&
+		runtime.runq[0]->nrunnable == before+1, "leaving the CPU performs the deferred wake exactly once");
 	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "redispatch woken receiver");
 	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 1, "woken receive consumes message");
+	nvfragfree(got);
+	nvbindingsfree(&bindings);
+	/* The second window's message is still queued; drain it so the next receive blocks. */
+	check(nvprocpop(&runtime, p2, &got, err, sizeof err) == 1 && nvtermkind(got->root) == Vatom, "second deferred-window message retained");
+	nvfragfree(got);
+	/* The other half: a wake of a waiting process that is OFF the CPU enqueues immediately. */
+	memset(&bindings, 0, sizeof bindings);
+	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 0 && pp->state == Prwaiting, "receive blocks again on the emptied mailbox");
+	check(nvprocoffcpu(&runtime, p2) == 0 && !pp->oncpu && !pp->pendingwake && pp->state == Prwaiting &&
+		runtime.runq[0]->nrunnable == before, "leaving the CPU with no deferred wake changes nothing");
+	check(nvprocsend(&runtime, p2, v, err, sizeof err) == 1 && pp->state == Prrunnable && runtime.runq[0]->nrunnable == before+1,
+		"send to a waiting process off the CPU wakes it immediately, once");
+	check(nvprocdispatch(&runtime, p2, err, sizeof err) == 0, "redispatch immediately woken receiver");
+	check(nvprocreceive(&runtime, nil, p2, clause+1, 1, &bindings, &which, &got, err, sizeof err) == 1, "immediately woken receive consumes message");
 	check(nvprocyield(&runtime, p2, err, sizeof err) == 0, "yield woken receiver");
 	nvfragfree(got);
 	nvbindingsfree(&bindings);
-	print("ok - explicit process lifecycle transitions\n");
+	print("ok - explicit process lifecycle transitions, deferred and immediate wakes\n");
 
 	/* D061: a PID is an immediate word, so "copying" one is a bare assignment. */
 	stale = p1;

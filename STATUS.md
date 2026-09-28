@@ -5,11 +5,17 @@ Operational source of truth. Settled design is in `docs/decisions.md`; benchmark
 ## Checkpoint and authorization
 
 ```text
-milestone: 08 - Memory, COMPLETE; 09 - Binaries, COMPLETE (T05 results
-  recorded in bench/README.md "First run"); R3 - Memory review, OPEN
-checkpoint: M09 closed on the user's `rc bench/latency.rc` output.
-  R3-F02 closed: user confirmed `rc tests/run.rc` and
-  `nervous_gcstress=1 rc tests/run.rc` pass with the lib/value.c guard.
+milestone: 08, 09, R3 COMPLETE; 10 - Multicore IN PROGRESS: T00a, T00b,
+  T01 landed and accepted (round 3, all three suites + -p runs +
+  benchcmp green, user-run).  See "ROUND 3 RUN RESULTS" below for the
+  numbers and "T01 STILL OPEN" for what remains before T02.
+checkpoint: M10-T01 round 3 accepted on the user's run.  Docs brought
+  current in the same session: README.md ("Multicore", current position,
+  handoff), docs/semantics.md (scheduling paragraph, D086 restatement),
+  docs/architecture.md (Scheduler section), docs/README.md,
+  docs/questions.md (M10 answered/sharpened), docs/decisions.md (D083 and
+  D085 amendments), milestones/10-multicore.md ("M10-T01 -- landed"),
+  bench/README.md ("M10-T01"), man/1/nervous (-w, -p, -s rows).
 implementation: none active.  Coordinator is Claude.  Sub-agent policy
   revised (see /usr/dave/local_models.md, "Economic Review"): cloud
   Sonnet for bounded read-only audits, coordinator for edits; local
@@ -18,11 +24,9 @@ active source assignment: none (coordinator implemented D080 directly;
   write set released on build).
 next: M10-T00a (segmented process table, D082) is DONE: all three suite
   invocations pass (user-run).  Uncommitted; suggested message
-  "M10-T00a: segmented process table (D082)".  bench/run.rc has not been
-  rerun on it yet -- do that before or alongside T00b so any indirection
-  cost is attributed to the right change.  Next: cut M10-T00b (machine/
-  scheduler split, owner field, counters, -p parsing; spec in
-  milestones/10-multicore.md "Tasks").
+  "M10-T00a: segmented process table (D082)".  bench/run.rc was
+  rerun after T00b step 1 (bench/runs/T00b-small.txt, counts identical);
+  T00b steps 2-6 are built on top and awaiting the suite (see below).
   T00a lesson: nvprocat is a macro that evaluates its slot argument
   twice; the first build passed `r->nslot++` and the root spawned into
   slot 1 while queued/pid'd as slot 0 (`scheduler: bad_pid`, 0
@@ -42,6 +46,355 @@ next: M10-T00a (segmented process table, D082) is DONE: all three suite
   bench/run.rc within noise.  Then T00b (spec in milestones/10-multicore.md
   "Tasks").  Suggested commit: "M10-T00a: segmented process table (D082)".
   Note the design docs (D081-D089 etc.) are also uncommitted.
+
+M10-T00b partial (local-model evaluation session, see
+  /usr/dave/local_models.md "Qwen3-Coder-Next -- Evaluated"): the `-p N`
+  parsing slice landed -- `NvMaxsched = 64` enum in include/nvsched.h
+  (before the NvSched* state enum); cmd/nervous/main.c gains `-p
+  schedulers` in usage, `vlong nsched` (default 1), `case 'p'` validating
+  1..NvMaxsched via parseint with a "bad -p" diagnostic, and a post-
+  ARGEND rejection of N>1 as "multicore not yet enabled" (exits
+  "unsupported").  Drafted by local Qwen3-Coder-Next to an exact spec,
+  coordinator-verified line by line; `mk nervous tests benchmarks` clean.
+  nsched is not yet threaded into runscheduled -- the rest of T00b
+  (machine/scheduler split, owner field, counters, -s rows) is still open
+  and should consume it.  Uncommitted.
+  T00b step 1 -- NvSched split, BUILT, NOT YET RUN.  include/nvsched.h
+  now has `struct NvSched` (coordinator-written) holding every per-proc
+  field that previously lived on NvScheduler: currentslot/generation/
+  valid, dispatches, reductions, timerwakes, collections, gcfailed,
+  last/maxlivewords, gcinput/outputwords, gcdemand, gcidle,
+  gcoutstanding, gcofffallback, gcsem, gchold, gclaunched, gccredits,
+  gcidlestep, profile, execns, gcns, spawnns, plus `int index`.
+  NvScheduler keeps runtime/module/host/clock/io/quantum/maxtermwork,
+  completed/faulted/exited, root* and lastexit/lastfault, and gains
+  `NvSched **sched; int nsched;` (1).  nvschedinit mallocs sched[] and
+  sched[0] (D074: RFMEM does not share stacks); nvschedfree frees them
+  after gcdrain.  lib/sched.c converted (local Qwen draft; coordinator
+  removed five unused `sc` locals, fixed a declaration-after-statement
+  in gcdrain, hardened nvschedgchold, and rewrote nvschedstep to use
+  one `sc` instead of eight `s->sched[0]->` derefs on the dispatch
+  path).  main.c printstats reads s->sched[0]->*.  Fixtures converted
+  by text-only renames (local Qwen, one file per exchange, ledgers
+  reported): tests/process/iotest.c, schedtest.c; tests/memory/
+  autotest.c, offloadtest.c; bench/perftest.c, largelive.c, latency.c.
+  Two over-conversions of `completed` (iotest, autotest) were caught by
+  the compiler and reverted; no assertion VALUE was changed per the
+  ledgers, but the user should eyeball `git diff tests bench` -- every
+  hunk should be a bare `sched[0]->` insertion.  `mk nervous tests
+  benchmarks` clean, no warnings.  bench/run.rc RUN by the user and
+  saved as bench/runs/T00b-small.txt: counts identical to T04p, ns/msg
+  -44% across every shape (spans all of M09, not attributable to T00),
+  ring-10 high-water +376% from D082 chunk granularity (expected;
+  recorded in bench/README.md).  Acceptance still owed: the three suite
+  invocations (which also cover the T00a rerun).
+  New tool: bench/benchcmp (bench/benchcmp.c, `mk benchmarks`) parses
+  one or two saved run.rc captures and prints a table with per-shape
+  deltas, counts compared exactly, costs by percent with a -t threshold;
+  exit status "counts" if any count differs.  Qwen draft from a spec
+  with a Bio API crib; coordinator fixed accumulation bugs in the
+  summary tallies, a ulong/%llud mismatch, column widths, and collapsed
+  60 lines of copy-pasted cost comparison into one helper.  Compiles;
+  NOT YET RUN -- smoke test is `bench/benchcmp bench/runs/T00b-small.txt
+  bench/runs/T00b-small.txt`, expected "6 shapes compared, 0 count
+  changes, 0 cost flags".  Future run.rc runs: `rc bench/run.rc >[2]
+  bench/runs/<tag>-small.txt` then benchcmp against T00b-small.txt.
+  T00b steps 2-6 BUILT (coordinator, this session), NOT YET RUN; `mk
+  nervous tests benchmarks` clean, no warnings.  What landed:
+  (2) run queue: new `NvRunq {head, tail, nrunnable, enqueues}` in
+  include/nvproc.h; NvRuntime has `NvRunq **runq; int nrunq` (malloc'd,
+  runtime-owned, one made by nvruntimeinit; `nvruntimesetnrunq(r, n)`
+  grows to n <= NvMaxsched, which moved from nvsched.h to nvproc.h);
+  NvSched.runq points at runtime.runq[index].  process.c runenq/runrm
+  pick the queue by `p->owner` (static runqof); `nvprocrunhead(r, sched,
+  &slot)` gained the scheduler index.  (3) `NvProcess.owner` (int), set
+  by new `nvprocspawnon(r, owner, ...)` before runenq; `nvprocspawn` is
+  the owner-0 wrapper so ptest.c and friends did not change.
+  Rejects a missing queue with "bad_scheduler".  (5) `void *NvExec.sched`
+  (opaque NvSched*), set in step() right before nvexecrun and cleared
+  right after; currentpid(e) reads it (nil -> bad_process_context);
+  hostspawn passes e->sched so a bytecode child is owned by the
+  spawner's scheduler; nvschedspawn (host) uses sched[0].  (4) D088
+  counters on NvSched (remoteenq, stealstaken/given, wakessent/recv,
+  sleeps/sleepns, lockacq/lockwaitns -- all 0 until T01; deadline
+  fires = timerwakes; arrivals counted at NvRunq.enqueues); main.c
+  printstats now sums dispatches/reductions/timerwakes/collections/
+  gcfailed over sched[], takes max of maxlivewords, keeps "last" from
+  sched[0], and appends one `stats: sched N: ...` row per scheduler
+  AFTER the unchanged totals lines (benchcmp ignores the row).  (6)
+  runscheduled(..., nsched, stats); the N>1 "multicore not yet enabled"
+  refusal moved from main() into runscheduled, so -p is like -s:
+  accepted and ignored by -x/-t/-c.  Also: sched.c's GC helpers
+  (gcsample, gcwait, doinline, collect, gcfold, gcfoldall, gcdrain) take
+  an explicit NvSched*; nvschedstep is now a facade over `static step(s,
+  sc, ...)`; every process-table scan in step() and gcfoldall filters on
+  `p->owner == sc->index` (no-op at N=1); nvschedfree/nvschedgchold loop
+  over nsched.  Fixture edits (mechanical, value-preserving unless
+  noted): schedtest.c (runhead index arg; runq fields via sched[0]->runq;
+  NEW check that parent/child owner == 0), autotest.c tablegrowth
+  (r.runq[0]->...; NEW checks: owner == 0, spawn onto missing queue ->
+  bad_scheduler, nvruntimesetnrunq(2) then spawn/head/exit on queue 1),
+  autotest.c requests/receivetake, r2test.c belowcursorfairness,
+  bench/largelive.c + latency.c (nrunnable via sched[0]->runq).
+  FIRST RUN RESULT: `nervous: nvschedfree: 1 collector(s) never
+  signalled` after ~100 s.  Diagnosed (not reproduced -- no exec here)
+  as a pre-existing use-after-free in offloadtest.c's holdfalseidle:
+  the hook fakes every fold while the real children are parked, so
+  nothing waits for them; drive() then frees the four NvExecs within
+  microseconds and each child, waking up to 5 ms later, does
+  lock(&e->heap.lock) on freed memory -- benign while the freed block
+  held a zero lock word, a forever-spinning child (never semrelease's)
+  once T00b's larger NvExec/NvProcess changed what lands there.
+  Production is not exposed: a real fold only sees idle after the child
+  published it, and the child's only touch after that is gcsem, which
+  outlives the credits drain.  FIX (built, not run): holdfalseidle now
+  tsemacquire's each of the N credits (counting them into gccredits)
+  right after releasing the hold and before driving, so every child is
+  provably finished with e while e is alive.  ALSO: NvGcdrainmax 5000
+  -> 500 (10 s, not 100 s, before nvschedfree's sysfatal; it is a
+  failure detector, a collector finishes in ms).  If the sysfatal
+  recurs, the suite output will say which binary; report it -- that
+  would mean a second cause.
+  T00b ACCEPTED: user reports the suite passes with the holdfalseidle
+  fix ("seems to work now").  Still worth doing once, not blocking: a
+  NEW capture `rc bench/run.rc >[2] bench/runs/
+  T00b-full.txt` compared with the tool against the step-1 capture:
+  `bench/benchcmp bench/runs/T00b-small.txt bench/runs/T00b-full.txt`
+  (there is no T04p file -- T04p exists only as a README table; the
+  step-1 capture is the first saved one and is the baseline from here
+  on, as bench/README.md says).  Expect 0 count changes and no cost
+  flags; the new `stats: sched 0:` row is ignored by benchcmp.
+  Suggested commit once green: "M10-T00b: machine/scheduler split,
+  per-scheduler run queue, owner, D088 counters, -p".
+  M10-T01 steps 1-6 and 8 BUILT (coordinator), NOT YET RUN; `mk nervous
+  tests benchmarks` clean, no warnings.  User approved the T01 spec and
+  D090.  What landed:
+  (8) D090 recorded in docs/decisions.md; lib/exec.c: new
+  `nvexecinternmodule(m)` interns every Katom + the four fixed atoms;
+  called by nvschedinit (once, before any proc) and nvexecinitw (no-op
+  scan after the first); fixedatom/boolatom are pure reads; Oloadk/
+  Otestatom fault `bad_constant` on a NvNil atom instead of interning;
+  the five fixed-atom fault sites say bad_constant, not out_of_memory
+  (all unreachable for a live exec).
+  (1) `nvschedsetnsched(s, n, err, nerr)` (nvsched.h/sched.c): before
+  the root spawn only; grows runq[] via nvruntimesetnrunq, allocates
+  sched[1..n-1] via new static schedalloc (also used by nvschedinit;
+  sched[] is now sized NvMaxsched up front).
+  (2) `QLock lock` and `QLock iolock` EMBEDDED in NvScheduler (spec said
+  malloc'd pointer; changed because nvmachinerun needs the whole
+  NvScheduler malloc'd anyway -- it holds the runtime -- and fixtures at
+  N=1 never fork a scheduler proc, so their stack QLock is fine).
+  lockrt(s, sc)/unlockrt(s) in sched.c count lockacq/lockwaitns
+  (profile-gated clock).  TAKEN AT N=1 TOO, deliberately: QLock is not
+  recursive, so a nested take in the N=1 suites deadlocks visibly rather
+  than racing invisibly at N>1.  Held: step() from entry through
+  nvprocdispatch, released for nvexecrun, retaken for post-run
+  bookkeeping through nvprocexit; every host callback (send, ref, spawn,
+  recv*, deadline) for its own runtime call; nvschedspawn.  Released
+  across: nvexecrun, clock.wait, every tsemacquire, rfork, and an INLINE
+  collection -- collect() marks heap.owner = NvHeapCollecting under the
+  lock first and nvprocsteal refuses a non-idle heap, so the process is
+  unmovable while collected with the lock free (D089 kept).  print/
+  eprint: iolock around print+newline+flush (D086), never with lock.
+  (3) NvRuntime.wakehook(aux, from, owner)/wakeaux, called from new
+  `nvprocwakefrom(r, from, slot)` (nvprocwake = from -1);
+  `nvprocsendfrom(r, from, ...)` (nvprocsend = from -1); hostsend passes
+  e->sched->index; deadline wakes pass sc->index.  sched.c's wakehook:
+  from != owner -> remoteenq++; if owner's idle bit set -> clear it,
+  nidle--, semrelease(owner->sem), wakessent++.  Own-queue pushes need
+  no hook: step() kicks the lowest idle scheduler (kickidle) once per
+  dispatch when idlemask != 0 && own queue still non-empty.
+  (4) `nvprocsteal(r, slot, newowner)` in process.c (Prrunnable, not
+  offlaunched, heap idle; runrm/owner=/runenq).  sched.c: trysteal
+  (head of the most loaded other queue, one candidate), idle() = the
+  D085 protocol (lock; stopping? steal? drain stale sem credits; set
+  bit; machineidle() -> NvStopIdle; else sleep bound = deadlinems(wakeat)
+  or NvGcwaitmaxms, capped at NvGcwaitms if gcoutstanding; tsemacquire
+  with lock released; clear bit if still set).  NvSched gained `long
+  *sem`, `wakeat`, `wakeatvalid`.  step() split: `idlestep()` (lock held
+  on entry, released on every return) is the old idle branch; at N>1 it
+  NEVER blocks -- the three blocking points (clock.wait, two gcwaits)
+  return NvSchedIdle with wakeat/wakeatvalid set instead; at N=1 they
+  block as before with the lock released around the wait.  At N>1 an
+  expired deadline found by idlestep is woken there (now >= earliest).
+  (5) NvScheduler gained idlemask/nidle/stopping/stoperr/finished and the
+  NvStop* enum; stopmachine() (first reason wins, semrelease every sem);
+  machineidle() = nidle == nsched && every sched has gcoutstanding 0,
+  !wakeatvalid, empty queue.  gcdrain now RETURNS -1 with a message
+  (nvschedfree sysfatals on it; a forked proc records it in stoperr) and
+  takes the lock around each gcfoldall walk.  nvmachineinterrupt(s) sets
+  NvStopInterrupt without the lock and wakes all -- NOT yet wired to a
+  note handler in main.c.
+  (6) `nvmachinerun(s, err, nerr)`: rfork(RFPROC|RFMEM|RFNOWAIT) for
+  sched[1..n-1] (each runs schedproc then _exits), schedproc(sched[0])
+  inline, tsemacquire(finished, 60 s) per forked proc (sysfatal if one
+  never finishes), maps stopping -> NvSchedDone/Idle/Error.  schedproc:
+  loop while !stopping: step; Progress continue; Done/Error ->
+  stopmachine; Idle -> idle().  Then gcdrain; forked procs semrelease
+  finished last.  main.c runscheduled: NvScheduler and both Biobufs are
+  now MALLOC'D (mallocz / Bfdopen -- forked procs share heap, not the
+  main proc's stack); calls nvschedsetnsched(nsched) then nvmachinerun
+  for every N (the "multicore not yet enabled" refusal is gone).
+  NOT done yet: (7) docs/semantics.md D086 restatement; (9) bench/run.rc
+  -p rows; tests/multicore/ fixtures (order.nv, migrate.nv, exitstorm.nv,
+  mctest.c, README) -- candidates for Coder-Next, disjoint new files;
+  the post-landing Sonnet lock-discipline audit.
+  ROUND 1 RUN (user) RESULTS: cpubound 5600000 at N=1/2/4, work spread
+  evenly (dispatches ~54K per sched at -p 4), N=1 0.60 s, -p 2 0.77 s,
+  -p 4 0.90 s -- NO speedup: cpubound.nv collects at nearly every
+  dispatch (215385 GC / 215393 dispatches, 272 red/dispatch: 11 live
+  words, 3-word tuple per iteration, D069's 64-word minimum space fills
+  every ~20 iterations), so it measures dispatch+collect overhead, not
+  CPU; needs a fixture with a bigger live set or a larger minimum space
+  (measure first).  ring 1000 2000 = 2000000 at -p 2 (1.93 s vs 0.94 s)
+  and -p 4 (4.68 s): correct; slowdown = global lock + steal CHURN
+  (120K steals each at -p 2: one runnable token stolen back and forth).
+  FAILURES: (a) tests/run.rc `binfault-overflow`: empty fault line in
+  all three suite variants -- main.c used Bfdopen, and Bterm CLOSES a
+  Bfdopen'd stream's fd, so every fprint(2,...) after Bterm(berr) was
+  lost (fault line, `scheduler:` error line, deadlock line).  (b) sieve
+  5000 at -p 4 stopped after 13 processes with NO message (same fd bug
+  hid it) -- almost certainly the on-CPU wait race: hostrecvwait marks
+  Prwaiting a few instructions before the interpreter yields; at N>1 a
+  remote sender sees Prwaiting in that window, wakes and ENQUEUES a
+  process that is still running (step's post-run check then reports
+  "yielded process has bad lifecycle state"; worse, a third scheduler
+  could steal and run it concurrently).  benchcmp T00b->T01 at N=1:
+  +13-17% wall on rings/waiters, +5% sieve (7.4 lock acquisitions per
+  ring hop), +33 KB fixed high-water (malloc'd Biobufs + machine).
+  ROUND 2 CHANGES (built clean, not run): main.c malloc+Binit instead of
+  Bfdopen (Bterm now only flushes).  NvProcess.oncpu/pendingwake (BEAM's
+  RUNNING/ACTIVE split): nvprocdispatch sets oncpu; nvprocwakefrom on an
+  oncpu process sets pendingwake and returns without enqueueing; new
+  `nvprocoffcpu(r, pid)` -- called by step under the lock right after
+  nvexecrun -- clears oncpu and performs the deferred enqueue (returns 1;
+  step's NvYield check then accepts Prrunnable); both cleared at exit
+  and slot reuse.  NvStealmin = 2: trysteal only from a queue with >= 2
+  runnable, kickidle only when >= 2 remain after the pop (a lone runnable
+  is run by its owner; remote wakes onto an idle owner still kick).
+  NvScheduler.locking: lockrt/unlockrt are no-ops unless set; set by
+  nvschedsetnsched (N>1) or new nvschedsetlocking(s, on) for fixtures
+  (never off at N>1).  N=1 therefore no longer takes the lock.
+  ROUND 2 RUN OWED (same commands as round 1; expectations: all three
+  suites pass; sieve -p 4 prints all primes + 'ok, or a VISIBLE
+  `scheduler:` line; ring -p 2 steals should collapse to ~0 and wall
+  should improve vs 1.93 s; benchcmp T00b->T01 at N=1 should be within
+  noise).  Then commit.
+  ROUND 2 RUN RESULTS: (a) all three suites FAILED at ptest "send wakes
+  waiting process once" -- the fixture drives nvprocdispatch bare (so
+  oncpu is set), hand-drives the receive to Prwaiting, then sends and
+  expects Prrunnable; under D081 that wake is correctly DEFERRED
+  (pendingwake) because nothing ever called nvprocoffcpu.  ptest was the
+  only bare-dispatch fixture (Haiku audit of the other 8 fixtures +
+  identity replace_string probes on autotest/r2test/offloadtest: zero
+  nvprocdispatch calls).  Because the suite stops at the first failure,
+  nothing after ptest ran in round 2.  (b) sieve -p 4 PASSED (all primes
+  + 'ok; steals 6-404 per sched, not 0 -- fine).  (c) ring -p 2 HUNG.
+  Diagnosis: a lost-wakeup window in idle(): idlestep returns Idle and
+  releases the lock; a remote wake then enqueues onto THIS queue and,
+  seeing no idle bit, sends no kick; idle() then set the bit and slept
+  the full NvGcwaitmaxms (60 s) with a runnable on its own queue, never
+  re-checking it.  Round 1 was hiding this: trysteal at >= 1 let the
+  other scheduler take the lone token off the sleeper's queue (part of
+  the 120K ring steals); NvStealmin = 2 removed that accident, so both
+  schedulers slept and the ring stalled 60 s per occurrence.
+  ROUND 3 CHANGES (built clean, not run): lib/sched.c idle() now calls
+  finddispatchable on its own queue under the lock, before trysteal and
+  before setting the idle bit (finddispatchable rather than nrunnable so
+  a queue whose runnables are all under off-process collection still
+  sleeps bounded rather than spinning).  tests/process/ptest.c lifecycle
+  block rewritten to the D081 contract and extended: send while oncpu
+  defers (state Prwaiting, pendingwake, queue length unchanged), a second
+  send in the window is idempotent, nvprocoffcpu returns 1 and enqueues
+  exactly once, then (mailbox drained) a receive blocks again, offcpu
+  with nothing pending returns 0, and a send to the now off-CPU waiter
+  makes it Prrunnable immediately.  Its ok line is now "ok - explicit
+  process lifecycle transitions, deferred and immediate wakes".
+  ROUND 3 RUN RESULTS (user): ACCEPTED.  All three suite invocations
+  pass END TO END (first time every fixture after ptest ran on T01 code).
+  sieve -p 4: correct, sleeps 3-6 per sched (was 118), 0.69 s.  ring
+  -p 2: 2000000, 1.303 s (round 1: 1.93 s; N=1: 0.83 s), steals 18
+  total (was ~120K); sched 0 did 1.97M dispatches, sched 1 36K -- the
+  18 nodes stolen during build each cost a remote wake + kick + sleep
+  cycle (~34K sleeps per sched), and 16.3M lock acquisitions (~8 per
+  hop) is the stage-2 number.  ring -p 4: 2000000, 1.485 s.  cpubound
+  -p 4: 5600000, 0.886 s, no speedup (GC per dispatch, as diagnosed in
+  round 1); sched 2 got 0 dispatches -- 4 workers, NvStealmin=2 left no
+  backlog by the time it woke (load-balance data point for T03, not a
+  bug).  benchcmp T00b->T01 at N=1 (bench/runs/T01-small.txt): 0 count
+  changes, 0 cost flags, every shape within +-2.6%; the round-1 +13-17%
+  is gone (lock off at N=1); ring 10 high-water +8.3% is the fixed
+  malloc'd machine/Biobufs against a 98 KB baseline.
+  Docs: D083 gained the NvStealmin amendment, D085 the own-queue
+  re-check amendment (its text already said "every queue"; the first
+  landing only checked the others).
+  Suggested commit (everything since T00b): "M10-T01: N scheduler procs
+  under the stage-1 lock; oncpu/pendingwake wake deferral; idle protocol
+  with own-queue re-check; NvStealmin; D090 atom pre-intern; -p live".
+  T01 CLOSE-OUT (after round 3, same session, coordinator, no sub-agent
+  spend): (7) docs/semantics.md restatement DONE.  (9) bench/run.rc
+  gained `multi` (-p 1/2/4 x ring/sieve/cpubound via `benchp`; header
+  carries `-p N` after the args so benchcmp keys are distinct; at -p>1
+  dispatch/reduction count changes are expected, documented in the
+  script) -- NOT YET RUN; T03 runs it.  Note handler DONE: main.c
+  `interrupt` (atnotify around nvmachinerun, "interrupt" only, calls
+  nvmachineinterrupt; every proc in the note group runs it, harmlessly);
+  nvmachinerun's `finished` wait now retries on -1 instead of dying.
+  Lock-discipline audit DONE by the coordinator reading sched.c end to
+  end: all five questions clean (pairing on every return path; iolock
+  only from inside a quantum; nothing held across nvexecrun/clock.wait/
+  tsemacquire/rfork/doinline; every scan under the lock; heap Lock only
+  inside the QLock or alone, one word).  One observation, commented in
+  step(): the root-exit nvfragcopy runs under the lock, once per run,
+  accepted.  nvprocsteal's offlaunched guard confirmed present in
+  process.c (one reference).  Build clean.  NOT VERIFIED BY RUN: the
+  note handler and the finished-wait retry need `rc tests/run.rc` plus
+  one interactive check (`nervous -p 2 -r examples/ring.nv main 1000
+  200000`, DEL it, expect "scheduler: interrupted" and exit status run,
+  no orphaned procs in `ps`).
+  tests/multicore/ WRITTEN, NOT RUN: order.nv (required test 2, root
+  'ok), migrate.nv (test 3, 'ok; PID compared against the parent's
+  spawn-returned pid sent in as a message), exitstorm.nv (test 6,
+  ${'done, 20000}; -s dropped must be 19900), README.md (what each
+  proves/does not; tests 4 and 5 and the fragment-leak check deferred to
+  a C fixture mctest.c that needs a new NvSched idle hold hook -- not
+  written, because it cannot be validated without a run).  tests/run.rc
+  runs the three at -p 1/2/4 after the io-error check and before "all
+  passed"; a fixture failing at -p 1 is a fixture bug.  FIRST RUN OWED:
+  the three suite lines; if a fixture fails at -p 1 fix the fixture, if
+  only at -p 2/4 it is a real finding -- report the value and the -s
+  rows.  Then the DEL test above.  Then commit.
+  T01 STILL OPEN after that: mctest.c (test 4 hold point, leak check).
+  Known
+  performance facts to carry into T02/T03, not to fix now: -p N is
+  slower than N=1 on every message-bound shape (global lock ~8
+  acquisitions per hop; idle/kick/sleep cycle per cross-scheduler hop);
+  cpubound.nv needs a bigger live set or larger D069 minimum space
+  before it can show a speedup.
+  New fixture bench/cpubound.nv (T03's CPU-bound shape, D088): k workers
+  each sum (i*i)%7 for i=1..n in a pure tail-recursive loop and report one
+  message; root value for `main` (4 workers, 700000) should be 5600000
+  (period-7 residues sum to 14).  Coordinator-checked against lib/parse.c
+  but NOT yet run -- user: `nervous -r bench/cpubound.nv main` and
+  confirm 5600000 before wiring it into bench/run.rc (a `bench
+  $benchdir/cpubound.nv main 4 700000` line in the small set).
+  Finding 7 audit (run-time atom interning) ANSWERED, and it matters for
+  T01: yes, bytecode execution can call nvatom().  (a) lib/exec.c
+  fixedatom()/boolatom() lazily intern 'true/'false/'ok/'undefined into
+  FILE-SCOPE STATICS (cachedtrue etc.) on first use from Olt..Oge,
+  Oistype, Oprint/Oeprint, Orecvbegin/Orecvnext -- a real run-time
+  intern, and under RFMEM the statics are shared, so two schedulers'
+  first comparisons race on both the cache write and the table insert.
+  (b) Oloadk/Otestatom keep a "defensive" nvatom fallback when
+  k->atom == NvNil; nvexecinit pre-interns every Katom so it is normally
+  dead, but nvexecinit itself runs at every bytecode spawn (hostspawn ->
+  spawn -> nvexecinitw), scanning the shared m->konst.  (c) No nvatom in
+  sched.c/process.c; pattern.c reads via nvtermatom only.  Cheapest fix
+  for T01: pre-intern the four fixed atoms in nvschedinit (or nvverify)
+  so fixedatom never allocates, and make the Oloadk/Otestatom fallback a
+  fault rather than an intern; then nvatom needs no lock on any
+  interpreter path and D070's lock is for host/test code only.  Not yet
+  decided; record as a D0xx when T01 is cut.
 
 M10 opening -- the coordinator's full pre-implementation design review
   is in milestones/10-multicore.md ("Coordinator design review"): 7
@@ -123,8 +476,8 @@ Milestone 08 (Memory) and CLI-T01 are complete and accepted; their full narrativ
 |---|---|---|---|
 | 08 Memory | **complete** | R2, 05, 06 | none -- all tasks (T04a/b/p/e/c/r/d) accepted |
 | 09 Binaries | **complete** | 04, 08 | none -- T01-T05 done; T05 results in `bench/README.md` |
-| R3 Memory review | **open** | 08, 09 | Root/fragment/representation/binary ownership gate, plus the latency-isolation decision T05's numbers force (see below) |
-| 10 Multicore | not-started | R3, 05, 06, 08, 09 | Parallel schedulers and work movement |
+| R3 Memory review | **complete** | 08, 09 | none -- six findings fixed with regressions; D080 |
+| 10 Multicore | **in progress** | R3, 05, 06, 08, 09 | T00a/T00b/T01 landed (`-p N` live). Open: T01 fixtures + `-p` bench rows + lock audit + note handler; T02 deadline heap (D084); T03 measurement; T04 lock split if justified; R4 |
 | R4 Multicore review | not-started | 10 | Mandatory multicore acceptance review |
 
 ## Task ledger
@@ -165,7 +518,7 @@ Notes on the write sets. The three pattern files do different things and are spl
 
 ## Recommended next sequence
 
-**Milestones 08 and 09 are complete. R3 is open** and gates milestone 10. Done so far in R3: R3-F02 closed (user-tested); audit legs A1 (bin* opcodes) and A2 (roots, ownership transitions, mid-scan collection, idle sweep, off-process collector, GC rollback, table realloc) clean and logged; D080 decided and implemented for the latency-isolation leg (R3-F04, fixed-pending-verification: traversal visits charged as reductions at 8 per, optional `-w` ceiling). **R3 is complete.** D080 verified by measurement; coverage leg R3-A3 closed gaps 3a/3e/3f/4 with fixtures; the newly mandatory `nervous_gcstress=1 nervous_gcoffload=1` suite run exposed R3-F05 (off-process idle collections were no-ops since M08-T04c) and led to R3-F06 (teardown semrelease use-after-free); both fixed with regressions, and all three suite invocations pass on the final build. **Milestone 10 (Multicore) is open**: design accepted and recorded as D081-D089; M10-T00a (segmented process table) is cut and ready; T00b, T01-T04 and R4 staged in `milestones/10-multicore.md`.
+**Milestones 08 and 09 and R3 are complete.** R3 closed with six findings fixed with regressions (D080 work charging; R3-F05/F06 in the off-process collector), and the three suite invocations are the regression bar. **Milestone 10 (Multicore) is in progress**: design recorded as D081-D090; T00a (segmented table), T00b (machine/scheduler split) and T01 (N procs under the global lock) are landed and accepted -- `nervous -p N` works, N=1 cost is unchanged. The recommended order from here: (1) commit T01 (message in the checkpoint block); (2) finish T01's open items -- `tests/multicore/` fixtures (sub-agent candidates: disjoint new files), `bench/run.rc` `-p` rows, the note handler, and the read-only lock-discipline audit of `lib/sched.c`; (3) T02, the per-scheduler deadline heap and per-dispatch deadline check (D084, resolves R2-F16 and the "timers starve under load" finding); (4) T03 measurement, which first needs a `cpubound.nv` that does not collect on every dispatch; (5) T04 only if T03's numbers say so; (6) R4.
 
 ## T04q duplicate interpreter work (planned, optional, deferred; not a T04c dependency)
 
@@ -182,10 +535,10 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Representation/accounting: `include/nvvm.h`, `lib/value.c`. Tagged words, interned atoms, immutable sharing, independent fragments. Managed execution heaps are contiguous; host/startup construction still uses non-moving chunks.
 - Collector: `lib/gc.c`. Cheney copy; address classification includes adopted fragments and excludes stable external fragments. Source headers can be restored on failed trials; roots commit only after all fallible work. Small rollback scratch uses the C stack; the heap descriptor is reused only on successful commit.
 - Roots/reservations: `include/nvexec.h`, `lib/exec.c`. Active registers only, retained stack capacity charged, small root-view scratch on the C stack, NvCollect request/retry and guard-aware failure. Standalone servicing in `lib/vm.c` preserves the reduction budget.
-- Processes: `include/nvproc.h`, `lib/process.c`. Fragment mailboxes, non-consuming recvneed before take, geometric slot capacity and lowest-free hint. Retired slots can outnumber the configured live-process limit; FIFO links use indices.
-- Scheduler: `include/nvsched.h`, `lib/sched.c`. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
+- Processes: `include/nvproc.h`, `lib/process.c`. Segmented process table (D082: 1024-slot chunks, stable `NvProcess*`), fragment mailboxes, non-consuming recvneed before take, lowest-free hint. Retired slots can outnumber the configured live-process limit; FIFO links use indices. One run queue per scheduler (`NvRunq`, owned by the runtime, indexed by `NvProcess.owner`); `nvprocspawnon`, `nvprocsteal`, `nvprocwakefrom`/`nvprocsendfrom` with the runtime `wakehook`, and the `oncpu`/`pendingwake` wake deferral with `nvprocoffcpu` (M10-T01).
+- Scheduler: `include/nvsched.h`, `lib/sched.c`. `NvScheduler` is the shared machine (runtime, module, host table, clock, io, root, `QLock lock`/`iolock`, idle mask, stop state, `sched[]`); `NvSched` is one scheduler proc's state (run queue, `sem`, GC bookkeeping, D088 counters). `nvschedstep` is the N=1 facade over `step(s, sc)`; `nvmachinerun` rforks `sched[1..N-1]` and runs `schedproc` (step / idle / stopmachine) in every proc. Global lock held for runtime mutations, released across `nvexecrun`, waits, `rfork` and inline collection; not taken at N=1 (`locking`). Wake-to-home, `trysteal` at `NvStealmin = 2`, `kickidle`, `idle()` with own-queue re-check, `machineidle` termination, `gcdrain` per proc. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
 - Binaries (M09, D076-D079): `Bbin` terms in `include/nvvm.h`/`lib/value.c` (`nvbin`, `nvbinapp`); runtime matching in `lib/pattern.c`; nine `bin*` opcodes in `lib/exec.c`, verified in `lib/verify.c`; frontend in `lib/lex.c`, `lib/parse.c`, `lib/patcompile.c`, `lib/patbc.c`, `lib/compile.c`, `lib/format.c`.
-- CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-s` statistics. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
+- CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-w visits` traversal ceiling (D080), `-p schedulers` (M10-T01; `runscheduled` mallocs the machine and both Biobufs and runs `nvmachinerun` for every N), `-s` statistics with one `sched N:` row per scheduler. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
 - Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest`, `bench/largelive` and `bench/latency` (M09-T05).
 
 ## Remaining cautions
@@ -193,12 +546,14 @@ Source inspection found arithmetic results and call-target resolution computed d
 - `gcoffload` default (0, D075) and the idle-sweep cap (`NvGcsweepcap=8`, still unmeasured/provisional) are recorded; adaptive sizing and heap shrinking remain unimplemented. D069 defers shrinking; `docs/questions.md` records the remaining open policy questions (what would reopen the `gcoffload` default, the persistent-collector-pool idea).
 - Collector cost includes classification/freeing of adopted fragments and scratch/trial work, not just copying live words. Transient old/new/scratch space is not the retained-data maxheap budget.
 - Host malloc failure paths have source review but no deterministic injection coverage. Root descriptors, C pointers and custom host callback contracts are trusted; verifier guarantees apply to bytecode, not arbitrary host metadata.
-- Global atom synchronization and multi-scheduler ownership remain milestone-10 obligations; do not quietly expand T04q into that work.
-- post-R2-F01 is closed with D071 evidence. R2-F16 remains deferred to milestone 10. `REVIEW-impressions.md` is not declared wholly resolved; R3 remains a mandatory future gate.
+- Atom synchronization is settled by D090 (no interpreter path writes the table; host `nvatom` calls must not overlap a running machine). Multi-scheduler ownership is live (D083): the invariant "exactly one owner at every instant" rests on the global lock plus `oncpu`/`pendingwake`; the lock-discipline audit of `lib/sched.c` is still owed, and required tests 2-4 and 6 await `tests/multicore/`.
+- `RFMEM` shares data, bss and heap, not stacks: anything a forked scheduler or collector touches must be malloc'd. `nvmachineinterrupt` is not yet wired to a note handler. Deadlines are still slot-scanned at idle only (D084/T02 not landed), so `after` still cannot expire while anything is runnable, at every N.
+- Message-bound shapes are slower at N>1 than at N=1 (stage-1 lock, ~8 acquisitions per hop; one idle/kick/sleep cycle per cross-owner hop). Expected and measured, not to be "fixed" ahead of T03.
+- post-R2-F01 is closed with D071 evidence. R2-F16 is resolved by D084 when T02 lands. `REVIEW-impressions.md` is not declared wholly resolved; R3 remains a mandatory future gate.
 
 ## Resumption checklist
 
-1. R3 is open: read the checkpoint block's `next:` line and "Recommended next sequence", then `docs/review-findings.md` (R3 table) and `bench/README.md` ("M09-T05" -> "First run" -> "The R3 finding"). Milestone 09's task detail under "M09-Tasks" is history now. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
+1. M10 is in progress: read the checkpoint block (its head, then "ROUND 3 RUN RESULTS" and "T01 STILL OPEN"), "Recommended next sequence", then `milestones/10-multicore.md` ("M10-T01 -- landed" for what differs from the spec, then the T02 spec under "Staging"), and D081-D090. `bench/README.md` "M10-T01" has the first `-p` numbers. Milestone 09's task detail under "M09-Tasks" and the R3 material are history now. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
 2. Confirm actual source-control state with the user; preserve the accepted checkpoint before new edits. A commit message is not evidence of a commit. As of the M09-T04 checkpoint, the user reports committing and pushing (see "source control" in the checkpoint block).
 3. (Only if step 1's fast path doesn't apply) Read README, this status, `docs/semantics.md` (the normative contract; the `docs/` design-rationale files split from `nervous_design.md` are not), `milestones/09-binaries.md` and D076-D079 for milestone 09; for R3 preparation, `milestones/R3-memory-review.md` and D061-D075 (D074 especially, including its coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
 4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d), CLI-T01, and M09-T01..T04 are done, with their write sets released. M09-T05's row in "M09-Tasks (in progress)" has its exact write set; assign it and start.

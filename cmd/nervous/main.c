@@ -11,10 +11,32 @@
 
 static char *version = "nervous frontend 4";
 
+/*
+ * D085: an interrupt note (DEL in the window, or a `kill`/`echo interrupt`
+ * on the note file) stops the machine instead of killing the main proc
+ * while its forked scheduler procs keep running.  The handler touches
+ * only what nvmachineinterrupt is written to touch from a note handler:
+ * the stop word and each scheduler's idle semaphore -- no lock, no
+ * allocation, no I/O.  Any other note is left to the default action.
+ * `machine` is set just before nvmachinerun and cleared after it, so a
+ * note outside that window is also default-handled.
+ */
+static NvScheduler *machine;
+
+static int
+interrupt(void *ureg, char *note)
+{
+	USED(ureg);
+	if(machine == nil || strcmp(note, "interrupt") != 0)
+		return 0;
+	nvmachineinterrupt(machine);
+	return 1;
+}
+
 static void
 usage(void)
 {
-	fprint(2, "usage: nervous [-sG] [-H heapwords] [-o words] [-w visits] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
+	fprint(2, "usage: nervous [-sG] [-H heapwords] [-o words] [-w visits] [-p schedulers] [-a file | -A v2file | -b bytecode | -c source | -f file | -F v2file | -r source entry [args...] | -x bytecode entry [args...] | -t bytecode entry [args...] | -X bytecode entry [args...]]\n");
 	exits("usage");
 }
 
@@ -28,21 +50,54 @@ usage(void)
  * this line still reports host bytes across the whole run, not per-process
  * heap words); it includes mailbox traffic in flight at the peak.
  */
+/*
+ * D088: the machine-wide totals in the same lines -s has always printed,
+ * then one `sched N:` row per scheduler proc. At N=1 the totals are
+ * exactly the one scheduler's figures, so the totals lines are unchanged
+ * in content and bench/benchcmp keeps parsing them (it ignores the rows).
+ * "last" live heap in the totals is scheduler 0's; each row has its own.
+ */
+static void
+printsched(NvSched *sc)
+{
+	fprint(2, "stats: sched %d: dispatches %llud, reductions %llud, enqueues %llud own, %llud remote, "
+		"steals %llud taken, %llud given, wakes %llud sent, %llud received, sleeps %llud (%llud ns), "
+		"deadline fires %llud, lock %llud acquisitions (%llud ns waited), "
+		"GC %llud collections, %llud failed, live heap %llud words last\n",
+		sc->index, sc->dispatches, sc->reductions, sc->runq->enqueues, sc->remoteenq,
+		sc->stealstaken, sc->stealsgiven, sc->wakessent, sc->wakesrecv, sc->sleeps, sc->sleepns,
+		sc->timerwakes, sc->lockacq, sc->lockwaitns,
+		sc->collections, sc->gcfailed, sc->lastlivewords);
+}
+
 static void
 printstats(NvScheduler *s, vlong start, uintptr brk0)
 {
+	NvSched *sc;
 	vlong ns;
 	uintptr heap;
-	uvlong hops;
+	uvlong hops, dispatches, reductions, timerwakes, collections, gcfailed, maxlive;
+	int i;
 
 	ns = nsec() - start;
 	heap = (uintptr)sbrk(0) - brk0;
 	hops = s->runtime.nsent;
+	dispatches = reductions = timerwakes = collections = gcfailed = maxlive = 0;
+	for(i = 0; i < s->nsched; i++){
+		sc = s->sched[i];
+		dispatches += sc->dispatches;
+		reductions += sc->reductions;
+		timerwakes += sc->timerwakes;
+		collections += sc->collections;
+		gcfailed += sc->gcfailed;
+		if(sc->maxlivewords > maxlive)
+			maxlive = sc->maxlivewords;
+	}
 	fprint(2, "stats: wall %lld.%03llds\n", ns/1000000000LL, (ns%1000000000LL)/1000000LL);
 	fprint(2, "stats: processes %llud spawned, %lud peak live, %llud completed, %llud faulted, %llud exited\n",
 		s->runtime.nspawned, s->runtime.maxlive, s->completed, s->faulted, s->exited);
 	fprint(2, "stats: dispatches %llud, reductions %llud (%llud per dispatch), timer wakes %llud\n",
-		s->dispatches, s->reductions, s->dispatches ? s->reductions/s->dispatches : 0, s->timerwakes);
+		dispatches, reductions, dispatches ? reductions/dispatches : 0, timerwakes);
 	fprint(2, "stats: messages %llud sent, %llud dropped to dead pids", hops, s->runtime.ndropped);
 	if(hops != 0 && ns > 0)
 		fprint(2, ", %llud ns per message", (uvlong)ns/hops);
@@ -52,8 +107,10 @@ printstats(NvScheduler *s, vlong start, uintptr brk0)
 		fprint(2, ", %llud per peak live process", (uvlong)heap/s->runtime.maxlive);
 	fprint(2, "\n");
 	fprint(2, "stats: GC %llud collections, %llud failed; per-process live heap %llud words last, %llud words largest collected\n",
-		s->collections, s->gcfailed, s->lastlivewords, s->maxlivewords);
+		collections, gcfailed, s->sched[0]->lastlivewords, maxlive);
 	fprint(2, "stats: atoms %lud interned\n", nvatomcount());
+	for(i = 0; i < s->nsched; i++)
+		printsched(s->sched[i]);
 }
 
 static char *
@@ -192,13 +249,13 @@ printroot(Biobuf *b, NvFrag *f)
  * never returns.
  */
 static void
-runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, uvlong gcoffload, uvlong worklimit, int stats)
+runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress, uvlong gcoffload, uvlong worklimit, int nsched, int stats)
 {
-	Biobuf bout, berr;
+	Biobuf *bout, *berr;
 	NvHeap h;
 	NvTerm args, rootpid;
 	NvLimits limits;
-	NvScheduler sched;
+	NvScheduler *sched;
 	NvIO io;
 	char err[256], *entry;
 	int rc, state;
@@ -208,11 +265,24 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 	start = 0;
 	brk0 = 0;
 	entry = argv[0];
+	/*
+	 * D087/M10-T01: the machine and its output streams are malloc'd, not
+	 * stack locals -- with -p N the scheduler procs share this proc's
+	 * data and heap but not its stack (D074), and every one of them
+	 * reads the runtime and writes through these Biobufs. Binit, not
+	 * Bfdopen: Bterm closes a Bfdopen'd stream's fd, which silently ate
+	 * every fprint(2, ...) diagnostic below on the first -p landing.
+	 */
+	sched = mallocz(sizeof *sched, 1);
+	bout = malloc(sizeof *bout);
+	berr = malloc(sizeof *berr);
+	if(sched == nil || bout == nil || berr == nil)
+		sysfatal("out of memory");
+	Binit(bout, 1, OWRITE);
 	nvheapinit(&h, 0);
-	Binit(&bout, 1, OWRITE);
 	if(makeargs(&h, argc-1, argv+1, &args, err, sizeof err) < 0){
 		nvheapfree(&h);
-		Bterm(&bout);
+		Bterm(bout);
 		fprint(2, "%s\n", err);
 		nvmodulefree(m);
 		exits("argument");
@@ -232,72 +302,75 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 		start = nsec();
 		brk0 = (uintptr)sbrk(0);
 	}
-	if(nvschedinit(&sched, m, &limits, 1, 1000, err, sizeof err) < 0){
+	if(nvschedinit(sched, m, &limits, 1, 1000, err, sizeof err) < 0 ||
+	   nvschedsetnsched(sched, nsched, err, sizeof err) < 0){
 		nvheapfree(&h);
-		Bterm(&bout);
+		Bterm(bout);
 		fprint(2, "%s\n", err);
 		nvmodulefree(m);
 		exits("run");
 	}
-	Binit(&berr, 2, OWRITE);
-	io.out = &bout;
-	io.err = &berr;
-	nvschedsetio(&sched, &io);
+	Binit(berr, 2, OWRITE);
+	io.out = bout;
+	io.err = berr;
+	nvschedsetio(sched, &io);
 	/* D080: -w visits; 0 (default) is no ceiling. Must precede the root spawn. */
-	nvschedsetworklimit(&sched, worklimit);
-	rc = nvschedspawnroot(&sched, entry, args, &rootpid, err, sizeof err);
+	nvschedsetworklimit(sched, worklimit);
+	rc = nvschedspawnroot(sched, entry, args, &rootpid, err, sizeof err);
 	nvheapfree(&h);
 	if(rc < 0){
-		Bterm(&bout);
-		Bterm(&berr);
+		Bterm(bout);
+		Bterm(berr);
 		fprint(2, "%s\n", err);
-		nvschedfree(&sched);
+		nvschedfree(sched);
 		nvmodulefree(m);
 		exits("run");
 	}
-	for(;;){
-		state = nvschedstep(&sched, err, sizeof err);
-		if(state != NvSchedProgress)
-			break;
-	}
+	/* D087: N=1 runs the same loop on this proc alone; -p N forks the rest. */
+	machine = sched;
+	atnotify(interrupt, 1);
+	state = nvmachinerun(sched, err, sizeof err);
+	atnotify(interrupt, 0);
+	machine = nil;
 	if(stats){
-		Bflush(&bout);
-		Bflush(&berr);
-		printstats(&sched, start, brk0);
+		Bflush(bout);
+		Bflush(berr);
+		printstats(sched, start, brk0);
 	}
-	if(state == NvSchedError || sched.rootstate == NvRootFault || sched.rootstate == NvRootExit){
-		Bterm(&bout);
-		Bterm(&berr);
+	if(state == NvSchedError || sched->rootstate == NvRootFault || sched->rootstate == NvRootExit){
+		Bterm(bout);
+		Bterm(berr);
 		if(state == NvSchedError)
 			fprint(2, "scheduler: %s\n", err);
-		else if(sched.rootstate == NvRootFault)
-			fprint(2, "fault %s\n", sched.rootfault);
+		else if(sched->rootstate == NvRootFault)
+			fprint(2, "fault %s\n", sched->rootfault);
 		else{
 			fprint(2, "exit ");
-			Binit(&bout, 2, OWRITE);
-			printroot(&bout, sched.rootvalue);
-			Bputc(&bout, '\n');
-			Bterm(&bout);
+			Binit(bout, 2, OWRITE);	/* bout was flushed by Bterm above; reuse it on fd 2 */
+			printroot(bout, sched->rootvalue);
+			Bputc(bout, '\n');
+			Bterm(bout);
 		}
 		if(state == NvSchedIdle)
-			fprint(2, "deadlock: %lud live process(es) orphaned by the root, none runnable\n", sched.runtime.nlive);
-		nvschedfree(&sched);
+			fprint(2, "deadlock: %lud live process(es) orphaned by the root, none runnable\n", sched->runtime.nlive);
+		nvschedfree(sched);
 		nvmodulefree(m);
 		exits("run");
 	}
 	if(state == NvSchedIdle){
-		Bterm(&bout);
-		Bterm(&berr);
-		fprint(2, "deadlock: %lud live process(es), none runnable\n", sched.runtime.nlive);
-		nvschedfree(&sched);
+		Bterm(bout);
+		Bterm(berr);
+		fprint(2, "deadlock: %lud live process(es), none runnable\n", sched->runtime.nlive);
+		nvschedfree(sched);
 		nvmodulefree(m);
 		exits("deadlock");
 	}
-	printroot(&bout, sched.rootvalue);
-	Bputc(&bout, '\n');
-	Bterm(&bout);
-	Bterm(&berr);
-	nvschedfree(&sched);
+	printroot(bout, sched->rootvalue);
+	Bputc(bout, '\n');
+	Bterm(bout);
+	Bterm(berr);
+	nvschedfree(sched);
+	free(sched);
 	nvmodulefree(m);
 	exits(nil);
 }
@@ -305,9 +378,9 @@ runscheduled(NvModule *m, int argc, char **argv, uvlong heaplimit, int gcstress,
 void
 main(int argc, char **argv)
 {
-	char *file, *src, *stressenv, *offloadenv;
+	char *file, *src, *stressenv, *offloadenv, *parg;
 	int mode, gcstress;
-	vlong heaplimit, gcoffload, worklimit;
+	vlong heaplimit, gcoffload, worklimit, nsched;
 	long n;
 	Parser p;
 	Program *pr;
@@ -326,6 +399,7 @@ main(int argc, char **argv)
 	gcstress = 0;
 	gcoffload = 0;
 	worklimit = 0;
+	nsched = 1;
 	/* rc may export an unset/restored variable as an empty /env file. */
 	stressenv = getenv("nervous_gcstress");
 	if(stressenv != nil){
@@ -372,6 +446,14 @@ main(int argc, char **argv)
 		if(parseint(EARGF(usage()), &worklimit) < 0 || worklimit < 0)
 			usage();
 		break;
+	case 'p':
+		/* D087: scheduler procs; parsed and validated here, N>1 enabled by M10-T01. */
+		parg = EARGF(usage());
+		if(parseint(parg, &nsched) < 0 || nsched < 1 || nsched > NvMaxsched){
+			fprint(2, "nervous: bad -p %s: expected an integer 1..%d\n", parg, NvMaxsched);
+			exits("usage");
+		}
+		break;
 	case 'a': mode = 'a'; file = EARGF(usage()); break;
 	case 'A': mode = 'A'; file = EARGF(usage()); break;
 	case 'b': mode = 'b'; file = EARGF(usage()); break;
@@ -411,7 +493,7 @@ main(int argc, char **argv)
 			exits("verify");
 		}
 		if(mode == 'X')
-			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, (int)nsched, stats);
 		Binit(&bout, 1, OWRITE);
 		if(mode == 'b'){
 			nvdisasm(&bout, m);
@@ -476,7 +558,7 @@ main(int argc, char **argv)
 			 * control never returns here to reach the shared tail below.
 			 */
 			programfree(pr);
-			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, stats);
+			runscheduled(m, argc, argv, heaplimit, gcstress, gcoffload, worklimit, (int)nsched, stats);
 		}
 	}else if(mode == 'a' || mode == 'A')
 		programprint(&bout, pr);

@@ -48,19 +48,63 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
 	r->limits = *limits;
 	r->incarnation = incarnation;
 	r->nextref = 1;
-	r->runhead = NvNoslot;
-	r->runtail = NvNoslot;
-	r->nrunnable = 0;
+	if(nvruntimesetnrunq(r, 1, err, nerr) < 0){
+		free(r->runq);
+		memset(r, 0, sizeof *r);
+		return -1;
+	}
 	return 0;
 }
 
+int
+nvruntimesetnrunq(NvRuntime *r, int n, char *err, int nerr)
+{
+	NvRunq **q, *nq;
+	int i;
+
+	if(n < 1 || n > NvMaxsched){
+		snprint(err, nerr, "bad scheduler count");
+		return -1;
+	}
+	if(n <= r->nrunq)
+		return 0;
+	q = realloc(r->runq, n*sizeof *q);
+	if(q == nil){
+		snprint(err, nerr, "out of memory");
+		return -1;
+	}
+	r->runq = q;
+	for(i = r->nrunq; i < n; i++){
+		nq = mallocz(sizeof *nq, 1);
+		if(nq == nil){
+			snprint(err, nerr, "out of memory");
+			return -1;	/* the first r->nrunq queues remain valid */
+		}
+		nq->head = NvNoslot;
+		nq->tail = NvNoslot;
+		r->runq[i] = nq;
+		r->nrunq = i+1;
+	}
+	return 0;
+}
+
+/* The queue a slot belongs on: its owner's (D083). */
+static NvRunq *
+runqof(NvRuntime *r, NvProcess *p)
+{
+	return r->runq[p->owner];
+}
+
 /*
- * D059: the run queue is an intrusive doubly linked FIFO threaded through
+ * D059: a run queue is an intrusive doubly linked FIFO threaded through
  * the process slots by index. Every transition into Prrunnable appends
  * (spawn, quantum yield, message wake, deadline wake) and every transition
  * out removes (dispatch, or exit of a not-yet-dispatched process), so the
  * queue holds exactly the Prrunnable slots and dispatch is O(1) regardless
- * of how many processes are waiting. Links are indices, not pointers: this
+ * of how many processes are waiting. D083/D087: there is one queue per
+ * scheduler and a slot always goes on its owner's -- a wake from another
+ * scheduler enqueues remotely rather than migrating the process; at N=1
+ * every owner is 0. Links are indices, not pointers: this
  * keeps them compact and keeps a PID's slot number stable, although D082's
  * segmented table no longer moves slots on growth (a pointer would now
  * survive growth too, but the index representation is unchanged).
@@ -69,48 +113,58 @@ static void
 runenq(NvRuntime *r, ulong slot)
 {
 	NvProcess *p;
+	NvRunq *q;
 
 	p = nvprocat(r, slot);
+	q = runqof(r, p);
 	p->runnext = NvNoslot;
-	p->runprev = r->runtail;
-	if(r->runtail == NvNoslot)
-		r->runhead = slot;
+	p->runprev = q->tail;
+	if(q->tail == NvNoslot)
+		q->head = slot;
 	else
-		nvprocat(r, r->runtail)->runnext = slot;
-	r->runtail = slot;
-	r->nrunnable++;
+		nvprocat(r, q->tail)->runnext = slot;
+	q->tail = slot;
+	q->nrunnable++;
+	q->enqueues++;
 }
 
 static void
 runrm(NvRuntime *r, ulong slot)
 {
 	NvProcess *p;
+	NvRunq *q;
 
 	p = nvprocat(r, slot);
+	q = runqof(r, p);
 	if(p->runprev == NvNoslot)
-		r->runhead = p->runnext;
+		q->head = p->runnext;
 	else
 		nvprocat(r, p->runprev)->runnext = p->runnext;
 	if(p->runnext == NvNoslot)
-		r->runtail = p->runprev;
+		q->tail = p->runprev;
 	else
 		nvprocat(r, p->runnext)->runprev = p->runprev;
 	p->runnext = NvNoslot;
 	p->runprev = NvNoslot;
-	r->nrunnable--;
+	q->nrunnable--;
 }
 
 int
-nvprocrunhead(NvRuntime *r, ulong *slot)
+nvprocrunhead(NvRuntime *r, int sched, ulong *slot)
 {
-	if(r->runhead == NvNoslot)
+	NvRunq *q;
+
+	if(sched < 0 || sched >= r->nrunq)
 		return 0;
-	*slot = r->runhead;
+	q = r->runq[sched];
+	if(q->head == NvNoslot)
+		return 0;
+	*slot = q->head;
 	return 1;
 }
 
 int
-nvprocwake(NvRuntime *r, ulong slot)
+nvprocwakefrom(NvRuntime *r, int from, ulong slot)
 {
 	NvProcess *p;
 
@@ -119,8 +173,71 @@ nvprocwake(NvRuntime *r, ulong slot)
 	p = nvprocat(r, slot);
 	if(p->state != Prwaiting)
 		return -1;
+	/*
+	 * Still inside its quantum on some scheduler (see NvProcess.oncpu):
+	 * enqueueing now would put a running process on a run queue. Defer;
+	 * the owner enqueues it in nvprocoffcpu. Idempotent for a second
+	 * sender in the same window.
+	 */
+	if(p->oncpu){
+		p->pendingwake = 1;
+		return 0;
+	}
 	p->state = Prrunnable;
 	runenq(r, slot);
+	/* D085: the slot is on its owner's queue; now tell the owner, if anyone is listening. */
+	if(r->wakehook != nil)
+		r->wakehook(r->wakeaux, from, p->owner);
+	return 0;
+}
+
+int
+nvprocoffcpu(NvRuntime *r, NvTerm pid)
+{
+	NvProcess *p;
+
+	p = lookup(r, pid);
+	if(p == nil)
+		return -1;
+	p->oncpu = 0;
+	if(!p->pendingwake)
+		return 0;
+	p->pendingwake = 0;
+	if(p->state != Prwaiting)
+		return 0;	/* the quantum ended some other way; the message is in the mailbox */
+	p->state = Prrunnable;
+	runenq(r, nvpidslot(pid));	/* own queue, by the owner: no hook needed */
+	return 1;
+}
+
+int
+nvprocwake(NvRuntime *r, ulong slot)
+{
+	return nvprocwakefrom(r, -1, slot);
+}
+
+int
+nvprocsteal(NvRuntime *r, ulong slot, int newowner)
+{
+	NvProcess *p;
+
+	if(slot >= r->nslot || newowner < 0 || newowner >= r->nrunq)
+		return -1;
+	p = nvprocat(r, slot);
+	if(p->state != Prrunnable || p->owner == newowner)
+		return -1;
+	/*
+	 * Unmovable while its heap is anyone's but the interpreter's: an
+	 * off-process collector (offlaunched, D083) or its owner's inline
+	 * collection, which runs with the runtime lock released and marks
+	 * the heap NvHeapCollecting under that lock first (M10-T01). The
+	 * owner read here is made under the same lock the marker held.
+	 */
+	if(p->exec != nil && (p->exec->offlaunched || p->exec->heap.owner != NvHeapIdle))
+		return -1;
+	runrm(r, slot);		/* from the old owner's queue... */
+	p->owner = newowner;
+	runenq(r, slot);	/* ...onto the new owner's tail; counted as its arrival */
 	return 0;
 }
 
@@ -182,16 +299,29 @@ nvruntimefree(NvRuntime *r)
 	for(i = 0; i < r->nchunk; i++)
 		free(r->chunk[i]);
 	free(r->chunk);
+	for(i = 0; i < r->nrunq; i++)
+		free(r->runq[i]);
+	free(r->runq);
 	memset(r, 0, sizeof *r);
 }
 
 int
 nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 {
+	return nvprocspawnon(r, 0, pid, err, nerr);
+}
+
+int
+nvprocspawnon(NvRuntime *r, int owner, NvTerm *pid, char *err, int nerr)
+{
 	NvProcess *p, *newchunk;
 	NvProcess **newarray;
 	ulong slot, max;
 
+	if(owner < 0 || owner >= r->nrunq){
+		snprint(err, nerr, "bad_scheduler");
+		return -1;
+	}
 	if(r->nlive >= r->limits.maxprocess){
 		snprint(err, nerr, "system_limit");
 		return -1;
@@ -261,11 +391,14 @@ nvprocspawn(NvRuntime *r, NvTerm *pid, char *err, int nerr)
 		 */
 		p->hasdeadline = 0;
 		p->deadline = 0;
+		p->oncpu = 0;
+		p->pendingwake = 0;
 	}
 	r->freehint = slot+1;
 	p->generation++;
 	if(p->generation == 0)
 		p->generation++;
+	p->owner = owner;	/* D083: before runenq, which queues on the owner */
 	p->state = Prrunnable;
 	runenq(r, slot);
 	r->nlive++;
@@ -286,6 +419,8 @@ nvprocdispatch(NvRuntime *r, NvTerm pid, char *err, int nerr)
 	if(p->state != Prrunnable){ snprint(err, nerr, "bad_state"); return -1; }
 	runrm(r, nvpidslot(pid));
 	p->state = Prrunning;
+	p->oncpu = 1;
+	p->pendingwake = 0;
 	return 0;
 }
 
@@ -341,6 +476,8 @@ nvprocexit(NvRuntime *r, NvTerm pid)
 	 */
 	p->hasdeadline = 0;
 	p->deadline = 0;
+	p->oncpu = 0;
+	p->pendingwake = 0;
 	p->state = Prexited;
 	if(nvpidslot(pid) < r->freehint)
 		r->freehint = nvpidslot(pid);
@@ -412,6 +549,12 @@ toodeep(NvTerm t, int depth, int maxdepth)
 int
 nvprocsend(NvRuntime *r, NvTerm pid, NvTerm value, char *err, int nerr)
 {
+	return nvprocsendfrom(r, -1, pid, value, err, nerr);
+}
+
+int
+nvprocsendfrom(NvRuntime *r, int from, NvTerm pid, NvTerm value, char *err, int nerr)
+{
 	NvProcess *p;
 	NvFrag *f;
 	uvlong budget;
@@ -452,7 +595,7 @@ nvprocsend(NvRuntime *r, NvTerm pid, NvTerm value, char *err, int nerr)
 	p->mailboxwords += nvfragwords(f);
 	r->nsent++;
 	if(p->state == Prwaiting)
-		nvprocwake(r, nvpidslot(pid));
+		nvprocwakefrom(r, from, nvpidslot(pid));
 	return 1;
 }
 

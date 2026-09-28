@@ -175,7 +175,7 @@ holdbasic(void)
 	p = nvprocat(&s.runtime, nvpidslot(pid));
 	check(e->heap.owner == NvHeapCollecting, "heap not marked collecting immediately after launch");
 	check(e->offlaunched, "offlaunched not set immediately after launch");
-	check(s.gcoutstanding == 1, "gcoutstanding not incremented immediately after launch");
+	check(s.sched[0]->gcoutstanding == 1, "gcoutstanding not incremented immediately after launch");
 	check(p->state == Prrunnable, "collecting process not left runnable");
 
 	/* D068: the mailbox is scheduler/sender territory, never touched by
@@ -194,13 +194,13 @@ holdbasic(void)
 	for(i = 0; i < 3; i++)
 		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress,
 			"reported idle/deadlock while a collector was outstanding");
-	check(e->heap.owner == NvHeapCollecting && s.gcoutstanding == 1, "held collector completed despite the hold");
+	check(e->heap.owner == NvHeapCollecting && s.sched[0]->gcoutstanding == 1, "held collector completed despite the hold");
 
 	nvschedgchold(&s, 0);
 	reapflag(&s, &e->offlaunched, err, sizeof err);
 	check(!e->offlaunched && e->heap.owner == NvHeapIdle, "collector never completed after release");
-	check(s.gcoutstanding == 0, "gcoutstanding not decremented after fold");
-	check(s.collections >= 1, "completion fold did not credit a collection");
+	check(s.sched[0]->gcoutstanding == 0, "gcoutstanding not decremented after fold");
+	check(s.sched[0]->collections >= 1, "completion fold did not credit a collection");
 
 	check(nvprocsend(&s.runtime, pid, nvatom("go"), err, sizeof err) == 1, "wake message failed");
 	check(drive(&s, err, sizeof err) == NvSchedDone, "scheduler did not finish");
@@ -261,7 +261,7 @@ holddeadline(void)
 
 	nvschedgchold(&s, 1);
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "holder launch step");
-	check(he->heap.owner == NvHeapCollecting && s.gcoutstanding == 1, "holder collector not launched");
+	check(he->heap.owner == NvHeapCollecting && s.sched[0]->gcoutstanding == 1, "holder collector not launched");
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress &&
 		nvprocat(&s.runtime, nvpidslot(waiterpid))->state == Prwaiting,
 		"waiter did not block on its deadline receive");
@@ -272,9 +272,9 @@ holddeadline(void)
 	 * race anything. holder's collector is still held throughout. */
 	tc.now = 1005;
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "deadline fire step");
-	check(he->heap.owner == NvHeapCollecting && s.gcoutstanding == 1,
+	check(he->heap.owner == NvHeapCollecting && s.sched[0]->gcoutstanding == 1,
 		"holder's held collector was disturbed by an unrelated deadline");
-	check(s.timerwakes >= 1, "deadline did not wake through the collector-outstanding path");
+	check(s.sched[0]->timerwakes >= 1, "deadline did not wake through the collector-outstanding path");
 
 	/* One more step dispatches the now-runnable waiter to completion. */
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && s.rootstate == NvRootDone &&
@@ -330,7 +330,7 @@ holdteardown(void)
 
 	nvschedgchold(&s, 1);
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "launch step");
-	check(e->heap.owner == NvHeapCollecting && s.gcoutstanding == 1, "collector not launched before teardown");
+	check(e->heap.owner == NvHeapCollecting && s.sched[0]->gcoutstanding == 1, "collector not launched before teardown");
 
 	nvschedgchold(&s, 0);
 	nvschedfree(&s);
@@ -383,7 +383,7 @@ holdall(void)
 		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "launch step");
 	for(i = 0; i < N; i++)
 		check(e[i]->heap.owner == NvHeapCollecting && e[i]->offlaunched, "a process did not launch its collector");
-	check(s.gcoutstanding == N, "not every process launched a collector");
+	check(s.sched[0]->gcoutstanding == N, "not every process launched a collector");
 
 	for(i = 0; i < 3; i++)
 		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress,
@@ -392,7 +392,7 @@ holdall(void)
 	nvschedgchold(&s, 0);
 	for(i = 0; i < N; i++)
 		reapflag(&s, &e[i]->offlaunched, err, sizeof err);
-	check(s.gcoutstanding == 0, "gcoutstanding did not drain to zero after release");
+	check(s.sched[0]->gcoutstanding == 0, "gcoutstanding did not drain to zero after release");
 
 	for(i = 0; i < N; i++)
 		check(nvprocsend(&s.runtime, pid[i], nvatom("go"), err, sizeof err) == 1, "wake message failed");
@@ -475,7 +475,7 @@ holdsweepcap(void)
 		else
 			inln++;
 	}
-	check(offloaded == (int)s.gcoutstanding, "gcoutstanding disagrees with the number of collecting heaps");
+	check(offloaded == (int)s.sched[0]->gcoutstanding, "gcoutstanding disagrees with the number of collecting heaps");
 	check(offloaded > 0 && offloaded < N, "the idle sweep did not cap off-process launches");
 	check(offloaded+inln == N, "some waiter was neither offloaded nor collected inline this sweep");
 
@@ -498,9 +498,9 @@ holdsweepcap(void)
 	state = drive(&s, err, sizeof err);
 	check(state == NvSchedDone, "scheduler did not finish");
 	check(s.completed == N, "not every dirty process completed");
-	check(s.gcoutstanding == 0, "gcoutstanding did not drain to zero");
+	check(s.sched[0]->gcoutstanding == 0, "gcoutstanding did not drain to zero");
 	/* R3-F05: the offloaded waiters must have been collected for real, like the inline ones. */
-	check(s.gcfailed == 0 && s.collections >= N, "an offloaded idle-sweep collection did not collect");
+	check(s.sched[0]->gcfailed == 0 && s.sched[0]->collections >= N, "an offloaded idle-sweep collection did not collect");
 
 	nvschedfree(&s);
 	nvmodulefree(m);
@@ -547,7 +547,7 @@ holddeadlock(void)
 	nvschedgchold(&s, 1);
 	/* Empty run queue, one dirty waiter: the opportunistic idle sweep. */
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "idle sweep step");
-	check(e->heap.owner == NvHeapCollecting && e->offlaunched && s.gcoutstanding == 1,
+	check(e->heap.owner == NvHeapCollecting && e->offlaunched && s.sched[0]->gcoutstanding == 1,
 		"waiting process's collector was not launched off-process");
 	check(nvprocat(&s.runtime, nvpidslot(pid))->state == Prwaiting,
 		"D067: opportunistic collection touched lifecycle state");
@@ -572,7 +572,7 @@ holddeadlock(void)
 	 * The collection must have happened and been credited, and the
 	 * live watermark must now match, so the sweep has nothing to do.
 	 */
-	check(s.collections == 1 && s.gcfailed == 0,
+	check(s.sched[0]->collections == 1 && s.sched[0]->gcfailed == 0,
 		"idle-sweep off-process collection was not performed and credited exactly once");
 	check(e->livewords == e->heap.words,
 		"idle-sweep off-process collection left the live watermark stale");
@@ -587,7 +587,7 @@ holddeadlock(void)
 	 * NvSchedIdle -- a real hang for any caller (including the CLI's
 	 * own driving loop) once T04d selects a nonzero gcoffload default.
 	 */
-	check(s.gcoutstanding == 0,
+	check(s.sched[0]->gcoutstanding == 0,
 		"gcoutstanding never reached zero for a waiting process's completed collector "
 		"(deadlock detection would be permanently disabled)");
 	check(nvschedstep(&s, err, sizeof err) == NvSchedIdle,
@@ -674,7 +674,7 @@ holdfalseidle(void)
 		check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, "launch step");
 	for(i = 0; i < N; i++)
 		check(e[i]->heap.owner == NvHeapCollecting && e[i]->offlaunched, "a process did not launch its collector");
-	check(s.gcoutstanding == (uvlong)N, "not every process launched a collector");
+	check(s.sched[0]->gcoutstanding == (uvlong)N, "not every process launched a collector");
 
 	/*
 	 * The bug under test: with the hold still engaged (so nothing a real
@@ -687,27 +687,46 @@ holdfalseidle(void)
 	 * interleaving enough concurrent real collectors could hit by chance
 	 * (bench/largelive.c did), pinned here instead of raced for.
 	 */
-	s.gcidlestep = gcidlestephook;
+	s.sched[0]->gcidlestep = gcidlestephook;
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress,
 		"reported idle/deadlock instead of progress when every runnable "
 		"process's collector completed in the same step it was found "
 		"undispatchable (the D074 amendment's false-idle bug)");
-	check(s.gcoutstanding == 0, "gcoutstanding did not drain to zero after the hook folded every collector");
+	check(s.sched[0]->gcoutstanding == 0, "gcoutstanding did not drain to zero after the hook folded every collector");
 	for(i = 0; i < N; i++)
 		check(!e[i]->offlaunched && e[i]->heap.owner == NvHeapIdle, "a collector was not folded by the hook step");
-	s.gcidlestep = nil;
+	s.sched[0]->gcidlestep = nil;
 
 	/*
 	 * The real collector children are still parked; releasing them now
 	 * just lets each wake, take the lock, write Idle over Idle
 	 * (idempotent) and semrelease once more (a stale credit the existing
 	 * drain/gcfoldall machinery already accounts for generically -- see
-	 * gcdrain's comment). reapflag's bound is not a real wait: offlaunched
-	 * already cleared above.
+	 * gcdrain's comment).
+	 *
+	 * M10-T00b fix: they must have DONE that before anything below frees
+	 * their execs. The hook folded every collection while the children
+	 * were parked, so offlaunched is already clear and nothing in the
+	 * scheduler will wait for them; driving the processes to completion
+	 * now would free each NvExec within microseconds, and a child waking
+	 * up to NvGcholdpollms later would lock(&e->heap.lock) on freed
+	 * memory -- benign only while the freed block happens to hold a zero
+	 * lock word, and a permanently spinning child (and a 100 s
+	 * nvschedfree drain ending in "never signalled") when it does not.
+	 * That is exactly what happened when T00b grew NvExec/NvProcess and
+	 * changed the heap layout. Consume each child's completion credit
+	 * here: semrelease is the child's last touch of shared memory, so
+	 * once all N credits are in hand every child is provably finished
+	 * with e. Counted into gccredits so nvschedfree's R3-F06 accounting
+	 * still balances.
 	 */
 	nvschedgchold(&s, 0);
+	for(i = 0; i < N; i++){
+		check(tsemacquire(s.sched[0]->gcsem, 1000) > 0, "a parked collector did not signal within 1s of release");
+		s.sched[0]->gccredits++;
+	}
 	for(i = 0; i < N; i++)
-		reapflag(&s, &e[i]->offlaunched, err, sizeof err);
+		check(!e[i]->offlaunched && e[i]->heap.owner == NvHeapIdle, "a released collector disturbed the folded state");
 
 	for(i = 0; i < N; i++)
 		check(nvprocsend(&s.runtime, pid[i], nvatom("go"), err, sizeof err) == 1, "wake message failed");
@@ -751,8 +770,8 @@ nooffloaddefault(void)
 
 	check(drive(&s, err, sizeof err) == NvSchedDone, "scheduler did not finish");
 	check(s.rootstate == NvRootDone, "loop did not complete normally");
-	check(s.gcoutstanding == 0 && s.gcofffallback == 0, "off-process activity occurred under gcoffload=0");
-	check(s.collections > 0, "gcstress produced no inline collections");
+	check(s.sched[0]->gcoutstanding == 0 && s.sched[0]->gcofffallback == 0, "off-process activity occurred under gcoffload=0");
+	check(s.sched[0]->collections > 0, "gcstress produced no inline collections");
 
 	nvschedfree(&s);
 	nvmodulefree(m);

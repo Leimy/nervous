@@ -317,8 +317,10 @@ main(void)
 	check(nvtermequal(REG(e1, 2), REG(e1, 4)) == 1, "send returns sent value");
 	child = nvprocat(&sched.runtime, nvpidslot(REG(e1, 3)));
 	/* D059: the child was enqueued at spawn, the parent re-enqueued behind it when its quantum ended. */
-	check(nvprocrunhead(&sched.runtime, &slot) && slot == nvpidslot(REG(e1, 3)), "spawned child is next in dispatch order");
-	check(sched.runtime.nrunnable == 2 && sched.runtime.runtail == nvpidslot(p1), "yielded parent is queued behind its child");
+	check(nvprocrunhead(&sched.runtime, 0, &slot) && slot == nvpidslot(REG(e1, 3)), "spawned child is next in dispatch order");
+	check(sched.sched[0]->runq->nrunnable == 2 && sched.sched[0]->runq->tail == nvpidslot(p1), "yielded parent is queued behind its child");
+	/* D083: both were spawned by scheduler 0 and so are owned by it. */
+	check(parent->owner == 0 && child->owner == 0, "spawned processes are owned by the spawning scheduler");
 	check(child->head != nil && nvtermkind(child->head->root) == Vref && nvtermequal(child->head->root, REG(e1, 2)) == 1, "send copies value to spawned child mailbox");
 	nvschedfree(&sched);
 	print("ok - process opcodes use scheduler host context\n");
@@ -415,7 +417,7 @@ main(void)
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "fault process quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress, "finite completion quantum");
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "scheduler completes after exits");
-	check(sched.completed == 1 && sched.faulted == 1 && strcmp(sched.lastfault, "boom") == 0 && sched.dispatches == 3, "completion and fault accounting");
+	check(sched.completed == 1 && sched.faulted == 1 && strcmp(sched.lastfault, "boom") == 0 && sched.sched[0]->dispatches == 3, "completion and fault accounting");
 	nvschedfree(&sched);
 	print("ok - completion and faults exit processes\n");
 
@@ -425,7 +427,7 @@ main(void)
 	state = NvSchedProgress;
 	for(i = 0; i < 32 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
-	check(state == NvSchedDone && sched.completed == nelem(pid) && sched.dispatches == 2*nelem(pid), "many finite processes make progress");
+	check(state == NvSchedDone && sched.completed == nelem(pid) && sched.sched[0]->dispatches == 2*nelem(pid), "many finite processes make progress");
 	nvschedfree(&sched);
 	print("ok - many scheduled processes make progress\n");
 
