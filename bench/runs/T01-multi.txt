@@ -1,0 +1,111 @@
+== /usr/dave/work/nervous/examples/ring.nv main 1000 2000 -p 1
+stats: wall 0.852s
+stats: processes 1001 spawned, 1001 peak live, 1001 completed, 0 faulted, 0 exited
+stats: dispatches 2311492, reductions 48104294 (20 per dispatch), timer wakes 0
+stats: messages 2003001 sent, 0 dropped to dead pids, 425 ns per message
+stats: host allocation 2282216 bytes high-water, 2279 per peak live process
+stats: GC 307490 collections, 0 failed; per-process live heap 7 words last, 11 words largest collected
+stats: atoms 8 interned
+stats: sched 0: dispatches 2311492, reductions 48104294, enqueues 2311492 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 0 received, sleeps 0 (0 ns), deadline fires 0, lock 0 acquisitions (0 ns waited), GC 307490 collections, 0 failed, live heap 7 words last
+0.85u 0.00s 0.86r 	 /usr/dave/work/nervous/nervous -s -p 1 -r ...
+
+== /usr/dave/work/nervous/examples/sieve.nv main 5000 -p 1
+stats: wall 0.137s
+stats: processes 670 spawned, 335 peak live, 1 completed, 0 faulted, 669 exited
+stats: dispatches 200985, reductions 11111205 (55 per dispatch), timer wakes 0
+stats: messages 234091 sent, 0 dropped to dead pids, 588 ns per message
+stats: host allocation 764304 bytes high-water, 2281 per peak live process
+stats: GC 39129 collections, 0 failed; per-process live heap 3 words last, 9 words largest collected
+stats: atoms 9 interned
+stats: sched 0: dispatches 200985, reductions 11111205, enqueues 200985 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 0 received, sleeps 0 (0 ns), deadline fires 0, lock 0 acquisitions (0 ns waited), GC 39129 collections, 0 failed, live heap 3 words last
+0.14u 0.00s 0.14r 	 /usr/dave/work/nervous/nervous -s -p 1 -r ...
+
+== /usr/dave/work/nervous/bench/cpubound.nv main -p 1
+stats: wall 0.572s
+stats: processes 5 spawned, 5 peak live, 5 completed, 0 faulted, 0 exited
+stats: dispatches 215391, reductions 58800384 (272 per dispatch), timer wakes 0
+stats: messages 4 sent, 0 dropped to dead pids, 143164580 ns per message
+stats: host allocation 98408 bytes high-water, 19681 per peak live process
+stats: GC 215385 collections, 0 failed; per-process live heap 6 words last, 11 words largest collected
+stats: atoms 7 interned
+stats: sched 0: dispatches 215391, reductions 58800384, enqueues 215391 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 0 received, sleeps 0 (0 ns), deadline fires 0, lock 0 acquisitions (0 ns waited), GC 215385 collections, 0 failed, live heap 6 words last
+0.57u 0.00s 0.57r 	 /usr/dave/work/nervous/nervous -s -p 1 -r ...
+
+== /usr/dave/work/nervous/examples/ring.nv main 1000 2000 -p 2
+stats: wall 0.974s
+stats: processes 1001 spawned, 1001 peak live, 1001 completed, 0 faulted, 0 exited
+stats: dispatches 2009099, reductions 48104294 (23 per dispatch), timer wakes 0
+stats: messages 2003001 sent, 0 dropped to dead pids, 486 ns per message
+stats: host allocation 2315304 bytes high-water, 2312 per peak live process
+stats: GC 497752 collections, 0 failed; per-process live heap 2 words last, 11 words largest collected
+stats: atoms 8 interned
+stats: sched 0: dispatches 2003192, reductions 47962613, enqueues 2003195 own, 1968 remote, steals 0 taken, 3 given, wakes 1972 sent, 1911 received, sleeps 1911 (12487032 ns), deadline fires 0, lock 16494040 acquisitions (0 ns waited), GC 496276 collections, 0 failed, live heap 2 words last
+stats: sched 1: dispatches 5907, reductions 141681, enqueues 5907 own, 1968 remote, steals 3 taken, 0 given, wakes 1911 sent, 1973 received, sleeps 1973 (960881970 ns), deadline fires 0, lock 54640 acquisitions (0 ns waited), GC 1476 collections, 0 failed, live heap 2 words last
+0.86u 0.00s 0.98r 	 /usr/dave/work/nervous/nervous -s -p 2 -r ...
+
+== /usr/dave/work/nervous/examples/sieve.nv main 5000 -p 2
+stats: wall 0.638s
+stats: processes 670 spawned, 131 peak live, 1 completed, 0 faulted, 669 exited
+stats: dispatches 64890, reductions 10711071 (165 per dispatch), timer wakes 0
+stats: messages 234091 sent, 0 dropped to dead pids, 2728 ns per message
+stats: host allocation 433424 bytes high-water, 3308 per peak live process
+stats: GC 39316 collections, 0 failed; per-process live heap 3 words last, 9 words largest collected
+stats: atoms 9 interned
+stats: sched 0: dispatches 36942, reductions 5158808, enqueues 37047 own, 1402 remote, steals 347 taken, 105 given, wakes 1 sent, 1 received, sleeps 1 (14675 ns), deadline fires 0, lock 601844 acquisitions (0 ns waited), GC 18789 collections, 0 failed, live heap 3 words last
+stats: sched 1: dispatches 27948, reductions 5552263, enqueues 28295 own, 5263 remote, steals 105 taken, 347 given, wakes 1 sent, 2 received, sleeps 2 (682054 ns), deadline fires 0, lock 595406 acquisitions (0 ns waited), GC 20527 collections, 0 failed, live heap 3 words last
+0.10u 0.03s 0.64r 	 /usr/dave/work/nervous/nervous -s -p 2 -r ...
+
+== /usr/dave/work/nervous/bench/cpubound.nv main -p 2
+stats: wall 0.829s
+stats: processes 5 spawned, 5 peak live, 5 completed, 0 faulted, 0 exited
+stats: dispatches 215393, reductions 58800393 (272 per dispatch), timer wakes 0
+stats: messages 4 sent, 0 dropped to dead pids, 207463253 ns per message
+stats: host allocation 98408 bytes high-water, 19681 per peak live process
+stats: GC 215385 collections, 0 failed; per-process live heap 11 words last, 11 words largest collected
+stats: atoms 7 interned
+stats: sched 0: dispatches 108025, reductions 29490414, enqueues 108029 own, 1 remote, steals 0 taken, 4 given, wakes 2 sent, 1 received, sleeps 1 (3983 ns), deadline fires 0, lock 324088 acquisitions (0 ns waited), GC 108022 collections, 0 failed, live heap 11 words last
+stats: sched 1: dispatches 107368, reductions 29309979, enqueues 107368 own, 2 remote, steals 4 taken, 0 given, wakes 0 sent, 2 received, sleeps 2 (793919 ns), deadline fires 0, lock 322131 acquisitions (0 ns waited), GC 107363 collections, 0 failed, live heap 11 words last
+0.16u 0.03s 0.83r 	 /usr/dave/work/nervous/nervous -s -p 2 -r ...
+
+== /usr/dave/work/nervous/examples/ring.nv main 1000 2000 -p 4
+stats: wall 1.056s
+stats: processes 1001 spawned, 1001 peak live, 1001 completed, 0 faulted, 0 exited
+stats: dispatches 2009099, reductions 48104294 (23 per dispatch), timer wakes 0
+stats: messages 2003001 sent, 0 dropped to dead pids, 527 ns per message
+stats: host allocation 2278080 bytes high-water, 2275 per peak live process
+stats: GC 497753 collections, 0 failed; per-process live heap 2 words last, 11 words largest collected
+stats: atoms 8 interned
+stats: sched 0: dispatches 1991378, reductions 47679251, enqueues 1991387 own, 5904 remote, steals 0 taken, 9 given, wakes 5918 sent, 5839 received, sleeps 5839 (37653364 ns), deadline fires 0, lock 16408405 acquisitions (0 ns waited), GC 493325 collections, 0 failed, live heap 2 words last
+stats: sched 1: dispatches 17721, reductions 425043, enqueues 17721 own, 5904 remote, steals 9 taken, 0 given, wakes 5839 sent, 5909 received, sleeps 5909 (1020699285 ns), deadline fires 0, lock 163888 acquisitions (0 ns waited), GC 4428 collections, 0 failed, live heap 2 words last
+stats: sched 2: dispatches 0, reductions 0, enqueues 0 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 6 received, sleeps 6 (1056005801 ns), deadline fires 0, lock 19 acquisitions (0 ns waited), GC 0 collections, 0 failed, live heap 0 words last
+stats: sched 3: dispatches 0, reductions 0, enqueues 0 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 6 received, sleeps 6 (1055987228 ns), deadline fires 0, lock 19 acquisitions (0 ns waited), GC 0 collections, 0 failed, live heap 0 words last
+0.81u 0.02s 1.06r 	 /usr/dave/work/nervous/nervous -s -p 4 -r ...
+
+== /usr/dave/work/nervous/examples/sieve.nv main 5000 -p 4
+stats: wall 0.673s
+stats: processes 670 spawned, 157 peak live, 1 completed, 0 faulted, 669 exited
+stats: dispatches 74767, reductions 10737552 (143 per dispatch), timer wakes 0
+stats: messages 234091 sent, 0 dropped to dead pids, 2878 ns per message
+stats: host allocation 640224 bytes high-water, 4077 per peak live process
+stats: GC 39415 collections, 0 failed; per-process live heap 3 words last, 9 words largest collected
+stats: atoms 9 interned
+stats: sched 0: dispatches 24281, reductions 3000735, enqueues 24452 own, 3894 remote, steals 154 taken, 171 given, wakes 4 sent, 2 received, sleeps 2 (236155 ns), deadline fires 0, lock 359597 acquisitions (0 ns waited), GC 11004 collections, 0 failed, live heap 3 words last
+stats: sched 1: dispatches 17099, reductions 2559814, enqueues 17251 own, 4599 remote, steals 129 taken, 152 given, wakes 2 sent, 3 received, sleeps 3 (6849464 ns), deadline fires 0, lock 293125 acquisitions (0 ns waited), GC 9357 collections, 0 failed, live heap 3 words last
+stats: sched 2: dispatches 17472, reductions 2583519, enqueues 17588 own, 3902 remote, steals 162 taken, 116 given, wakes 2 sent, 2 received, sleeps 2 (6741497 ns), deadline fires 0, lock 291668 acquisitions (0 ns waited), GC 9606 collections, 0 failed, live heap 3 words last
+stats: sched 3: dispatches 15915, reductions 2593484, enqueues 16057 own, 3753 remote, steals 136 taken, 142 given, wakes 1 sent, 4 received, sleeps 4 (6715954 ns), deadline fires 0, lock 291761 acquisitions (0 ns waited), GC 9448 collections, 0 failed, live heap 3 words last
+0.03u 0.02s 0.67r 	 /usr/dave/work/nervous/nervous -s -p 4 -r ...
+
+== /usr/dave/work/nervous/bench/cpubound.nv main -p 4
+stats: wall 0.822s
+stats: processes 5 spawned, 5 peak live, 5 completed, 0 faulted, 0 exited
+stats: dispatches 215393, reductions 58800390 (272 per dispatch), timer wakes 0
+stats: messages 4 sent, 0 dropped to dead pids, 205567732 ns per message
+stats: host allocation 98408 bytes high-water, 19681 per peak live process
+stats: GC 215385 collections, 0 failed; per-process live heap 6 words last, 11 words largest collected
+stats: atoms 7 interned
+stats: sched 0: dispatches 81213, reductions 22170000, enqueues 81216 own, 0 remote, steals 0 taken, 3 given, wakes 4 sent, 0 received, sleeps 0 (0 ns), deadline fires 0, lock 243659 acquisitions (0 ns waited), GC 81208 collections, 0 failed, live heap 6 words last
+stats: sched 1: dispatches 53672, reductions 14652206, enqueues 53672 own, 0 remote, steals 1 taken, 0 given, wakes 0 sent, 2 received, sleeps 2 (170280062 ns), deadline fires 0, lock 161025 acquisitions (0 ns waited), GC 53671 collections, 0 failed, live heap 11 words last
+stats: sched 2: dispatches 0, reductions 0, enqueues 0 own, 0 remote, steals 0 taken, 0 given, wakes 0 sent, 3 received, sleeps 3 (822174001 ns), deadline fires 0, lock 10 acquisitions (0 ns waited), GC 0 collections, 0 failed, live heap 0 words last
+stats: sched 3: dispatches 80508, reductions 21978184, enqueues 80508 own, 2 remote, steals 2 taken, 0 given, wakes 0 sent, 2 received, sleeps 2 (2021270 ns), deadline fires 0, lock 241535 acquisitions (0 ns waited), GC 80506 collections, 0 failed, live heap 11 words last
+0.10u 0.01s 0.82r 	 /usr/dave/work/nervous/nervous -s -p 4 -r ...
+

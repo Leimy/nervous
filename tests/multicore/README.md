@@ -6,7 +6,7 @@ Source fixtures that check milestone 10's required tests by their root value, so
 |---|---|---|---|---|
 | `order.nv` | 2 | per-sender message order across schedulers (D036, D081) | `'ok` | `'receiver_died` (the receiver exited with `${'order_violation, pid, seq}`) |
 | `migrate.nv` | 3 | PID and heap stable across steals (D083) | `'ok` | `${'pid_changed, n}`, `${'lost, k}` |
-| `exitstorm.nv` | 6 | exit during cross-scheduler traffic; dead-pid sends dropped, none lost, no fault (D037) | `${'done, 20000}` | `${'lost, k}`; a `fault` line; `-s` `dropped` not equal to `k*n - quit` |
+| `exitstorm.nv` | 6 | exit during cross-scheduler traffic; dead-pid sends dropped, none lost, no fault (D037) | `${'done, 20000}` | `${'lost, k}`; a `fault` line; `-s` `sent + dropped` not equal to `k*n + k` (a send neither accepted nor counted dropped) |
 
 Each file's header comment says how to run it by hand with other sizes and what `nervous -s` should show.
 

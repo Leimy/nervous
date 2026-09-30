@@ -4,9 +4,13 @@
 // of them; the remaining sends land on a dead pid and must be dropped
 // without a fault, a leak, or a lost sender.  Every flooder reports how
 // many it sent when it finishes.  Root value ${'done, k * n}; ${'lost, k}
-// if a flooder never reported.  With -s, `dropped to dead pids` must be
-// k * n - quit (19900 at the defaults) and the victim's exit shows as
-// `1 exited`, not a fault.
+// if a flooder never reported.  With -s the victim's exit shows as
+// `1 exited`, not a fault, and every send is accounted for: messages
+// `sent` (accepted into a mailbox) plus `dropped to dead pids` must equal
+// k * n + k (the extra k are the flooders' 'sent reports).  `dropped` is
+// NOT k * n - quit: a message accepted before the victim exited and freed
+// with its mailbox is in neither counter, so dropped <= k * n - quit, and
+// the gap varies with scheduling (19712 at -p 1 at the defaults).
 //
 //   nervous -s -p 4 -r tests/multicore/exitstorm.nv main   (k = 4, n = 5000, quit = 100)
 //   nervous -s -p 2 -r tests/multicore/exitstorm.nv main 8 20000 1000

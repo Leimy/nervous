@@ -1,0 +1,243 @@
+#!/bin/rc
+# M10-T01 evidence run: repeats and stresses the multicore fixtures and
+# prints a PASS/FAIL ledger plus the raw -s rows that show whether the
+# scheduler machinery (steals, sleeps, wakes) was actually exercised.
+# Not part of tests/run.rc: it takes a minute or two and repeats things.
+#
+# usage:  rc tests/multicore/evidence.rc >[2=1] | tee /tmp/m10-evidence.txt
+#
+# Each "== section" header is printed BEFORE its commands run, so if a
+# section hangs (a lost wakeup sleeps up to 60 s), the last header on the
+# screen names it.  DEL is safe: it stops the machine and prints
+# "scheduler: interrupted".  Report the hung section and the last header.
+#
+# Sections:
+#   A  required test 2, per-sender order (order.nv): repeats + big run
+#   B  required test 3, PID stable across steals (migrate.nv): repeats + big run
+#   C  required test 6, exit during a send storm (exitstorm.nv): repeats,
+#      and the -s accounting: every send is accepted or counted dropped
+#      (nsent + ndropped == k*n + k), dropped <= k*n - quit, no fault
+#   D  required test 4, lost wakeup (statistical): the ring/pingpong/rpc/sieve
+#      examples at -p 2 and 4, repeated; every idle/kick/sleep cycle is a
+#      chance to lose a wakeup, and a lost one shows as a hang or a wrong value
+#   E  the same fixtures under GC stress (-G) and forced off-process
+#      collection (-o) at -p 2/4
+#   F  cpubound.nv root value, then bench/run.rc multi saved to
+#      bench/runs/T01-multi.txt (overwrites; move it aside to keep a copy)
+#   G  no orphaned nervous procs left behind
+
+rfork e
+
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+mcdir=`{basename -d $script}
+testroot=`{basename -d $mcdir}
+root=`{basename -d $testroot}
+bin=$root/nervous
+tmp=/tmp/m10ev.$pid
+
+if(! test -x $bin){
+	echo $0: build first: mk nervous tests benchmarks >[1=2]
+	exit no-binary
+}
+
+# Keep the caller's stress settings out; sections E sets its own.
+nervous_gcstress=0
+nervous_gcoffload=0
+
+passed=()
+failed=()
+
+# expect label want got : records one PASS/FAIL line.
+fn expect {
+	# Private names (e*): rc has no local scope, and callers' label/want/got
+	# must survive this call (the first run clobbered $label here).
+	elabel=$1
+	ewant=$2
+	egot=$3
+	if(~ $"egot $"ewant)
+		passed=($passed x)
+	if not{
+		failed=($failed $elabel)
+		echo FAIL: $elabel: wanted $"ewant, got $"egot
+	}
+}
+
+# fixture label p src want args... : run entry `main` at -p p, compare root value.
+fn fixture {
+	label=$1
+	p=$2
+	src=$3
+	want=$4
+	shift 4
+	out=`{$bin -p $p -r $src main $* >[2]/dev/null}
+	expect $label $want $"out
+}
+
+# fixtureg: same, with the extra flags in $flags (e.g. -G or -o 100).
+fn fixtureg {
+	label=$1
+	p=$2
+	src=$3
+	want=$4
+	shift 4
+	out=`{$bin $flags -p $p -r $src main $* >[2]/dev/null}
+	expect $label $want $"out
+}
+
+# rows file : the wall line and the per-scheduler rows of a saved -s capture.
+fn rows {
+	grep 'stats: (wall|sched)' $1
+}
+
+echo '== A  order.nv (required test 2)'
+for(p in 1 2 4){
+	for(i in `{seq 1 20})
+		fixture order-p$p-run$i $p $mcdir/order.nv '''ok' 
+}
+echo '-- A big: 3 senders x 100000 at -p 2 and -p 4, with -s'
+for(p in 2 4){
+	echo '   -p '$p
+	out=`{$bin -s -p $p -r $mcdir/order.nv main 100000 >[2]$tmp.err}
+	expect order-big-p$p $"out '''ok'
+	rows $tmp.err
+}
+
+echo '== B  migrate.nv (required test 3)'
+for(p in 1 2 4){
+	for(i in `{seq 1 20})
+		fixture migrate-p$p-run$i $p $mcdir/migrate.nv '''ok'
+}
+echo '-- B big: 200 workers x 2000 rounds at -p 2 and -p 4, with -s (look at "steals")'
+for(p in 2 4){
+	echo '   -p '$p
+	out=`{$bin -s -p $p -r $mcdir/migrate.nv main 200 2000 >[2]$tmp.err}
+	expect migrate-big-p$p $"out '''ok'
+	rows $tmp.err
+}
+
+echo '== C  exitstorm.nv (required test 6)'
+for(p in 1 2 4){
+	for(i in `{seq 1 20})
+		fixture exitstorm-p$p-run$i $p $mcdir/exitstorm.nv '${''done, 20000}'
+}
+# -s accounting.  The first two runs showed the fixture header's
+# `dropped == k*n - quit` is the WRONG invariant: nvprocsendfrom counts
+# nsent only for messages ACCEPTED into a mailbox and ndropped only for
+# sends to an already-dead pid; a message accepted before the victim exited
+# and then freed by nvprocexit's mailboxfree is counted in neither.  The
+# exact invariant is that every send is one or the other:
+#     nsent + ndropped == k*n + k      (+k: each flooder's 'sent report)
+# plus: dropped <= k*n - quit, nothing faulted, the victim is 1 exit.
+# stormstats label p total maxdrop [k n quit]
+fn stormstats {
+	slabel=$1
+	sp=$2
+	stotal=$3
+	smaxdrop=$4
+	shift 4
+	out=`{$bin -s -p $sp -r $mcdir/exitstorm.nv main $* >[2]$tmp.err}
+	# Field positions follow printstats in cmd/nervous/main.c:
+	#  "stats: messages N sent, D dropped to dead pids, ..."   N = $3, D = $5
+	#  "stats: processes S spawned, P peak live, C completed, F faulted, E exited"
+	#                                                   F = $10, E = $12
+	sent=`{awk '/stats: messages/ {print $3}' $tmp.err}
+	drop=`{awk '/stats: messages/ {print $5}' $tmp.err}
+	acct=`{awk '/stats: messages/ {print ($3+$5 == '$stotal') ? "ok" : "sum=" $3+$5}' $tmp.err}
+	bound=`{awk '/stats: messages/ {print ($5 <= '$smaxdrop') ? "ok" : "over"}' $tmp.err}
+	flt=`{awk '/stats: processes/ {print $10}' $tmp.err}
+	ex=`{awk '/stats: processes/ {print $12}' $tmp.err}
+	expect $slabel-accounted ok $"acct
+	expect $slabel-dropbound ok $"bound
+	expect $slabel-faulted 0 $"flt
+	expect $slabel-exited 1 $"ex
+	echo '   '$slabel: sent $"sent, dropped $"drop, faulted $"flt, exited $"ex, root $"out
+}
+echo '-- C -s accounting, defaults (4 x 5000, quit 100): sent+dropped == 20004, dropped <= 19900'
+for(p in 1 2 4)
+	for(i in 1 2 3 4 5)
+		stormstats storm-p$p-run$i $p 20004 19900
+echo '-- C -s accounting, bigger (8 x 20000, quit 1000): sent+dropped == 160008, dropped <= 159000'
+for(p in 2 4)
+	for(i in 1 2 3)
+		stormstats stormbig-p$p-run$i $p 160008 159000 8 20000 1000
+
+echo '== D  examples at -p 2/4 (lost-wakeup exposure)'
+for(p in 2 4){
+	echo '-- D -p '$p': pingpong, rpc (x50), arithmetic, ring 10x20000 (x10), sieve (x10)'
+	for(i in `{seq 1 50}){
+		fixture pingpong-p$p-run$i $p $root/examples/pingpong.nv 42
+		fixture rpc-p$p-run$i $p $root/examples/rpc.nv 42
+	}
+	fixture arithmetic-p$p $p $root/examples/arithmetic.nv 51
+	for(i in `{seq 1 10}){
+		fixture ring-p$p-run$i $p $root/examples/ring.nv 200000 10 20000
+		lines=`{$bin -p $p -r $root/examples/sieve.nv main 1023 | wc -l}
+		expect sieve-p$p-run$i 173 $"lines
+	}
+}
+echo '-- D one ring at -p 2 and 4 with -s: idle/kick/sleep cycles per scheduler'
+for(p in 2 4){
+	echo '   -p '$p
+	out=`{$bin -s -p $p -r $root/examples/ring.nv main 10 20000 >[2]$tmp.err}
+	expect ring-stats-p$p $"out 200000
+	rows $tmp.err
+}
+
+echo '== E  GC stress and forced off-process collection at -p 2/4'
+for(mode in gcstress offload){
+	switch($mode){
+	case gcstress
+		flags=(-G)
+	case offload
+		# -o 1 forces EVERY real collection off-process; -o 100 never fired
+		# because these fixtures' live heaps are 2-13 words.
+		flags=(-o 1)
+	}
+	for(p in 2 4){
+		echo '-- E '$mode' ('$"flags') -p '$p
+		for(i in 1 2 3 4 5){
+			fixtureg order-$mode-p$p-run$i $p $mcdir/order.nv '''ok'
+			fixtureg migrate-$mode-p$p-run$i $p $mcdir/migrate.nv '''ok'
+			fixtureg exitstorm-$mode-p$p-run$i $p $mcdir/exitstorm.nv '${''done, 20000}'
+		}
+	}
+}
+
+echo '== F  cpubound and the -p bench rows'
+out=`{$bin -s -r $root/bench/cpubound.nv main >[2]$tmp.err}
+expect cpubound-root 5600000 $"out
+rows $tmp.err
+if(! test -d $root/bench/runs)
+	mkdir $root/bench/runs
+echo '-- F rc bench/run.rc multi  (saved to bench/runs/T01-multi.txt)'
+rc $root/bench/run.rc multi >[2]$root/bench/runs/T01-multi.txt
+echo '-- F benchmark wall times and per-scheduler rows'
+grep '^(==|stats: wall|stats: sched)' $root/bench/runs/T01-multi.txt
+# (benchcmp keys include "-p N", so the multi capture never pairs with the
+# small set: the first run compared 0 shapes.  Compare the wall column of the
+# benchmark lines above by eye, or benchcmp two multi captures later.)
+
+echo '== G  orphaned procs'
+orph=`{ps | grep nervous}
+expect no-orphans '' $"orph
+if(! ~ $"orph '')
+	echo $orph
+
+rm -f $tmp.err
+
+echo
+echo '== SUMMARY'
+echo passed: $#passed
+echo failed: $#failed
+if(! ~ $#failed 0){
+	echo failures: $failed
+	exit failures
+}
+echo all multicore evidence checks passed
+exit ''
