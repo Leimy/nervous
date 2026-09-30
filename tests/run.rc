@@ -188,12 +188,12 @@ rm -rf $tmp
 # tests/multicore/README.md for what each one does and does not prove.
 for(p in 1 2 4){
 	out=`{$bin -p $p -r $testroot/multicore/order.nv main} || exit multicore
-	if(! ~ $"out ok){
+	if(! ~ $"out '''ok'){
 		echo FAIL: multicore order -p $p returned $"out >[1=2]
 		exit multicore
 	}
 	out=`{$bin -p $p -r $testroot/multicore/migrate.nv main} || exit multicore
-	if(! ~ $"out ok){
+	if(! ~ $"out '''ok'){
 		echo FAIL: multicore migrate -p $p returned $"out >[1=2]
 		exit multicore
 	}
