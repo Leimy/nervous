@@ -50,7 +50,7 @@ struct NvClock {
  * print/eprint fault bad_process_context under this scheduler, exactly as
  * they do with no host at all. The scheduler's single shared host table
  * (D065) checks these at call time, so nvschedsetio may be called before
- * or after spawning.
+ * or after spawning, but never while any scheduler proc is executing.
  */
 struct NvIO {
 	Biobuf *out;
@@ -81,19 +81,18 @@ enum {
 };
 
 /*
- * D087 (M10-T00b): the per-scheduler-proc half of the old NvScheduler.
- * One NvSched per scheduler proc; at N=1 there is exactly one,
- * sched[0], and every existing entry point (nvschedstep and friends)
- * operates on it. Everything here is touched by one scheduler proc
- * only (or, for gcsem/gchold, by that proc and the collector children
- * it forks). It is malloc'd by nvschedinit, never embedded: the D074
- * lesson is that rfork(RFPROC|RFMEM) does not share a caller's stack,
- * and NvScheduler is stack-allocated by every caller. The D088
- * counters beyond those already here and the idle semaphore arrive in
- * later T00b/T01 steps. Nothing here changes behavior at N=1; every
- * -s figure keeps its meaning.
+ * D087: one malloc'd NvSched per scheduler proc. N=1's step facade uses
+ * sched[0]. Local queue/owned-process transitions use its QLock; global
+ * operations use the machine gate plus every shard (docs/sharding.md).
+ * Execution/most counters are private to the scheduler proc; remote
+ * steal/wake bookkeeping uses the all-shard gate, collector publication
+ * uses the heap Lock, and sem/gcsem/gchold are shared signalling words.
+ * RFMEM shares heap/data, not an ordinary caller stack.
  */
 struct NvSched {
+	/* Shard protecting local queue and owned process transitions. Global
+	 * structural operations take every shard in ascending index order. */
+	QLock lock;
 	int index;		/* position in NvScheduler.sched; 0 at N=1 */
 	/*
 	 * D083/D087: this scheduler's FIFO of Prrunnable slots, the queue
@@ -108,21 +107,13 @@ struct NvSched {
 	uvlong dispatches;
 	uvlong reductions;
 	uvlong timerwakes;	/* D088 "deadline fires" */
-	/*
-	 * D088 measurement counters, per scheduler proc, aggregated by -s
-	 * at exit and never incremented through a shared word. Arrivals on
-	 * this scheduler's own queue are counted at the queue
-	 * (runq->enqueues). The rest have no event to count until M10-T01
-	 * and stay 0 here: remoteenq (enqueues this scheduler made onto
-	 * another scheduler's queue), stealstaken/stealsgiven (processes
-	 * this scheduler took from, or lost to, another), wakessent/
-	 * wakesrecv (semrelease sent to another scheduler / tsemacquire
-	 * returns that were a wake rather than a timeout), sleeps/sleepns
-	 * (idle tsemacquire waits and their total duration), lockacq/
-	 * lockwaitns (stage-1 global lock acquisitions and time spent
-	 * waiting for it). Printed from the first T00b build so the -s
-	 * row's shape is settled before any of them can move.
-	 */
+	/* D088: per-scheduler event counts, aggregated after join. Arrivals
+	 * are runq->enqueues. lockacq counts logical protected sections, NOT
+	 * individual QLocks: a global gate takes nsched+1 locks when sharded.
+	 * localacq + globalacq == lockacq; the wait-time fields likewise
+	 * partition lockwaitns. Timing is profile-only, includes acquisition/
+	 * clock overhead, excludes unlock and overlaps across procs. With
+	 * sharded=0 every acquisition is global; with locking=0 all are 0. */
 	uvlong remoteenq;
 	uvlong stealstaken;
 	uvlong stealsgiven;
@@ -132,6 +123,10 @@ struct NvSched {
 	uvlong sleepns;
 	uvlong lockacq;
 	uvlong lockwaitns;
+	uvlong localacq;
+	uvlong globalacq;
+	uvlong localwaitns;
+	uvlong globalwaitns;
 	/*
 	 * D085 (M10-T01): the idle semaphore, malloc'd like gcsem and for the
 	 * same reason; a remote waker semrelease's it when this scheduler's
@@ -240,25 +235,22 @@ struct NvScheduler {
 	uvlong quantum;
 	NvSched **sched;	/* D087: malloc'd array (NvMaxsched entries) of malloc'd per-proc state */
 	int nsched;		/* 1 from nvschedinit; nvschedsetnsched raises it */
-	/*
-	 * D081 stage 1 (M10-T01): the one runtime lock. Held for every
-	 * mutation of the process table, a mailbox, a run queue, a deadline
-	 * or the ref counter, and for every table scan step() makes;
-	 * released for the whole of nvexecrun, and never held across
-	 * clock.wait, tsemacquire, rfork or Bflush. It is a plain field,
-	 * not a pointer: nvmachinerun requires the NvScheduler itself to be
-	 * malloc'd (its runtime is shared state too), and the N=1 fixtures
-	 * that keep a stack NvScheduler never fork a scheduler proc, so a
-	 * stack QLock is fine there. Taken at N=1 as well, so the N=1
-	 * suites exercise the discipline (a QLock is not recursive: a
-	 * nested take deadlocks visibly instead of racing invisibly).
-	 * iolock (D086) serializes one print/eprint line and is never held
-	 * with lock.
+	/* M10-T04a: machine gate for structural/cross-owner operations.
+	 * When sharded, take lock then sched[0..N-1]->lock, release reverse.
+	 * Local operations take only their own shard; NEVER upgrade while
+	 * holding it. No runtime lock across execution, collection, rfork,
+	 * blocking waits or I/O. Directory growth/reuse and ownership change
+	 * require all shards, so any held shard stabilizes routing metadata.
+	 * See docs/sharding.md for the protection map and remaining global
+	 * operations. sharded=0 restores the stage-1 single-lock control.
+	 * The machine must be shared heap/data for a forked scheduler;
+	 * ordinary N=1 fixtures may keep it on their stack. iolock is
+	 * separate and is never held with a runtime gate/shard.
 	 */
 	QLock lock;
 	QLock iolock;
 	/*
-	 * Whether lockrt actually takes `lock`. Set by nvschedsetnsched for
+	 * Whether runtime locks/gates are taken. Set by nvschedsetnsched for
 	 * N>1 and by nvschedsetlocking (tests). Measured on M10-T01's first
 	 * landing: taking the uncontended lock at N=1 (7.4 acquisitions per
 	 * ring hop) cost 13-17% of wall time on message-heavy shapes, so
@@ -266,8 +258,12 @@ struct NvScheduler {
 	 * check turns it on explicitly.
 	 */
 	int locking;
+	/* 1 by default: local operations use the scheduler shard. Diagnostic
+	 * control 0 restores the stage-1 global lock; set only before running. */
+	int sharded;
 	/*
-	 * D085: idle/termination state, all under lock. idlemask bit i is
+	 * D085: idle/termination state, written under the all-shard gate.
+	 * idlemask may also be read with any shard held. idlemask bit i is
 	 * set while scheduler i is between "found nothing to do" and "woke
 	 * from its sleep"; nidle is its population count. stopping is one of
 	 * the NvStop values below once the machine has decided to end;
@@ -306,7 +302,8 @@ int nvschedinit(NvScheduler *, NvModule *, NvLimits *, uvlong, uvlong, char *, i
  * nvmachinerun's job.
  */
 int nvschedsetnsched(NvScheduler *, int n, char *, int);
-/* M10-T01: force the runtime lock on (or off) at N=1; see NvScheduler.locking. */
+/* Force runtime locking on (or off) at N=1; see NvScheduler.locking.
+ * Configuration only: never change while any scheduler proc is executing. */
 void nvschedsetlocking(NvScheduler *, int on);
 /*
  * M10-T01 (D085/D087): run the machine to completion with nsched
@@ -327,7 +324,7 @@ void nvmachineinterrupt(NvScheduler *);
  * D050: nvschedinit installs a default production clock (uptime/sleep).
  * nvschedsetclock overrides it; pass nil to restore the default. Tests
  * install a deterministic counter clock so timing tests never sleep on
- * host time.
+ * host time. Configure only while no scheduler proc is executing.
  */
 void nvschedsetclock(NvScheduler *, NvClock *);
 /*
@@ -363,6 +360,9 @@ void nvschedgchold(NvScheduler *, int hold);
 int nvschedspawn(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedspawnroot(NvScheduler *, char *, NvTerm arg, NvTerm *pid, char *, int);
 int nvschedstep(NvScheduler *, char *, int);
-/* O(slots + fragments), explicitly called between dispatches with exclusive
- * access. Never called by the ordinary scheduler or collection path. */
+/* O(slots + fragments), explicitly called with exclusive table/mailbox
+ * access and NO scheduler proc executing (at N>1, after machine stop/join).
+ * A held runtime gate does NOT stop private interpreter heap mutation.
+ * Collectors may remain active; their heaps are skipped. Never called by
+ * the ordinary scheduler or collection path. */
 void nvschedmemory(NvScheduler *, NvMemstats *);

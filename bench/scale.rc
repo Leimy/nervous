@@ -1,0 +1,103 @@
+#!/bin/rc
+# Run by the user, never by mk. See scale.md for interpretation.
+# usage: rc bench/scale.rc [smoke|full]   (full is the default)
+rfork E
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+bin=$benchdir/scale
+src=$benchdir/cpubound.nv
+if(! test -x $bin){
+	echo $0: build with '''mk benchmarks''' first >[1=2]
+	exit no-binary
+}
+mode=full
+if(~ $#* 1)
+	mode=$1
+if(! ~ $#* 0 1){
+	echo usage: $0 '[smoke|full]' >[1=2]
+	exit usage
+}
+
+fn measure {
+	echo '== scale schedulers workers iters headroom lock profile balanced:' $*
+	$bin $src $* || exit scale
+	echo
+}
+
+# Each independent process does the SAME work as the 4-worker single
+# baseline. Two in flight test doubled throughput, not fixed-work latency.
+# Keep separate logs to avoid interleaved rows; check success markers because
+# background exit-status propagation is not the benchmark's evidence.
+fn independent {
+	echo '== two independent N=1 processes, 4 workers x 700000 each'
+	a=/tmp/nervous-scale-^$pid^-a
+	b=/tmp/nervous-scale-^$pid^-b
+	@ { $bin $src 1 4 700000 0 0 0 0 && echo independent-ok } >$a >[2=1] &
+	pa=$apid
+	@ { $bin $src 1 4 700000 0 0 0 0 && echo independent-ok } >$b >[2=1] &
+	pb=$apid
+	wait $pa
+	wait $pb
+	echo '-- independent A'
+	cat $a
+	echo '-- independent B'
+	cat $b
+	if(! grep -s '^independent-ok$' $a){
+		echo independent-A-failed >[1=2]
+		exit independent
+	}
+	if(! grep -s '^independent-ok$' $b){
+		echo independent-B-failed >[1=2]
+		exit independent
+	}
+	rm -f $a $b
+	echo
+}
+
+switch($mode){
+case smoke
+	# Tiny/non-period-aligned n checks the independent remainder oracle.
+	measure 1 4 13 0 0 0 0
+	measure 1 4 13 128 1 0 0
+	measure 2 4 13 1024 1 0 1
+	measure 4 16 13 0 1 1 1
+case full
+	for(rep in 1 2 3){
+		echo '==== repeat' $rep
+		# Fixed total: 2.8M arithmetic iterations in both worker-count cases.
+		for(h in 0 128 1024){
+			measure 1 4 700000 $h 0 0 0
+			measure 1 4 700000 $h 1 0 0
+			measure 2 4 700000 $h 1 0 0
+			measure 4 4 700000 $h 1 0 0
+			measure 1 16 175000 $h 0 0 0
+			measure 2 16 175000 $h 1 0 0
+			measure 4 16 175000 $h 1 0 0
+		}
+		# Placement control: give every core work before any scheduler starts.
+		for(h in 0 1024){
+			measure 2 4 700000 $h 1 0 1
+			measure 4 4 700000 $h 1 0 1
+		}
+		independent
+	}
+	# Profiling is explanatory, NOT the throughput score. Paired unprofiled
+	# rows are above. Per-acquisition clocks perturb contention heavily.
+	echo '==== profiled controls'
+	for(h in 0 1024){
+		measure 1 4 700000 $h 1 1 1
+		measure 2 4 700000 $h 1 1 1
+		measure 4 4 700000 $h 1 1 1
+	}
+case *
+	echo usage: $0 '[smoke|full]' >[1=2]
+	exit usage
+}
+echo 'scale: all cases passed'
+exit ''

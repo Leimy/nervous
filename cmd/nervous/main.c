@@ -68,6 +68,8 @@ printsched(NvSched *sc)
 		sc->stealstaken, sc->stealsgiven, sc->wakessent, sc->wakesrecv, sc->sleeps, sc->sleepns,
 		sc->timerwakes, sc->lockacq, sc->lockwaitns,
 		sc->collections, sc->gcfailed, sc->lastlivewords);
+	fprint(2, "stats: locks %d: %llud local, %llud global acquisitions; %llud local, %llud global ns waited\n",
+		sc->index, sc->localacq, sc->globalacq, sc->localwaitns, sc->globalwaitns);
 }
 
 static void

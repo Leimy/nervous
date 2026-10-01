@@ -1,0 +1,638 @@
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 16 13 0 1 0 1 0
+scale: schedulers 4 workers 16 iters 13 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 21888 lockacq 7
+sched 1: dispatches 24 reductions 4423 GC 2 (demand 0 idle 2) steals 10 sleeps 1 sleepns 252359 lockacq 156
+sched 2: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 228787 lockacq 7
+sched 3: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 26486 lockacq 7
+result: 448 verified; elapsed 808431 ns; dispatches 27 reductions 5341 GC 2 lockacq 177
+GC words: input 76 output 6; messages 16; processes 17 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 16 13 0 1 0 1 1
+scale: schedulers 4 workers 16 iters 13 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 29529 lockacq 7
+retry 0: immediate 7 retried 0 fallback 0 misses 0
+sched 1: dispatches 26 reductions 4429 GC 3 (demand 0 idle 3) steals 10 sleeps 3 sleepns 300993 lockacq 171
+retry 1: immediate 171 retried 0 fallback 0 misses 0
+sched 2: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 182098 lockacq 7
+retry 2: immediate 7 retried 0 fallback 0 misses 0
+sched 3: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 80753 lockacq 7
+retry 3: immediate 7 retried 0 fallback 0 misses 0
+result: 448 verified; elapsed 700805 ns; dispatches 29 reductions 5347 GC 3 lockacq 192
+GC words: input 114 output 9; messages 16; processes 17 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 16 13 0 1 0 1 32
+scale: schedulers 4 workers 16 iters 13 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 16189 lockacq 7
+retry 0: immediate 7 retried 0 fallback 0 misses 0
+sched 1: dispatches 26 reductions 4429 GC 3 (demand 0 idle 3) steals 10 sleeps 3 sleepns 209424 lockacq 171
+retry 1: immediate 171 retried 0 fallback 0 misses 0
+sched 2: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 139099 lockacq 7
+retry 2: immediate 7 retried 0 fallback 0 misses 0
+sched 3: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 60483 lockacq 7
+retry 3: immediate 7 retried 0 fallback 0 misses 0
+result: 448 verified; elapsed 494228 ns; dispatches 29 reductions 5347 GC 3 lockacq 192
+GC words: input 114 output 9; messages 16; processes 17 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 16 13 0 1 0 1 128
+scale: schedulers 4 workers 16 iters 13 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 13922 lockacq 7
+retry 0: immediate 7 retried 0 fallback 0 misses 0
+sched 1: dispatches 26 reductions 4429 GC 3 (demand 0 idle 3) steals 10 sleeps 3 sleepns 189221 lockacq 171
+retry 1: immediate 171 retried 0 fallback 0 misses 0
+sched 2: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 126471 lockacq 7
+retry 2: immediate 7 retried 0 fallback 0 misses 0
+sched 3: dispatches 1 reductions 306 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 53749 lockacq 7
+retry 3: immediate 7 retried 0 fallback 0 misses 0
+result: 448 verified; elapsed 451877 ns; dispatches 29 reductions 5347 GC 3 lockacq 192
+GC words: input 114 output 9; messages 16; processes 17 completed
+
+==== repeat 1
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 0 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 922939039 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 107268 reductions 29283538 GC 107265 (demand 107265 idle 0) steals 0 sleeps 1 sleepns 15492 lockacq 321816
+sched 1: dispatches 108123 reductions 29516713 GC 108119 (demand 108119 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 324380
+result: 5600000 verified; elapsed 1299980208 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 106753 reductions 29142453 GC 106748 (demand 106748 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 320275
+retry 0: immediate 39645 retried 0 fallback 280630 misses 280630
+sched 1: dispatches 108639 reductions 29657801 GC 108636 (demand 108636 idle 0) steals 1 sleeps 1 sleepns 23828 lockacq 325923
+retry 1: immediate 45317 retried 0 fallback 280606 misses 280606
+result: 5600000 verified; elapsed 1285731165 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646198
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 107358 reductions 29308328 GC 107356 (demand 107356 idle 0) steals 0 sleeps 1 sleepns 17329 lockacq 322079
+retry 0: immediate 48413 retried 53 fallback 273613 misses 8755765
+sched 1: dispatches 108033 reductions 29491923 GC 108028 (demand 108028 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 324117
+retry 1: immediate 50417 retried 24 fallback 273676 misses 8757684
+result: 5600000 verified; elapsed 1399692983 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 106482 reductions 29068960 GC 106479 (demand 106479 idle 0) steals 0 sleeps 1 sleepns 14375 lockacq 319458
+retry 0: immediate 51198 retried 53 fallback 268207 misses 34330632
+sched 1: dispatches 108910 reductions 29731294 GC 108905 (demand 108905 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 326742
+retry 1: immediate 58455 retried 32 fallback 268255 misses 34336703
+result: 5600000 verified; elapsed 1808969921 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646200
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 53852 reductions 14700158 GC 53846 (demand 53846 idle 0) steals 0 sleeps 3 sleepns 6354931 lockacq 161582
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 5752278 lockacq 161545
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 25797 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 907885 lockacq 161545
+result: 5600000 verified; elapsed 1401674758 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646217
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 11356 lockacq 161549
+retry 0: immediate 7 retried 0 fallback 161542 misses 161542
+sched 1: dispatches 53849 reductions 14700139 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 1758727 lockacq 161566
+retry 1: immediate 633 retried 0 fallback 160933 misses 160933
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 47262 lockacq 161545
+retry 2: immediate 3 retried 0 fallback 161542 misses 161542
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 11881 lockacq 161545
+retry 3: immediate 2 retried 0 fallback 161543 misses 161543
+result: 5600000 verified; elapsed 1404855801 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646205
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 11093 lockacq 161556
+retry 0: immediate 11 retried 0 fallback 161545 misses 5169440
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 6987121 lockacq 161545
+retry 1: immediate 966 retried 0 fallback 160579 misses 5138528
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 30064 lockacq 161545
+retry 2: immediate 9 retried 0 fallback 161536 misses 5169152
+sched 3: dispatches 53848 reductions 14700111 GC 53846 (demand 53846 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 161556
+retry 3: immediate 11 retried 0 fallback 161545 misses 5169440
+result: 5600000 verified; elapsed 1572729074 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646202
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 6432 lockacq 161556
+retry 0: immediate 2 retried 0 fallback 161554 misses 20678912
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 5911918 lockacq 161545
+retry 1: immediate 609 retried 0 fallback 160936 misses 20599808
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 26059 lockacq 161545
+retry 2: immediate 3 retried 0 fallback 161542 misses 20677376
+sched 3: dispatches 53848 reductions 14700111 GC 53846 (demand 53846 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 161556
+retry 3: immediate 2 retried 0 fallback 161554 misses 20678912
+result: 5600000 verified; elapsed 2093831864 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646202
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 1024 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 831458957 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 29893 reductions 29132891 GC 1358 (demand 1358 idle 0) steals 0 sleeps 1 sleepns 181695 lockacq 61151
+sched 1: dispatches 30443 reductions 29667363 GC 1382 (demand 1382 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 62293
+result: 5600000 verified; elapsed 599911069 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123444
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 2676787 lockacq 61731
+retry 0: immediate 39894 retried 0 fallback 21837 misses 21837
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 6761 lockacq 61708
+retry 1: immediate 39880 retried 0 fallback 21828 misses 21828
+result: 5600000 verified; elapsed 624515986 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 7049874 lockacq 61731
+retry 0: immediate 38233 retried 64 fallback 23434 misses 750089
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 43783 lockacq 61708
+retry 1: immediate 38235 retried 23 fallback 23450 misses 750455
+result: 5600000 verified; elapsed 642197847 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 29988 reductions 29222764 GC 1362 (demand 1362 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 61359
+retry 0: immediate 38572 retried 50 fallback 22737 misses 2910502
+sched 1: dispatches 30348 reductions 29577490 GC 1378 (demand 1378 idle 0) steals 1 sleeps 1 sleepns 73124 lockacq 62083
+retry 1: immediate 39284 retried 17 fallback 22782 misses 2916139
+result: 5600000 verified; elapsed 670459573 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123442
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 4865070 lockacq 30856
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 444523 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 85465 lockacq 30856
+result: 5600000 verified; elapsed 848009752 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 15085 reductions 14700074 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 9649 lockacq 30867
+retry 0: immediate 1085 retried 0 fallback 29782 misses 29782
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 5131049 lockacq 30856
+retry 1: immediate 1322 retried 0 fallback 29534 misses 29534
+sched 2: dispatches 15085 reductions 14700114 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 3057112 lockacq 30874
+retry 2: immediate 1259 retried 0 fallback 29615 misses 29615
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 583157 lockacq 30856
+retry 3: immediate 1079 retried 0 fallback 29777 misses 29777
+result: 5600000 verified; elapsed 841934257 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123453
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 15087 reductions 14700155 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30880
+retry 0: immediate 1014 retried 0 fallback 29866 misses 955712
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 482332 lockacq 30856
+retry 1: immediate 1019 retried 1 fallback 29836 misses 954753
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 158327 lockacq 30856
+retry 2: immediate 1000 retried 0 fallback 29856 misses 955392
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 148809 lockacq 30856
+retry 3: immediate 981 retried 1 fallback 29874 misses 955970
+result: 5600000 verified; elapsed 894378434 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123448
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+retry 0: immediate 818 retried 3 fallback 30063 misses 3848069
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 12354150 lockacq 30856
+retry 1: immediate 1218 retried 1 fallback 29637 misses 3793537
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 349277 lockacq 30856
+retry 2: immediate 786 retried 1 fallback 30069 misses 3848835
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 167057 lockacq 30856
+retry 3: immediate 768 retried 1 fallback 30087 misses 3851137
+result: 5600000 verified; elapsed 1005947954 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+==== repeat 2
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 0 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 927980015 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 106053 reductions 28952063 GC 106051 (demand 106051 idle 0) steals 0 sleeps 1 sleepns 8271 lockacq 318164
+retry 0: immediate 50676 retried 60 fallback 267428 misses 34230936
+sched 1: dispatches 109338 reductions 29848188 GC 109333 (demand 109333 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 328032
+retry 1: immediate 60544 retried 23 fallback 267465 misses 34235571
+result: 5600000 verified; elapsed 1800740275 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 107408 reductions 29321758 GC 107405 (demand 107405 idle 0) steals 0 sleeps 1 sleepns 5251 lockacq 322236
+retry 0: immediate 47033 retried 48 fallback 275155 misses 8805082
+sched 1: dispatches 107983 reductions 29478493 GC 107979 (demand 107979 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 323960
+retry 1: immediate 48707 retried 33 fallback 275220 misses 8807112
+result: 5600000 verified; elapsed 1403947851 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 108177 reductions 29530975 GC 108171 (demand 108171 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 324548
+retry 0: immediate 42331 retried 0 fallback 282217 misses 282217
+sched 1: dispatches 107214 reductions 29269276 GC 107213 (demand 107213 idle 0) steals 0 sleeps 1 sleepns 10568 lockacq 321646
+retry 1: immediate 39456 retried 0 fallback 282190 misses 282190
+result: 5600000 verified; elapsed 1283402672 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646194
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 107413 reductions 29322633 GC 107408 (demand 107408 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 322255
+sched 1: dispatches 107979 reductions 29477621 GC 107976 (demand 107976 idle 0) steals 1 sleeps 1 sleepns 12931 lockacq 323943
+result: 5600000 verified; elapsed 1318385542 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646198
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 11553 lockacq 161556
+retry 0: immediate 16 retried 0 fallback 161540 misses 20677120
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 16477868 lockacq 161545
+retry 1: immediate 1707 retried 0 fallback 159838 misses 20459264
+sched 2: dispatches 53849 reductions 14700114 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 123274 lockacq 161563
+retry 2: immediate 36 retried 0 fallback 161527 misses 20675456
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 24353 lockacq 161545
+retry 3: immediate 2 retried 0 fallback 161543 misses 20677504
+result: 5600000 verified; elapsed 2095864973 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646209
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 20414 lockacq 161549
+retry 0: immediate 7 retried 0 fallback 161542 misses 5169344
+sched 1: dispatches 53849 reductions 14700139 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 14061612 lockacq 161566
+retry 1: immediate 1962 retried 0 fallback 159604 misses 5107328
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 28947 lockacq 161545
+retry 2: immediate 3 retried 0 fallback 161542 misses 5169344
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 19298 lockacq 161545
+retry 3: immediate 2 retried 0 fallback 161543 misses 5169376
+result: 5600000 verified; elapsed 1569528340 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646205
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 8074 lockacq 161556
+retry 0: immediate 2 retried 0 fallback 161554 misses 161554
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 4830215 lockacq 161545
+retry 1: immediate 738 retried 0 fallback 160807 misses 160807
+sched 2: dispatches 53849 reductions 14700114 GC 53846 (demand 53846 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 161562
+retry 2: immediate 5 retried 0 fallback 161557 misses 161557
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 23828 lockacq 161545
+retry 3: immediate 2 retried 0 fallback 161543 misses 161543
+result: 5600000 verified; elapsed 1414203450 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646208
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 26913 lockacq 161549
+sched 1: dispatches 53849 reductions 14700139 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 3824656 lockacq 161566
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 36234 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 40960 lockacq 161545
+result: 5600000 verified; elapsed 1412327880 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646205
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 1024 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 839345233 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 30167 reductions 29400079 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 16148 lockacq 61712
+retry 0: immediate 42135 retried 55 fallback 19522 misses 2498985
+sched 1: dispatches 30168 reductions 29400172 GC 1370 (demand 1370 idle 0) steals 1 sleeps 1 sleepns 3957907 lockacq 61729
+retry 1: immediate 42164 retried 23 fallback 19542 misses 2501443
+result: 5600000 verified; elapsed 635925690 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123441
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 30049 reductions 29282087 GC 1365 (demand 1365 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 61484
+retry 0: immediate 40515 retried 39 fallback 20930 misses 669877
+sched 1: dispatches 30287 reductions 29518167 GC 1375 (demand 1375 idle 0) steals 1 sleeps 1 sleepns 41026 lockacq 61958
+retry 1: immediate 40945 retried 31 fallback 20982 misses 671521
+result: 5600000 verified; elapsed 609705472 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123442
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 3386435 lockacq 61731
+retry 0: immediate 38737 retried 0 fallback 22994 misses 22994
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 6301 lockacq 61708
+retry 1: immediate 38657 retried 0 fallback 23051 misses 23051
+result: 5600000 verified; elapsed 626450762 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 30167 reductions 29400079 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 6564 lockacq 61712
+sched 1: dispatches 30168 reductions 29400172 GC 1370 (demand 1370 idle 0) steals 1 sleeps 1 sleepns 6033419 lockacq 61729
+result: 5600000 verified; elapsed 629369568 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123441
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 15087 reductions 14700155 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30880
+retry 0: immediate 1084 retried 3 fallback 29793 misses 3813509
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 10609077 lockacq 30856
+retry 1: immediate 1489 retried 1 fallback 29366 misses 3758849
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 276087 lockacq 30856
+retry 2: immediate 1065 retried 2 fallback 29789 misses 3812995
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 270245 lockacq 30856
+retry 3: immediate 1065 retried 0 fallback 29791 misses 3813248
+result: 5600000 verified; elapsed 1005446192 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123448
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+retry 0: immediate 1738 retried 2 fallback 29144 misses 932612
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 3908479 lockacq 30856
+retry 1: immediate 1844 retried 3 fallback 29009 misses 928292
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 131283 lockacq 30856
+retry 2: immediate 1703 retried 2 fallback 29151 misses 932835
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 318623 lockacq 30856
+retry 3: immediate 1708 retried 1 fallback 29147 misses 932706
+result: 5600000 verified; elapsed 879493941 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 15085 reductions 14700074 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 22055 lockacq 30867
+retry 0: immediate 1746 retried 0 fallback 29121 misses 29121
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 14760692 lockacq 30856
+retry 1: immediate 2359 retried 0 fallback 28497 misses 28497
+sched 2: dispatches 15086 reductions 14700117 GC 685 (demand 685 idle 0) steals 1 sleeps 2 sleepns 754023 lockacq 30881
+retry 2: immediate 1809 retried 0 fallback 29072 misses 29072
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 202832 lockacq 30856
+retry 3: immediate 1734 retried 0 fallback 29122 misses 29122
+result: 5600000 verified; elapsed 855031664 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123460
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 15084 reductions 14700046 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 12078 lockacq 30860
+sched 1: dispatches 15085 reductions 14700139 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 1950269 lockacq 30877
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 232173 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 51397 lockacq 30856
+result: 5600000 verified; elapsed 869188850 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123449
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+==== repeat 3
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 0 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 927034320 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 107242 reductions 29276440 GC 107239 (demand 107239 idle 0) steals 0 sleeps 1 sleepns 4989 lockacq 321738
+sched 1: dispatches 108150 reductions 29523814 GC 108145 (demand 108145 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 324462
+result: 5600000 verified; elapsed 1296068815 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646200
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 108104 reductions 29511046 GC 108098 (demand 108098 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 324329
+retry 0: immediate 37520 retried 0 fallback 286809 misses 286809
+sched 1: dispatches 107287 reductions 29289205 GC 107286 (demand 107286 idle 0) steals 0 sleeps 1 sleepns 5120 lockacq 321865
+retry 1: immediate 35032 retried 0 fallback 286833 misses 286833
+result: 5600000 verified; elapsed 1295385161 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646194
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 105793 reductions 28881083 GC 105791 (demand 105791 idle 0) steals 0 sleeps 1 sleepns 6761 lockacq 317384
+retry 0: immediate 35430 retried 51 fallback 281903 misses 9021031
+sched 1: dispatches 109599 reductions 29919171 GC 109593 (demand 109593 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 328816
+retry 1: immediate 46852 retried 28 fallback 281936 misses 9022042
+result: 5600000 verified; elapsed 1428301033 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646200
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 0 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 107507 reductions 29348785 GC 107504 (demand 107504 idle 0) steals 0 sleeps 1 sleepns 8533 lockacq 322533
+retry 0: immediate 40021 retried 74 fallback 282438 misses 36152268
+sched 1: dispatches 107885 reductions 29451469 GC 107880 (demand 107880 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 323667
+retry 1: immediate 41184 retried 22 fallback 282461 misses 36155062
+result: 5600000 verified; elapsed 1872013854 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646200
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 14835 lockacq 161549
+sched 1: dispatches 53849 reductions 14700139 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 15892939 lockacq 161566
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 28554 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 19364 lockacq 161545
+result: 5600000 verified; elapsed 1404306055 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646205
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 10634 lockacq 161556
+retry 0: immediate 6 retried 0 fallback 161550 misses 161550
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 11931486 lockacq 161545
+retry 1: immediate 1869 retried 0 fallback 159676 misses 159676
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 48115 lockacq 161545
+retry 2: immediate 3 retried 0 fallback 161542 misses 161542
+sched 3: dispatches 53849 reductions 14700114 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 3478 lockacq 161563
+retry 3: immediate 8 retried 0 fallback 161555 misses 161555
+result: 5600000 verified; elapsed 1386745172 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646209
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 53849 reductions 14700074 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 8993 lockacq 161556
+retry 0: immediate 11 retried 0 fallback 161545 misses 5169440
+sched 1: dispatches 53849 reductions 14700114 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 3734005 lockacq 161563
+retry 1: immediate 801 retried 0 fallback 160762 misses 5144384
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 14818719 lockacq 161545
+retry 2: immediate 2314 retried 0 fallback 159231 misses 5095392
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 14835 lockacq 161545
+retry 3: immediate 3 retried 0 fallback 161542 misses 5169344
+result: 5600000 verified; elapsed 1559042603 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646209
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 0 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 21793 lockacq 161549
+retry 0: immediate 60 retried 0 fallback 161489 misses 20670592
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 3917997 lockacq 161545
+retry 1: immediate 648 retried 0 fallback 160897 misses 20594816
+sched 2: dispatches 53850 reductions 14700142 GC 53846 (demand 53846 idle 0) steals 1 sleeps 2 sleepns 12712224 lockacq 161573
+retry 2: immediate 1585 retried 0 fallback 159988 misses 20478464
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 27307 lockacq 161545
+retry 3: immediate 59 retried 0 fallback 161486 misses 20670208
+result: 5600000 verified; elapsed 2064983566 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646212
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 1 4 700000 1024 0 0 1 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 862833854 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 30021 reductions 29255205 GC 1363 (demand 1363 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 61426
+sched 1: dispatches 30315 reductions 29545049 GC 1377 (demand 1377 idle 0) steals 1 sleeps 1 sleepns 72600 lockacq 62016
+result: 5600000 verified; elapsed 622472703 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123442
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 30141 reductions 29371851 GC 1369 (demand 1369 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 61672
+retry 0: immediate 38560 retried 0 fallback 23112 misses 23112
+sched 1: dispatches 30195 reductions 29428403 GC 1371 (demand 1371 idle 0) steals 1 sleeps 1 sleepns 48312 lockacq 61770
+retry 1: immediate 38652 retried 0 fallback 23118 misses 23118
+result: 5600000 verified; elapsed 625300465 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123442
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 32
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 29823 reductions 29065127 GC 1354 (demand 1354 idle 0) steals 0 sleeps 1 sleepns 125506 lockacq 61007
+retry 0: immediate 38164 retried 42 fallback 22801 misses 729761
+sched 1: dispatches 30513 reductions 29735127 GC 1386 (demand 1386 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 62437
+retry 1: immediate 39569 retried 23 fallback 22845 misses 731093
+result: 5600000 verified; elapsed 642796626 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123444
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 2 4 700000 1024 1 0 1 128
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 29974 reductions 29209323 GC 1361 (demand 1361 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 61330
+retry 0: immediate 36660 retried 57 fallback 24613 misses 3150653
+sched 1: dispatches 30362 reductions 29590931 GC 1379 (demand 1379 idle 0) steals 1 sleeps 1 sleepns 64722 lockacq 62112
+retry 1: immediate 37411 retried 27 fallback 24674 misses 3158346
+result: 5600000 verified; elapsed 701067518 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123442
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 0; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 10299579 lockacq 30856
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 381048 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 128263 lockacq 30856
+result: 5600000 verified; elapsed 851238780 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 1; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+retry 0: immediate 1505 retried 0 fallback 29379 misses 29379
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 18078072 lockacq 30856
+retry 1: immediate 2234 retried 0 fallback 28622 misses 28622
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 256198 lockacq 30856
+retry 2: immediate 1486 retried 0 fallback 29370 misses 29370
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 744438 lockacq 30856
+retry 3: immediate 1479 retried 0 fallback 29377 misses 29377
+result: 5600000 verified; elapsed 865694107 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 32
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 32; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+retry 0: immediate 1381 retried 2 fallback 29501 misses 944035
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 283702 lockacq 30856
+retry 1: immediate 1375 retried 1 fallback 29480 misses 943361
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 10704585 lockacq 30856
+retry 2: immediate 1805 retried 4 fallback 29047 misses 929512
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 193642 lockacq 30856
+retry 3: immediate 1366 retried 1 fallback 29489 misses 943649
+result: 5600000 verified; elapsed 903841939 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== retry schedulers workers iters headroom lock profile balanced locktries: 4 4 700000 1024 1 0 1 128
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; locktries 128; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+retry 0: immediate 512 retried 0 fallback 30372 misses 3887616
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 8638328 lockacq 30856
+retry 1: immediate 832 retried 0 fallback 30024 misses 3843072
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 79295 lockacq 30856
+retry 2: immediate 489 retried 1 fallback 30366 misses 3886850
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 271361 lockacq 30856
+retry 3: immediate 484 retried 1 fallback 30371 misses 3887489
+result: 5600000 verified; elapsed 1029409268 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+lockretry: all cases passed

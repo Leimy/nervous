@@ -1,0 +1,744 @@
+==== repeat 1
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 879310605 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 646184
+result: 5600000 verified; elapsed 887729594 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 646184
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107268 reductions 29284070 GC 107267 (demand 107267 idle 0) steals 0 sleeps 1 sleepns 5115 lockacq 321808
+sched 1: dispatches 108125 reductions 29516187 GC 108117 (demand 108117 idle 0) steals 4 sleeps 1 sleepns 3916 lockacq 324403
+result: 5600000 verified; elapsed 1208032221 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646211
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 9346 lockacq 161545
+sched 1: dispatches 53850 reductions 14700152 GC 53846 (demand 53846 idle 0) steals 2 sleeps 1 sleepns 13013191 lockacq 161572
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 30943 lockacq 161547
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 10546 lockacq 161547
+result: 5600000 verified; elapsed 1354463700 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646211
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 0 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215395 reductions 58800946 GC 215377 (demand 215377 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 891492872 ns; dispatches 215395 reductions 58800946 GC 215377 lockacq 0
+GC words: input 13568751 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 0 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 108109 reductions 29514392 GC 108108 (demand 108108 idle 0) steals 0 sleeps 1 sleepns 9157 lockacq 324331
+sched 1: dispatches 107299 reductions 29286596 GC 107270 (demand 107268 idle 2) steals 16 sleeps 0 sleepns 0 lockacq 321995
+result: 5600000 verified; elapsed 1174571291 ns; dispatches 215408 reductions 58800988 GC 215378 lockacq 646326
+GC words: input 13568764 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 0 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53827 reductions 14695302 GC 53826 (demand 53826 idle 0) steals 0 sleeps 1 sleepns 31574 lockacq 161485
+sched 1: dispatches 53916 reductions 14715837 GC 53902 (demand 53900 idle 2) steals 6 sleeps 1 sleepns 1045317 lockacq 161824
+sched 2: dispatches 53831 reductions 14695190 GC 53826 (demand 53826 idle 0) steals 5 sleeps 1 sleepns 10294 lockacq 161507
+sched 3: dispatches 53829 reductions 14694644 GC 53824 (demand 53824 idle 0) steals 5 sleeps 1 sleepns 12946 lockacq 161501
+result: 5600000 verified; elapsed 1390380143 ns; dispatches 215403 reductions 58800973 GC 215378 lockacq 646317
+GC words: input 13568785 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 801931660 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 0
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 156820
+result: 5600000 verified; elapsed 813416313 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 156820
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 128 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 39110 reductions 34221618 GC 13034 (demand 13034 idle 0) steals 0 sleeps 1 sleepns 13703 lockacq 91260
+sched 1: dispatches 28094 reductions 24578636 GC 9362 (demand 9362 idle 0) steals 3 sleeps 1 sleepns 140379276 lockacq 65581
+result: 5600000 verified; elapsed 639673357 ns; dispatches 67204 reductions 58800254 GC 22396 lockacq 156841
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 128 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 0 sleeps 1 sleepns 9156 lockacq 39204
+sched 1: dispatches 16803 reductions 14700152 GC 5599 (demand 5599 idle 0) steals 2 sleeps 1 sleepns 2101495 lockacq 39231
+sched 2: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 368794 lockacq 39206
+sched 3: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 51846 lockacq 39206
+result: 5600000 verified; elapsed 887544755 ns; dispatches 67203 reductions 58800251 GC 22396 lockacq 156847
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 128 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67203 reductions 58800946 GC 22385 (demand 22385 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 805993068 ns; dispatches 67203 reductions 58800946 GC 22385 lockacq 0
+GC words: input 11438287 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 128 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 33757 reductions 29539367 GC 11247 (demand 11247 idle 0) steals 0 sleeps 1 sleepns 7199 lockacq 78767
+sched 1: dispatches 33459 reductions 29261621 GC 11139 (demand 11137 idle 2) steals 15 sleeps 1 sleepns 7508244 lockacq 78184
+result: 5600000 verified; elapsed 537089733 ns; dispatches 67216 reductions 58800988 GC 22386 lockacq 156951
+GC words: input 11438300 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 128 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 16750 reductions 14658157 GC 5579 (demand 5579 idle 0) steals 0 sleeps 1 sleepns 36753 lockacq 39084
+sched 1: dispatches 16844 reductions 14723295 GC 5608 (demand 5606 idle 2) steals 6 sleeps 2 sleepns 274639 lockacq 39401
+sched 2: dispatches 16853 reductions 14745832 GC 5614 (demand 5614 idle 0) steals 5 sleeps 1 sleepns 1684833 lockacq 39339
+sched 3: dispatches 16770 reductions 14673707 GC 5585 (demand 5585 idle 0) steals 5 sleeps 1 sleepns 5557 lockacq 39144
+result: 5600000 verified; elapsed 882982632 ns; dispatches 67217 reductions 58800991 GC 22386 lockacq 156968
+GC words: input 11438307 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 796612373 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 123428
+result: 5600000 verified; elapsed 791623706 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 123428
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 35146 reductions 34253784 GC 1596 (demand 1596 idle 0) steals 0 sleeps 1 sleepns 8030 lockacq 71894
+sched 1: dispatches 25190 reductions 24546470 GC 1144 (demand 1144 idle 0) steals 3 sleeps 1 sleepns 137289207 lockacq 51555
+result: 5600000 verified; elapsed 525160447 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123449
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 10053 lockacq 61708
+sched 1: dispatches 15087 reductions 14700155 GC 685 (demand 685 idle 0) steals 2 sleeps 2 sleepns 202515235 lockacq 30890
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 198892270 lockacq 30858
+sched 3: dispatches 0 reductions 0 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 712738426 lockacq 4
+result: 5600000 verified; elapsed 716323200 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123460
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 1024 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60339 reductions 58800946 GC 2737 (demand 2737 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 784939950 ns; dispatches 60339 reductions 58800946 GC 2737 lockacq 0
+GC words: input 11203983 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 1024 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30194 reductions 29431315 GC 1365 (demand 1365 idle 0) steals 0 sleeps 1 sleepns 260698 lockacq 61758
+sched 1: dispatches 30159 reductions 29369676 GC 1373 (demand 1371 idle 2) steals 16 sleeps 0 sleepns 0 lockacq 61820
+result: 5600000 verified; elapsed 486034338 ns; dispatches 60353 reductions 58800991 GC 2738 lockacq 123578
+GC words: input 11203996 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 1024 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 16001 reductions 15597648 GC 722 (demand 722 idle 0) steals 0 sleeps 1 sleepns 8852 lockacq 32729
+sched 1: dispatches 16230 reductions 15801867 GC 739 (demand 737 idle 2) steals 7 sleeps 1 sleepns 105278 lockacq 33290
+sched 2: dispatches 15068 reductions 14680631 GC 684 (demand 684 idle 0) steals 6 sleeps 2 sleepns 22582739 lockacq 30858
+sched 3: dispatches 13054 reductions 12720845 GC 593 (demand 593 idle 0) steals 4 sleeps 1 sleepns 73742066 lockacq 26717
+result: 5600000 verified; elapsed 742591124 ns; dispatches 60353 reductions 58800991 GC 2738 lockacq 123594
+GC words: input 11204017 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107665 reductions 29391919 GC 107662 (demand 107662 idle 0) steals 0 sleeps 1 sleepns 15048 lockacq 323007
+sched 1: dispatches 107727 reductions 29408335 GC 107722 (demand 107722 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 323193
+result: 5600000 verified; elapsed 1222053692 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646200
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 9991 lockacq 161549
+sched 1: dispatches 53849 reductions 14700139 GC 53846 (demand 53846 idle 0) steals 1 sleeps 1 sleepns 680673 lockacq 161566
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 17451 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 50963 lockacq 161545
+result: 5600000 verified; elapsed 1330045993 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646205
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 1688627 lockacq 61731
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 7081 lockacq 61708
+result: 5600000 verified; elapsed 534482669 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 2861231 lockacq 30856
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 328607 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 225606 lockacq 30856
+result: 5600000 verified; elapsed 788880142 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== two independent N=1 processes, 4 workers x 700000 each
+-- independent A
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 897757287 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+-- independent B
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 893532939 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+
+==== repeat 2
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 872368073 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 646184
+result: 5600000 verified; elapsed 895968883 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 646184
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107486 reductions 29343094 GC 107483 (demand 107483 idle 0) steals 1 sleeps 1 sleepns 213275 lockacq 322471
+sched 1: dispatches 107907 reductions 29457163 GC 107901 (demand 107901 idle 0) steals 4 sleeps 1 sleepns 4174 lockacq 323742
+result: 5600000 verified; elapsed 1196066194 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646213
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 80768 reductions 22049518 GC 80767 (demand 80767 idle 0) steals 0 sleeps 1 sleepns 11887 lockacq 242308
+sched 1: dispatches 53851 reductions 14700155 GC 53846 (demand 53846 idle 0) steals 2 sleeps 2 sleepns 273911080 lockacq 161579
+sched 2: dispatches 80773 reductions 22050581 GC 80771 (demand 80771 idle 0) steals 2 sleeps 1 sleepns 285674 lockacq 242327
+sched 3: dispatches 0 reductions 0 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 1265936357 lockacq 4
+result: 5600000 verified; elapsed 1267995576 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646218
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 0 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215395 reductions 58800946 GC 215377 (demand 215377 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 870260040 ns; dispatches 215395 reductions 58800946 GC 215377 lockacq 0
+GC words: input 13568751 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 0 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107640 reductions 29386355 GC 107639 (demand 107639 idle 0) steals 0 sleeps 1 sleepns 9484 lockacq 322924
+sched 1: dispatches 107769 reductions 29414636 GC 107740 (demand 107737 idle 3) steals 16 sleeps 1 sleepns 26873 lockacq 323410
+result: 5600000 verified; elapsed 1157294744 ns; dispatches 215409 reductions 58800991 GC 215379 lockacq 646334
+GC words: input 13568802 output 2369145; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 0 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53770 reductions 14679741 GC 53769 (demand 53769 idle 0) steals 0 sleeps 1 sleepns 11634 lockacq 161314
+sched 1: dispatches 54099 reductions 14765526 GC 54084 (demand 54082 idle 2) steals 6 sleeps 1 sleepns 4647169 lockacq 162374
+sched 2: dispatches 53769 reductions 14678264 GC 53764 (demand 53764 idle 0) steals 5 sleeps 1 sleepns 21814 lockacq 161321
+sched 3: dispatches 53766 reductions 14677445 GC 53761 (demand 53761 idle 0) steals 5 sleeps 1 sleepns 8093 lockacq 161312
+result: 5600000 verified; elapsed 1371463248 ns; dispatches 215404 reductions 58800976 GC 215378 lockacq 646321
+GC words: input 13568785 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 789008498 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 0
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 156820
+result: 5600000 verified; elapsed 792002893 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 156820
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 128 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 38873 reductions 34014243 GC 12955 (demand 12955 idle 0) steals 0 sleeps 1 sleepns 12709 lockacq 90707
+sched 1: dispatches 28331 reductions 24786011 GC 9441 (demand 9441 idle 0) steals 3 sleeps 1 sleepns 143996985 lockacq 66134
+result: 5600000 verified; elapsed 601669341 ns; dispatches 67204 reductions 58800254 GC 22396 lockacq 156841
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 128 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 0 sleeps 1 sleepns 33765 lockacq 39204
+sched 1: dispatches 16803 reductions 14700152 GC 5599 (demand 5599 idle 0) steals 2 sleeps 1 sleepns 4129313 lockacq 39231
+sched 2: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 102433 lockacq 39206
+sched 3: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 8537 lockacq 39206
+result: 5600000 verified; elapsed 860749771 ns; dispatches 67203 reductions 58800251 GC 22396 lockacq 156847
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 128 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67203 reductions 58800946 GC 22385 (demand 22385 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 801706458 ns; dispatches 67203 reductions 58800946 GC 22385 lockacq 0
+GC words: input 11438287 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 128 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 34121 reductions 29857992 GC 11368 (demand 11368 idle 0) steals 0 sleeps 1 sleepns 6071 lockacq 79616
+sched 1: dispatches 33095 reductions 28942996 GC 11018 (demand 11016 idle 2) steals 15 sleeps 1 sleepns 5815600 lockacq 77335
+result: 5600000 verified; elapsed 547333139 ns; dispatches 67216 reductions 58800988 GC 22386 lockacq 156951
+GC words: input 11438300 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 128 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 17950 reductions 15708532 GC 5978 (demand 5978 idle 0) steals 0 sleeps 1 sleepns 8157 lockacq 41883
+sched 1: dispatches 14571 reductions 12738174 GC 4852 (demand 4851 idle 1) steals 5 sleeps 3 sleepns 74576199 lockacq 34089
+sched 2: dispatches 17893 reductions 15655688 GC 5960 (demand 5960 idle 0) steals 6 sleeps 1 sleepns 15048 lockacq 41768
+sched 3: dispatches 16799 reductions 14698582 GC 5596 (demand 5596 idle 0) steals 5 sleeps 1 sleepns 21485506 lockacq 39213
+result: 5600000 verified; elapsed 836581975 ns; dispatches 67213 reductions 58800976 GC 22386 lockacq 156953
+GC words: input 11438324 output 246233; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 809963377 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 123428
+result: 5600000 verified; elapsed 804929871 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 123428
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30027 reductions 29264576 GC 1364 (demand 1364 idle 0) steals 0 sleeps 1 sleepns 12519 lockacq 61423
+sched 1: dispatches 30310 reductions 29535681 GC 1376 (demand 1376 idle 0) steals 4 sleeps 1 sleepns 104393 lockacq 62032
+result: 5600000 verified; elapsed 466201292 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123455
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 9547 lockacq 30856
+sched 1: dispatches 15087 reductions 14700155 GC 685 (demand 685 idle 0) steals 2 sleeps 2 sleepns 8030492 lockacq 30890
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 1115634 lockacq 30858
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 772357 lockacq 30858
+result: 5600000 verified; elapsed 793169175 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123462
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 1024 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60339 reductions 58800946 GC 2737 (demand 2737 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 793178280 ns; dispatches 60339 reductions 58800946 GC 2737 lockacq 0
+GC words: input 11203983 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 1024 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30459 reductions 29689177 GC 1377 (demand 1377 idle 0) steals 0 sleeps 1 sleepns 7019 lockacq 62301
+sched 1: dispatches 29893 reductions 29111811 GC 1361 (demand 1359 idle 2) steals 15 sleeps 1 sleepns 6569874 lockacq 61274
+result: 5600000 verified; elapsed 484854400 ns; dispatches 60352 reductions 58800988 GC 2738 lockacq 123575
+GC words: input 11203996 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 1024 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 17008 reductions 16579622 GC 766 (demand 766 idle 0) steals 0 sleeps 1 sleepns 9990 lockacq 34788
+sched 1: dispatches 15173 reductions 14770211 GC 691 (demand 689 idle 2) steals 6 sleeps 2 sleepns 27693577 lockacq 31140
+sched 2: dispatches 15124 reductions 14737310 GC 688 (demand 688 idle 0) steals 5 sleeps 1 sleepns 27437999 lockacq 30955
+sched 3: dispatches 13047 reductions 12713845 GC 593 (demand 593 idle 0) steals 4 sleeps 1 sleepns 65356221 lockacq 26703
+result: 5600000 verified; elapsed 733162232 ns; dispatches 60352 reductions 58800988 GC 2738 lockacq 123586
+GC words: input 11204017 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107184 reductions 29260826 GC 107182 (demand 107182 idle 0) steals 0 sleeps 1 sleepns 9737 lockacq 321557
+sched 1: dispatches 108207 reductions 29539425 GC 108202 (demand 108202 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 324639
+result: 5600000 verified; elapsed 1197139148 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 195572 lockacq 161549
+sched 1: dispatches 53850 reductions 14700142 GC 53846 (demand 53846 idle 0) steals 1 sleeps 2 sleepns 2258773 lockacq 161573
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 454372 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 6196 lockacq 161545
+result: 5600000 verified; elapsed 1324352049 ns; dispatches 215392 reductions 58800254 GC 215384 lockacq 646212
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 2331930 lockacq 61731
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 5311 lockacq 61708
+result: 5600000 verified; elapsed 529231398 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 1042729 lockacq 30887
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 11761 lockacq 30856
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 2718584 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 2261998 lockacq 30856
+result: 5600000 verified; elapsed 784811340 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123455
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== two independent N=1 processes, 4 workers x 700000 each
+-- independent A
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 917494855 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+-- independent B
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 919717398 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+
+==== repeat 3
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 890582237 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 646184
+result: 5600000 verified; elapsed 889057059 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 646184
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107615 reductions 29378801 GC 107614 (demand 107614 idle 0) steals 0 sleeps 1 sleepns 127852 lockacq 322849
+sched 1: dispatches 107778 reductions 29421456 GC 107770 (demand 107770 idle 0) steals 4 sleeps 0 sleepns 0 lockacq 323359
+result: 5600000 verified; elapsed 1164863151 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646208
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 80114 reductions 21870976 GC 80113 (demand 80113 idle 0) steals 0 sleeps 1 sleepns 1618884 lockacq 240346
+sched 1: dispatches 81429 reductions 22229164 GC 81425 (demand 81425 idle 0) steals 3 sleeps 1 sleepns 14796 lockacq 244302
+sched 2: dispatches 53850 reductions 14700117 GC 53846 (demand 53846 idle 0) steals 2 sleeps 2 sleepns 266827018 lockacq 161572
+sched 3: dispatches 0 reductions 0 GC 0 (demand 0 idle 0) steals 0 sleeps 1 sleepns 1263767876 lockacq 4
+result: 5600000 verified; elapsed 1265223246 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646224
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 0 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215395 reductions 58800946 GC 215377 (demand 215377 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 876963267 ns; dispatches 215395 reductions 58800946 GC 215377 lockacq 0
+GC words: input 13568751 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 0 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 106931 reductions 29192309 GC 106928 (demand 106928 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 320803
+sched 1: dispatches 108478 reductions 29608682 GC 108450 (demand 108448 idle 2) steals 16 sleeps 1 sleepns 12647 lockacq 325529
+result: 5600000 verified; elapsed 1133751410 ns; dispatches 215409 reductions 58800991 GC 215378 lockacq 646332
+GC words: input 13568764 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 0 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 0 lock 1 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 57210 reductions 15618861 GC 57209 (demand 57209 idle 0) steals 0 sleeps 1 sleepns 93834 lockacq 171634
+sched 1: dispatches 57729 reductions 15756835 GC 57715 (demand 57713 idle 2) steals 7 sleeps 1 sleepns 10876 lockacq 173256
+sched 2: dispatches 46646 reductions 12733830 GC 46642 (demand 46642 idle 0) steals 4 sleeps 1 sleepns 161792817 lockacq 139950
+sched 3: dispatches 53819 reductions 14691450 GC 53812 (demand 53812 idle 0) steals 6 sleeps 1 sleepns 30605328 lockacq 161483
+result: 5600000 verified; elapsed 1351609462 ns; dispatches 215404 reductions 58800976 GC 215378 lockacq 646323
+GC words: input 13568785 output 2369142; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 794712625 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 0
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 128 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67202 reductions 58800248 GC 22396 (demand 22396 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 156820
+result: 5600000 verified; elapsed 794355374 ns; dispatches 67202 reductions 58800248 GC 22396 lockacq 156820
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 128 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 33515 reductions 29326012 GC 11170 (demand 11170 idle 0) steals 0 sleeps 1 sleepns 5880 lockacq 78205
+sched 1: dispatches 33690 reductions 29474245 GC 11226 (demand 11226 idle 0) steals 4 sleeps 1 sleepns 2258141 lockacq 78642
+result: 5600000 verified; elapsed 576798615 ns; dispatches 67205 reductions 58800257 GC 22396 lockacq 156847
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 128 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 0 sleeps 1 sleepns 14543 lockacq 39204
+sched 1: dispatches 16804 reductions 14700155 GC 5599 (demand 5599 idle 0) steals 2 sleeps 2 sleepns 5672320 lockacq 39238
+sched 2: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 2311508 lockacq 39206
+sched 3: dispatches 16800 reductions 14700033 GC 5599 (demand 5599 idle 0) steals 1 sleeps 1 sleepns 1346298 lockacq 39206
+result: 5600000 verified; elapsed 865857383 ns; dispatches 67204 reductions 58800254 GC 22396 lockacq 156854
+GC words: input 11444356 output 246356; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 128 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 128 lock 0 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 67203 reductions 58800946 GC 22385 (demand 22385 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 803583384 ns; dispatches 67203 reductions 58800946 GC 22385 lockacq 0
+GC words: input 11438287 output 246230; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 128 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 33195 reductions 29048261 GC 11059 (demand 11059 idle 0) steals 0 sleeps 1 sleepns 9927 lockacq 77454
+sched 1: dispatches 34022 reductions 29752730 GC 11328 (demand 11325 idle 3) steals 16 sleeps 1 sleepns 382986 lockacq 79504
+result: 5600000 verified; elapsed 547929843 ns; dispatches 67217 reductions 58800991 GC 22387 lockacq 156958
+GC words: input 11438338 output 246233; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 128 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 128 lock 1 profile 0 balanced 0
+setup: worker capacities 512..512 words; quantum 1000; setup excluded
+sched 0: dispatches 16817 reductions 14715361 GC 5601 (demand 5601 idle 0) steals 1 sleeps 0 sleepns 0 lockacq 39249
+sched 1: dispatches 16816 reductions 14701585 GC 5598 (demand 5597 idle 1) steals 6 sleeps 1 sleepns 7714 lockacq 39318
+sched 2: dispatches 16801 reductions 14700582 GC 5596 (demand 5596 idle 0) steals 5 sleeps 1 sleepns 165727 lockacq 39217
+sched 3: dispatches 16782 reductions 14683457 GC 5591 (demand 5591 idle 0) steals 5 sleeps 1 sleepns 9674 lockacq 39174
+result: 5600000 verified; elapsed 870819502 ns; dispatches 67216 reductions 58800985 GC 22386 lockacq 156958
+GC words: input 11438339 output 246233; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 0 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 802326998 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 0
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 1 0 0
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 123428
+result: 5600000 verified; elapsed 792730736 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 123428
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 0
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 35170 reductions 34277225 GC 1597 (demand 1597 idle 0) steals 0 sleeps 1 sleepns 10559 lockacq 71943
+sched 1: dispatches 25166 reductions 24523029 GC 1143 (demand 1143 idle 0) steals 3 sleeps 1 sleepns 132333916 lockacq 51506
+result: 5600000 verified; elapsed 549862727 ns; dispatches 60336 reductions 58800254 GC 2740 lockacq 123449
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 0
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 795247 lockacq 30856
+sched 1: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 2 sleeps 2 sleepns 1254614 lockacq 30894
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 6632093 lockacq 30858
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 1 sleeps 1 sleepns 7461 lockacq 30858
+result: 5600000 verified; elapsed 793373914 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123466
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 1 16 175000 1024 0 0 0
+scale: schedulers 1 workers 16 iters 175000 headroom 1024 lock 0 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60339 reductions 58800946 GC 2737 (demand 2737 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 804694591 ns; dispatches 60339 reductions 58800946 GC 2737 lockacq 0
+GC words: input 11203983 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 16 175000 1024 1 0 0
+scale: schedulers 2 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30288 reductions 29521961 GC 1371 (demand 1371 idle 0) steals 0 sleeps 1 sleepns 5754 lockacq 61952
+sched 1: dispatches 30065 reductions 29279030 GC 1368 (demand 1365 idle 3) steals 16 sleeps 1 sleepns 246472 lockacq 61630
+result: 5600000 verified; elapsed 495286060 ns; dispatches 60353 reductions 58800991 GC 2739 lockacq 123582
+GC words: input 11204034 output 30105; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 16 175000 1024 1 0 0
+scale: schedulers 4 workers 16 iters 175000 headroom 1024 lock 1 profile 0 balanced 0
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15051 reductions 14672803 GC 677 (demand 677 idle 0) steals 0 sleeps 1 sleepns 150425 lockacq 30784
+sched 1: dispatches 15142 reductions 14739770 GC 690 (demand 688 idle 2) steals 6 sleeps 2 sleepns 612701 lockacq 31077
+sched 2: dispatches 15100 reductions 14713869 GC 687 (demand 687 idle 0) steals 5 sleeps 1 sleepns 331263 lockacq 30906
+sched 3: dispatches 15059 reductions 14674546 GC 684 (demand 684 idle 0) steals 5 sleeps 1 sleepns 7903 lockacq 30821
+result: 5600000 verified; elapsed 810895643 ns; dispatches 60352 reductions 58800988 GC 2738 lockacq 123588
+GC words: input 11204017 output 30102; messages 16; processes 17 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107697 reductions 29400185 GC 107692 (demand 107692 idle 0) steals 0 sleeps 1 sleepns 1207444 lockacq 323109
+sched 1: dispatches 107694 reductions 29400066 GC 107692 (demand 107692 idle 0) steals 0 sleeps 1 sleepns 4680 lockacq 323086
+result: 5600000 verified; elapsed 1270926171 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646195
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 0 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53850 reductions 14700152 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 3003057 lockacq 161568
+sched 1: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 874284 lockacq 161545
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 1552365 lockacq 161545
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 6260 lockacq 161545
+result: 5600000 verified; elapsed 1320380620 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646203
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 0 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30167 reductions 29400079 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 9484 lockacq 61712
+sched 1: dispatches 30168 reductions 29400172 GC 1370 (demand 1370 idle 0) steals 1 sleeps 1 sleepns 231992 lockacq 61729
+result: 5600000 verified; elapsed 531768006 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123441
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 0 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 0 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 8374907 lockacq 30856
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 782284 lockacq 30856
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 583236 lockacq 30856
+result: 5600000 verified; elapsed 776955869 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+
+== two independent N=1 processes, 4 workers x 700000 each
+-- independent A
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 894803740 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+-- independent B
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 0 profile 0 balanced 0
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 0
+result: 5600000 verified; elapsed 888357860 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 0
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+independent-ok
+
+==== profiled controls
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 0 1 1 1
+scale: schedulers 1 workers 4 iters 700000 headroom 0 lock 1 profile 1 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 215390 reductions 58800248 GC 215384 (demand 215384 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 646184
+profile 0: lock-acquire-elapsed 126731403 ns exec 841587786 ns GC 113140663 ns
+result: 5600000 verified; elapsed 1310637980 ns; dispatches 215390 reductions 58800248 GC 215384 lockacq 646184
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 126731403 ns (overlapping across procs, includes acquisition and timing overhead)
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 0 1 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 0 lock 1 profile 1 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 107406 reductions 29321432 GC 107404 (demand 107404 idle 0) steals 0 sleeps 1 sleepns 7841 lockacq 322223
+profile 0: lock-acquire-elapsed 968038922 ns exec 468493214 ns GC 61853722 ns
+sched 1: dispatches 107985 reductions 29478819 GC 107980 (demand 107980 idle 0) steals 2 sleeps 0 sleepns 0 lockacq 323973
+profile 1: lock-acquire-elapsed 971219327 ns exec 466711431 ns GC 64167387 ns
+result: 5600000 verified; elapsed 1666485196 ns; dispatches 215391 reductions 58800251 GC 215384 lockacq 646196
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 1939258249 ns (overlapping across procs, includes acquisition and timing overhead)
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 0 1 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 0 lock 1 profile 1 balanced 1
+setup: worker capacities 64..64 words; quantum 1000; setup excluded
+sched 0: dispatches 53848 reductions 14700046 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 1014718 lockacq 161549
+profile 0: lock-acquire-elapsed 1376018865 ns exec 230655274 ns GC 30815898 ns
+sched 1: dispatches 53851 reductions 14700145 GC 53846 (demand 53846 idle 0) steals 1 sleeps 3 sleepns 9066456 lockacq 161580
+profile 1: lock-acquire-elapsed 1368645347 ns exec 234092367 ns GC 30758155 ns
+sched 2: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 3339062 lockacq 161545
+profile 2: lock-acquire-elapsed 1372926553 ns exec 232420717 ns GC 30880595 ns
+sched 3: dispatches 53847 reductions 14700033 GC 53846 (demand 53846 idle 0) steals 0 sleeps 1 sleepns 9169 lockacq 161545
+profile 3: lock-acquire-elapsed 1372756520 ns exec 231041153 ns GC 30783768 ns
+result: 5600000 verified; elapsed 1726022464 ns; dispatches 215393 reductions 58800257 GC 215384 lockacq 646219
+GC words: input 13569192 output 2369224; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 5490347285 ns (overlapping across procs, includes acquisition and timing overhead)
+
+== scale schedulers workers iters headroom lock profile balanced: 1 4 700000 1024 1 1 1
+scale: schedulers 1 workers 4 iters 700000 headroom 1024 lock 1 profile 1 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 60334 reductions 58800248 GC 2740 (demand 2740 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 123428
+profile 0: lock-acquire-elapsed 24280224 ns exec 797215693 ns GC 3913107 ns
+result: 5600000 verified; elapsed 866970425 ns; dispatches 60334 reductions 58800248 GC 2740 lockacq 123428
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 24280224 ns (overlapping across procs, includes acquisition and timing overhead)
+
+== scale schedulers workers iters headroom lock profile balanced: 2 4 700000 1024 1 1 1
+scale: schedulers 2 workers 4 iters 700000 headroom 1024 lock 1 profile 1 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 30169 reductions 29400185 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 399172 lockacq 61731
+profile 0: lock-acquire-elapsed 373067131 ns exec 408302921 ns GC 2244361 ns
+sched 1: dispatches 30166 reductions 29400066 GC 1370 (demand 1370 idle 0) steals 0 sleeps 1 sleepns 10244 lockacq 61708
+profile 1: lock-acquire-elapsed 371309790 ns exec 410860636 ns GC 2236523 ns
+result: 5600000 verified; elapsed 815300325 ns; dispatches 60335 reductions 58800251 GC 2740 lockacq 123439
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 744376921 ns (overlapping across procs, includes acquisition and timing overhead)
+
+== scale schedulers workers iters headroom lock profile balanced: 4 4 700000 1024 1 1 1
+scale: schedulers 4 workers 4 iters 700000 headroom 1024 lock 1 profile 1 balanced 1
+setup: worker capacities 4096..4096 words; quantum 1000; setup excluded
+sched 0: dispatches 15088 reductions 14700158 GC 685 (demand 685 idle 0) steals 0 sleeps 0 sleepns 0 lockacq 30884
+profile 0: lock-acquire-elapsed 658177140 ns exec 209401375 ns GC 1195180 ns
+sched 1: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 9162531 lockacq 30856
+profile 1: lock-acquire-elapsed 652706376 ns exec 209052083 ns GC 1202722 ns
+sched 2: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 961162 lockacq 30856
+profile 2: lock-acquire-elapsed 658199754 ns exec 208927014 ns GC 1188422 ns
+sched 3: dispatches 15083 reductions 14700033 GC 685 (demand 685 idle 0) steals 0 sleeps 1 sleepns 154165 lockacq 30856
+profile 3: lock-acquire-elapsed 658862469 ns exec 208540247 ns GC 1176236 ns
+result: 5600000 verified; elapsed 889770569 ns; dispatches 60337 reductions 58800257 GC 2740 lockacq 123452
+GC words: input 11220300 output 30140; messages 4; processes 5 completed
+profile total: lock-acquire-elapsed 2627945739 ns (overlapping across procs, includes acquisition and timing overhead)
+
+scale: all cases passed

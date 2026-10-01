@@ -271,15 +271,27 @@ tcwait(void *aux, uvlong deadline)
 		tc->now = deadline;
 }
 
+/* Heap placed: the probe proc must not touch its parent's private stack. */
+typedef struct Shardprobe Shardprobe;
+struct Shardprobe {
+	NvScheduler *s;
+	long go;
+	long finished;
+	int state;
+	char err[128];
+};
+
 void
 main(void)
 {
-	NvModule module;
-	NvFunc func[12];
-	NvInsn insn[71];
-	NvConst konst[11];
+	/* Read-only bytecode shared by the multicore checks below. */
+	static NvModule module;
+	static NvFunc func[12];
+	static NvInsn insn[71];
+	static NvConst konst[11];
 	NvLimits limits;
-	NvScheduler sched;
+	NvScheduler sched, *multi;
+	Shardprobe *probe;
 	static NvHeap hostheap;
 	NvTerm arg, p1, p2, msg, pid[8];
 	NvExec *e1, *e2;
@@ -287,8 +299,9 @@ main(void)
 	Testclock tc;
 	NvClock clock;
 	char err[128];
-	int i, state;
+	int i, state, mode, ns, owner, childpid, ready;
 	ulong slot;
+	uvlong local, global;
 
 	nvheapinit(&hostheap, 0);
 	makemodule(&module, func, insn, konst);
@@ -574,6 +587,86 @@ main(void)
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "bad-duration scheduler done");
 	nvschedfree(&sched);
 	print("ok - a runtime duration outside the accepted domain faults bad_timeout\n");
+
+	/* A bounded cross-proc probe: scheduler 0 must dispatch/yield while
+	 * both the machine gate and scheduler 1's shard are held. Fork BEFORE
+	 * taking locks; on timeout release them, join, and then fail safely. */
+	multi = mallocz(sizeof *multi, 1);
+	probe = mallocz(sizeof *probe, 1);
+	check(multi != nil && probe != nil, "shard probe allocation");
+	check(nvschedinit(multi, &module, &limits, 30, 1, err, sizeof err) == 0, err);
+	check(nvschedsetnsched(multi, 2, err, sizeof err) == 0, err);
+	check(nvschedspawn(multi, "loop", arg, &p1, err, sizeof err) == 0, "spawn shard probe");
+	probe->s = multi;
+	childpid = rfork(RFPROC|RFMEM|RFNOWAIT);
+	check(childpid >= 0, "fork shard probe");
+	if(childpid == 0){
+		while(semacquire(&probe->go, 1) < 0)
+			;
+		probe->state = nvschedstep(probe->s, probe->err, sizeof probe->err);
+		semrelease(&probe->finished, 1);	/* last shared-memory touch */
+		_exits(nil);
+	}
+	qlock(&multi->lock);
+	qlock(&multi->sched[1]->lock);
+	semrelease(&probe->go, 1);
+	while((ready = tsemacquire(&probe->finished, 2000)) < 0)
+		;
+	qunlock(&multi->sched[1]->lock);
+	qunlock(&multi->lock);
+	if(ready == 0){
+		while((state = tsemacquire(&probe->finished, 2000)) < 0)
+			;
+		check(state == 1, "shard probe never finished after gates released");
+	}
+	check(ready == 1 && probe->state == NvSchedProgress,
+		"local dispatch blocked on an unrelated shard or machine gate");
+	check(multi->sched[0]->localacq == 2 && multi->sched[0]->globalacq == 0,
+		"pure dispatch/yield takes only its local shard");
+	check(nvprocat(&multi->runtime, nvpidslot(p1))->state == Prrunnable &&
+		multi->sched[0]->runq->nrunnable == 1, "probe yields exactly one queue entry");
+	nvschedfree(multi);
+	free(multi);
+	free(probe);
+	print("ok - local dispatch progresses with machine gate and another shard held\n");
+
+	/* Same interpreter/queues in global and sharded modes, real procs and
+	 * setup-only balanced ownership. Root result and every reap must agree. */
+	for(mode = 0; mode <= 1; mode++)
+		for(ns = 1; ns <= 4; ns *= 2){
+			multi = mallocz(sizeof *multi, 1);
+			check(multi != nil, "multicore scheduler allocation");
+			check(nvschedinit(multi, &module, &limits, 40+mode*4+ns, 1, err, sizeof err) == 0, err);
+			check(nvschedsetnsched(multi, ns, err, sizeof err) == 0, err);
+			nvschedsetlocking(multi, 1);
+			multi->sharded = mode;
+			check(nvschedspawnroot(multi, "done", arg, &p1, err, sizeof err) == 0, "spawn multicore root");
+			for(i = 0; i < nelem(pid); i++){
+				check(nvschedspawn(multi, "done", arg, &pid[i], err, sizeof err) == 0, "spawn multicore child");
+				owner = i%ns;
+				if(owner != 0)
+					check(nvprocsteal(&multi->runtime, nvpidslot(pid[i]), owner) == 0, "setup balanced ownership");
+			}
+			state = nvmachinerun(multi, err, sizeof err);
+			check(state == NvSchedDone && multi->completed == nelem(pid)+1 &&
+				multi->runtime.nlive == 0 && multi->faulted == 0 && multi->exited == 0,
+				"global/sharded multicore completion accounting");
+			check(multi->rootstate == NvRootDone && multi->rootvalue != nil &&
+				nvtermkind(multi->rootvalue->root) == Vint && nvtermint(multi->rootvalue->root) == 42,
+				"global/sharded root result");
+			local = global = 0;
+			for(i = 0; i < ns; i++){
+				check(multi->sched[i]->runq->nrunnable == 0, "no duplicate enqueue after reap");
+				check(multi->sched[i]->localacq + multi->sched[i]->globalacq == multi->sched[i]->lockacq,
+					"local/global acquisition partition");
+				local += multi->sched[i]->localacq;
+				global += multi->sched[i]->globalacq;
+			}
+			check(global > 0 && (mode ? local > 0 : local == 0), "lock mode exercised");
+			nvschedfree(multi);
+			free(multi);
+		}
+	print("ok - global/sharded blocking locks preserve results and reap at N=1/2/4\n");
 
 	nvheapfree(&hostheap);
 	print("all scheduler tests passed\n");

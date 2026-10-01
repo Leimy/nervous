@@ -1,0 +1,73 @@
+#!/bin/rc
+# User-run comparison; mk only builds. Both modes use the same executable.
+# usage: rc bench/shards.rc [smoke|full]
+rfork E
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+benchdir=`{basename -d $script}
+bin=$benchdir/scale
+src=$benchdir/cpubound.nv
+if(! test -x $bin){
+	echo $0: build with '''mk nervous tests benchmarks''' first >[1=2]
+	exit no-binary
+}
+mode=full
+if(~ $#* 1)
+	mode=$1
+if(! ~ $#* 0 1){
+	echo usage: $0 '[smoke|full]' >[1=2]
+	exit usage
+}
+
+fn measure {
+	echo 'running shards:' $* >[1=2]
+	echo '== schedulers workers iters headroom lock profile balanced sharded:' $*
+	$bin $src $* || exit shards
+	echo
+}
+
+switch($mode){
+case smoke
+	for(shard in 0 1){
+		measure 1 4 13 0 1 0 1 $shard
+		measure 2 4 1000 0 1 0 1 $shard
+		measure 4 16 1000 0 1 0 1 $shard
+		measure 4 16 13 1024 1 1 1 $shard
+	}
+case full
+	for(rep in 1 2 3){
+		echo '==== repeat' $rep
+		order=(0 1)
+		if(~ $rep 2)
+			order=(1 0)
+		for(h in 0 1024){
+			measure 1 4 700000 $h 0 0 1 1
+			for(shard in $order)
+				measure 1 4 700000 $h 1 0 1 $shard
+			# Same 2.8M iterations for 4 and 16 workers. Balanced isolates
+			# lock traffic; natural placement retains ordinary steals.
+			for(p in 2 4){
+				for(shard in $order)
+					measure $p 4 700000 $h 1 0 1 $shard
+				for(balanced in 1 0)
+					for(shard in $order)
+						measure $p 16 175000 $h 1 0 $balanced $shard
+			}
+		}
+	}
+	# Clock reads perturb acquisition and contention; explanatory only.
+	echo '==== profiled controls'
+	for(p in 2 4)
+		for(shard in 0 1)
+			measure $p 4 700000 1024 1 1 1 $shard
+case *
+	echo usage: $0 '[smoke|full]' >[1=2]
+	exit usage
+}
+echo 'shards: all cases passed'
+exit ''

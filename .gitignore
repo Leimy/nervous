@@ -14,3 +14,4 @@
 /tests/memory/gctest
 /tests/memory/autotest
 /bench/perftest
+/bench/scale

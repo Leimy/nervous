@@ -9,19 +9,79 @@ milestone: 08, 09, R3 COMPLETE; 10 - Multicore IN PROGRESS: T00a, T00b,
   T01 landed and accepted (round 3, all three suites + -p runs +
   benchcmp green, user-run).  See "ROUND 3 RUN RESULTS" below for the
   numbers and "T01 STILL OPEN" for what remains before T02.
-checkpoint: M10-T01 round 3 accepted on the user's run.  Docs brought
+checkpoint: M10-T04a correctness tests user-reported passing; full
+  bench/runs/shards-first.txt inspected, three repeats + profiled controls
+  complete with 'shards: all cases passed'. CPU/GC scaling restored;
+  see bench/shards-results.md. Keep this first-slice checkpoint, not full
+  T04/R4 acceptance. Interactive DEL/no-orphans check unconfirmed.
+  Previous checkpoint: M10-T01 round 3 accepted. Docs brought
   current in the same session: README.md ("Multicore", current position,
   handoff), docs/semantics.md (scheduling paragraph, D086 restatement),
   docs/architecture.md (Scheduler section), docs/README.md,
   docs/questions.md (M10 answered/sharpened), docs/decisions.md (D083 and
   D085 amendments), milestones/10-multicore.md ("M10-T01 -- landed"),
   bench/README.md ("M10-T01"), man/1/nervous (-w, -p, -s rows).
-implementation: none active.  Coordinator is Claude.  Sub-agent policy
+implementation: M10-T04a sharded blocking locks FIRST SLICE RUN,
+  user-observed tests green; measured CPU/GC win, retained. User
+  authorized trying the split after rejecting
+  retries; no libthread conversion or lock-free queue. Local dispatch,
+  yield, receive/deadline callbacks, GC mark/fold and owned table walks
+  take only NvSched.lock. Structural/cross-owner ops still take machine
+  gate + ALL shards ascending, reverse release. No shard-to-global
+  upgrade. Reap/kick gaps retain Prrunning/oncpu exclusion. All-shard
+  ownership changes and directory growth stabilize routing under any
+  local shard. Scans check owner before foreign exec/heap/state reads;
+  idle sweep tests offlaunched before collector-mutated heap fields.
+  Idle decision now committed while exact snapshot is still protected.
+  No quantum, heap policy, FIFO, pendingwake or GC-credit change.
+  nvschedinit defaults sharded=1; N=1 still lock-off. Diagnostic
+  sharded=0 is the same-build single-QLock control. Counters partition
+  LOGICAL protected sections and acquire elapsed time into local/global;
+  a global gate is nsched+1 physical QLocks, not one. See
+  docs/sharding.md for protection map, proofs, limitations and commands.
+  Read-only Sonnet review completed: no new concurrency defect found.
+  Coordinator fixed the inherited maxtermwork setter race by taking the
+  all-shard gate; clarified quiescent IO/clock/locking configuration and
+  memory snapshots. Note-handler lock-free stop word remains R4 scope.
+  Changed: lib/sched.c, include/nvsched.h, cmd/nervous/main.c,
+  tests/process/schedtest.c (bounded cross-proc independence probe +
+  both modes at N=1/2/4), bench/scale.c (optional sharded control and
+  counter checks), bench/shards.rc (new same-build comparison),
+  docs/sharding.md, bench/scale.md, milestones/10-multicore.md,
+  STATUS.md. mkfile unchanged.
+  `mk nervous tests benchmarks` clean. User reports requested tests
+  passed; suite logs not independently inspected. Full shards capture
+  inspected, all three repeats and profile controls pass accounting.
+  Four balanced workers, medians global -> sharded: N=2 / 64 words
+  1.248 -> 0.549 s; N=4 1.398 -> 0.311 s. With 4096-word workers:
+  N=2 0.576 -> 0.419 s; N=4 0.812 -> 0.226 s. Sharded N=4 vs N=1
+  lock-off: 2.95x (64 words), 3.58x (4096). Natural-placement 16-worker
+  cases also improve. Repeat-1 N=4/64: 646213 global sections becomes
+  646201 local + 21 global, with same dispatches/collections/work.
+  Evidence and all medians: bench/shards-results.md; source review and
+  tests do NOT close R4. DEL/no-orphans check remains unconfirmed.
+  All-shard sends/ref/steals/idle remain serialization points; NOT a
+  final mailbox split, full T04, or R4 acceptance. T02 still open.
+  Prior retry experiment RUN, REJECTED, REMOVED: N=4 / 64 words median
+  1.404 s ordinary, 1.570 s 32 tries, 2.094 s 128; zero retry successes
+  in all six runs despite ~20M/82M misses. Evidence retained in
+  bench/runs/lockretry-first.txt and bench/scale.md. No retry knob.
+  Prior scale capture: bench/runs/scale-first.txt; larger heaps gave
+  N=2 speedup, N=4 remained limited before this split. New capture
+  establishes a CPU/GC win, NOT message-heavy scaling. Final build clean;
+  coordinator write set released, no runtime edit on results recording.
+  Suggested commit: 'M10-T04a: shard local scheduling and GC; preserve
+  all-shard structural gate'. Do not narrow sends/steals blindly: measure
+  message-heavy shapes and retain routing/lifetime/termination proofs.
+  T02 deadline work and R4 remain open. Sub-agent policy
   revised (see /usr/dave/local_models.md, "Economic Review"): cloud
   Sonnet for bounded read-only audits, coordinator for edits; local
   models only for independent second-opinion review or doc summaries.
-active source assignment: none (coordinator implemented D080 directly;
-  write set released on build).
+active source assignment: none. M10-T04a write set released; build,
+  source review, user-observed tests and full benchmark capture green.
+  Only documentation changed while recording results.
+  The M10-T04a implementation entry above supersedes older task history
+  and next-sequence notes below where they describe the stage-1 lock.
 next: M10-T00a (segmented process table, D082) is DONE: all three suite
   invocations pass (user-run).  Uncommitted; suggested message
   "M10-T00a: segmented process table (D082)".  bench/run.rc was
@@ -536,7 +596,7 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Collector: `lib/gc.c`. Cheney copy; address classification includes adopted fragments and excludes stable external fragments. Source headers can be restored on failed trials; roots commit only after all fallible work. Small rollback scratch uses the C stack; the heap descriptor is reused only on successful commit.
 - Roots/reservations: `include/nvexec.h`, `lib/exec.c`. Active registers only, retained stack capacity charged, small root-view scratch on the C stack, NvCollect request/retry and guard-aware failure. Standalone servicing in `lib/vm.c` preserves the reduction budget.
 - Processes: `include/nvproc.h`, `lib/process.c`. Segmented process table (D082: 1024-slot chunks, stable `NvProcess*`), fragment mailboxes, non-consuming recvneed before take, lowest-free hint. Retired slots can outnumber the configured live-process limit; FIFO links use indices. One run queue per scheduler (`NvRunq`, owned by the runtime, indexed by `NvProcess.owner`); `nvprocspawnon`, `nvprocsteal`, `nvprocwakefrom`/`nvprocsendfrom` with the runtime `wakehook`, and the `oncpu`/`pendingwake` wake deferral with `nvprocoffcpu` (M10-T01).
-- Scheduler: `include/nvsched.h`, `lib/sched.c`. `NvScheduler` is the shared machine (runtime, module, host table, clock, io, root, `QLock lock`/`iolock`, idle mask, stop state, `sched[]`); `NvSched` is one scheduler proc's state (run queue, `sem`, GC bookkeeping, D088 counters). `nvschedstep` is the N=1 facade over `step(s, sc)`; `nvmachinerun` rforks `sched[1..N-1]` and runs `schedproc` (step / idle / stopmachine) in every proc. Global lock held for runtime mutations, released across `nvexecrun`, waits, `rfork` and inline collection; not taken at N=1 (`locking`). Wake-to-home, `trysteal` at `NvStealmin = 2`, `kickidle`, `idle()` with own-queue re-check, `machineidle` termination, `gcdrain` per proc. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
+- Scheduler: `include/nvsched.h`, `lib/sched.c`. `NvScheduler` is the shared machine (runtime, module, host table, clock, io, root, `QLock lock`/`iolock`, idle mask, stop state, `sched[]`); `NvSched` is one scheduler proc's state (run queue, `sem`, GC bookkeeping, D088 counters). `nvschedstep` is the N=1 facade over `step(s, sc)`; `nvmachinerun` rforks `sched[1..N-1]` and runs `schedproc` (step / idle / stopmachine) in every proc. M10-T04a local shard protects dispatch/yield/receive/GC; machine gate + all shards protects structural/cross-owner operations. Runtime locks are released across `nvexecrun`, blocking waits, `rfork` and inline collection; not taken at N=1 unless forced (`locking`). See docs/sharding.md for the map and same-build global control. Wake-to-home, `trysteal` at `NvStealmin = 2`, `kickidle`, `idle()` with own-queue re-check, `machineidle` termination, `gcdrain` per proc. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
 - Binaries (M09, D076-D079): `Bbin` terms in `include/nvvm.h`/`lib/value.c` (`nvbin`, `nvbinapp`); runtime matching in `lib/pattern.c`; nine `bin*` opcodes in `lib/exec.c`, verified in `lib/verify.c`; frontend in `lib/lex.c`, `lib/parse.c`, `lib/patcompile.c`, `lib/patbc.c`, `lib/compile.c`, `lib/format.c`.
 - CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-w visits` traversal ceiling (D080), `-p schedulers` (M10-T01; `runscheduled` mallocs the machine and both Biobufs and runs `nvmachinerun` for every N), `-s` statistics with one `sched N:` row per scheduler. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
 - Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest`, `bench/largelive` and `bench/latency` (M09-T05).
@@ -546,9 +606,9 @@ Source inspection found arithmetic results and call-target resolution computed d
 - `gcoffload` default (0, D075) and the idle-sweep cap (`NvGcsweepcap=8`, still unmeasured/provisional) are recorded; adaptive sizing and heap shrinking remain unimplemented. D069 defers shrinking; `docs/questions.md` records the remaining open policy questions (what would reopen the `gcoffload` default, the persistent-collector-pool idea).
 - Collector cost includes classification/freeing of adopted fragments and scratch/trial work, not just copying live words. Transient old/new/scratch space is not the retained-data maxheap budget.
 - Host malloc failure paths have source review but no deterministic injection coverage. Root descriptors, C pointers and custom host callback contracts are trusted; verifier guarantees apply to bytecode, not arbitrary host metadata.
-- Atom synchronization is settled by D090 (no interpreter path writes the table; host `nvatom` calls must not overlap a running machine). Multi-scheduler ownership is live (D083): the invariant "exactly one owner at every instant" rests on the global lock plus `oncpu`/`pendingwake`; the lock-discipline audit of `lib/sched.c` is still owed, and required tests 2-4 and 6 await `tests/multicore/`.
-- `RFMEM` shares data, bss and heap, not stacks: anything a forked scheduler or collector touches must be malloc'd. `nvmachineinterrupt` is not yet wired to a note handler. Deadlines are still slot-scanned at idle only (D084/T02 not landed), so `after` still cannot expire while anything is runnable, at every N.
-- Message-bound shapes are slower at N>1 than at N=1 (stage-1 lock, ~8 acquisitions per hop; one idle/kick/sleep cycle per cross-owner hop). Expected and measured, not to be "fixed" ahead of T03.
+- Atom synchronization is settled by D090 (no interpreter path writes the table; host `nvatom` calls must not overlap a running machine). Multi-scheduler ownership is live (D083): the invariant "exactly one owner at every instant" now rests on the owner shard/all-shard transfer gate plus `oncpu`/`pendingwake`. M10-T04a source review and user-observed tests are green; required deterministic idle/wake race fixtures and R4 remain open.
+- `RFMEM` shares data, bss and heap, not stacks: anything a forked scheduler or collector touches must be malloc'd. `nvmachineinterrupt` is wired to the CLI note handler; the interactive interrupt check and lock-free stop-word review remain acceptance/R4 work. Deadlines are still slot-scanned at idle only (D084/T02 not landed), so `after` still cannot expire while anything is runnable, at every N.
+- Message-bound shapes were slower at N>1 under stage 1 (~8 global sections per hop; one idle/kick/sleep cycle per cross-owner hop). They have not been remeasured under the retained first-slice split. The CPU/GC win is not a message-heavy scaling claim.
 - post-R2-F01 is closed with D071 evidence. R2-F16 is resolved by D084 when T02 lands. `REVIEW-impressions.md` is not declared wholly resolved; R3 remains a mandatory future gate.
 
 ## Resumption checklist

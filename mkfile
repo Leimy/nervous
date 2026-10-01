@@ -28,7 +28,13 @@ HFILES=include/nervous.h include/nvalloc.h include/nvbc.h include/nvvm.h include
 
 all:V: $TARG
 
-benchmarks:V: all perftest largelive latency benchcmp
+benchmarks:V: all perftest largelive latency benchcmp scale
+
+scale: bench/scale.$O lib/alloc.$O lib/ast.$O lib/lex.$O lib/parse.$O lib/patcompile.$O lib/patbc.$O lib/compile.$O lib/verify.$O lib/pattern.$O lib/process.$O lib/sched.$O lib/value.$O lib/vm.$O lib/exec.$O lib/bytecode.$O lib/gc.$O
+	$LD $LDFLAGS -o bench/scale $prereq
+
+bench/scale.$O: bench/scale.c $HFILES
+	$CC $CFLAGS -o bench/scale.$O bench/scale.c
 
 benchcmp: bench/benchcmp.$O
 	$LD $LDFLAGS -o bench/benchcmp $prereq
@@ -189,7 +195,7 @@ lib/vm.$O: lib/vm.c include/nvbc.h include/nvvm.h include/nvexec.h
 	$CC $CFLAGS -o lib/vm.$O lib/vm.c
 
 clean:V:
-	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test tests/memory/*.[$OS] tests/memory/gctest tests/memory/autotest tests/memory/offloadtest bench/perftest.$O bench/perftest bench/largelive.$O bench/largelive bench/latency.$O bench/latency bench/benchcmp.$O bench/benchcmp $TARG
+	rm -f cmd/nervous/*.[$OS] lib/*.[$OS] tests/pattern/*.[$OS] tests/pattern/ptest tests/pattern/parsetest tests/pattern/bctest tests/pattern/compiletest tests/process/ptest tests/process/exectest tests/process/schedtest tests/process/iotest tests/process/r2test tests/memory/*.[$OS] tests/memory/gctest tests/memory/autotest tests/memory/offloadtest bench/perftest.$O bench/perftest bench/largelive.$O bench/largelive bench/latency.$O bench/latency bench/benchcmp.$O bench/benchcmp bench/scale.$O bench/scale $TARG
 
 install:V: $TARG
 	cp $TARG $BIN/

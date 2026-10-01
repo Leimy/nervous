@@ -32,6 +32,28 @@ Consult the runtime sections of `../nervous_design.md` for the original synchron
 
 At every instant exactly one scheduler owns and may execute or mutate a Nervous process. A running process never migrates; only a suspended process changes ownership.
 
+## Current lock-split experiment (M10-T04a)
+
+After the user-run scaling and rejected retry captures, the user authorized
+trying sharded blocking locks. The FIRST SLICE is user-observed correctness-
+green and retained after the complete CPU/GC scaling capture; see
+`../docs/sharding.md`, `../bench/shards-results.md` and STATUS.md. Local dispatch/yield/receive/GC use
+one per-scheduler QLock. Structural/cross-owner operations take the machine
+gate followed by ALL shards in ascending order, reverse release. No held
+local shard may request the machine gate. This is a deliberately smaller
+landing than the full process-lock/queue-lock stage-2 proposal below: it
+preserves atomic queue publication, table routing and exact termination,
+while leaving send/ref/steal/idle serialized. No libthread conversion or
+spinlock swap. T02, full T04 and R4 are not declared complete by this slice.
+
+New scheduler tests cover progress with unrelated gates held and both modes
+at N=1/2/4; bench/shards.rc compares same-build single-global and sharded
+controls. User reports the requested tests pass; the full same-build capture
+ends with all cases passed. Four balanced workers at N=4 improve global ->
+sharded from 1.398 -> 0.311 s (64-word heaps) and 0.812 -> 0.226 s (4096).
+This closes the first-slice run checkpoint, not R4 or the full mailbox split.
+The interactive interrupt/no-orphans check remains unconfirmed.
+
 ## Required tests
 
 - Parallel CPU-bound processes execute on multiple schedulers.
