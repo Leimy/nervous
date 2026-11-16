@@ -18,6 +18,7 @@ When these conflict with anything else, these win. Among them, `decisions.md` is
 | File | Purpose |
 |------|---------|
 | `architecture.md` | How the components fit together, with pointers to the source and the decisions. It summarizes and does not decide. |
+| `sharding.md` | Current T04a owner-shard/all-shard protection map, limitations and T02 integration. |
 
 ## Design rationale (not normative)
 
@@ -41,6 +42,13 @@ Sections 23-31 (the abstract machine) were not split out. `bytecode.md` supersed
 | `review-findings.md` | Adversarial-review findings for gates that are still open |
 | `review-findings-archive.md` | Findings from closed gates. Read only when investigating a regression. |
 | `review-05.md` | The completed milestone 05 review record (historical) |
+
+## Current stopping point
+
+Start with `../RESUME.md` and `../bench/T02-results.md` for the paused M10
+checkpoint-779643. T02 is functionally accepted; controlled performance
+follow-up and R4 remain open. `sharding.md` is the current protection map.
+Do not reload historical review/design records simply to resume.
 
 ## Reading Guide
 

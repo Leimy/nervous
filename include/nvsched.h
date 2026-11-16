@@ -8,6 +8,7 @@ typedef struct NvMemstats NvMemstats;
  * OS resident bytes. Used counts are diagnostic subsets, not extra storage. */
 struct NvMemstats {
 	uvlong tablebytes;
+	uvlong timerbytes;   /* retained owner deadline-heap capacity */
 	uvlong execbytes;
 	uvlong heapbytes;    /* chunk descriptors plus reserved word capacity */
 	uvlong heapused;     /* used chunk words in bytes, excludes adoption */
@@ -132,10 +133,10 @@ struct NvSched {
 	 * same reason; a remote waker semrelease's it when this scheduler's
 	 * idle bit is set. wakeat/wakeatvalid are what step() leaves behind
 	 * when it returns NvSchedIdle at N>1 instead of blocking: the
-	 * earliest deadline this scheduler owns, so the proc loop can bound
-	 * its sleep, and so termination detection knows this idle scheduler
-	 * still has a timer pending. Meaningless while the scheduler is
-	 * running; rewritten on every idle return.
+	 * earliest indexed deadline this scheduler owns. idle() refreshes it
+	 * under the all-shard gate before sleeping; termination consults the
+	 * actual heap, not this cached hint. Meaningless while running.
+	 * D084's heap lives in the runtime-owned runq (like the FIFO).
 	 */
 	long *sem;
 	uvlong wakeat;

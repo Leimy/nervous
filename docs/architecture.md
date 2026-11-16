@@ -6,7 +6,7 @@ A high-level map of how the pieces fit together, with pointers to the decisions 
 
 Nervous is a portable 64-bit register-based abstract machine with Erlang/BEAM-inspired lightweight processes, asynchronous message passing, selective pattern matching, and process-local garbage collection. `nervous -p N` runs N schedulers, each a Plan 9 proc created with `rfork(RFPROC|RFMEM)` and sharing the runtime's memory (D070, D081-D089); the default is one, which is the same code with N=1 (D087). The same `rfork` is used for optional off-process garbage collection (D068, D074).
 
-Everything that crosses between schedulers is in shared memory: the process table, run queues, mailboxes and the message fragments in them, the atom table, and the idle semaphores. A send from a process on one scheduler to a process owned by another allocates the fragment with `malloc` (shared), appends it under the global runtime lock, and `semrelease`s the owner if it is asleep; the receiver reads the fragment in place. Only proc stacks are private, which is why every structure another proc touches is malloc'd, never a stack local (D074, D087).
+Everything that crosses between schedulers is in shared memory: the process table, run queues, mailboxes and the message fragments in them, the atom table, and the idle semaphores. A send from a process on one scheduler to a process owned by another allocates the fragment with `malloc` (shared), appends it under the machine gate plus all scheduler shards, and `semrelease`s the owner if it is asleep; the receiver reads the fragment in place. Only proc stacks are private, which is why every structure another proc touches is malloc'd, never a stack local (D074, D087).
 
 ### Key Components
 
@@ -18,7 +18,7 @@ Everything that crosses between schedulers is in shared memory: the process tabl
 | **Interpreter** | Register VM with instruction-boundary heap reservation | `lib/exec.c`, `lib/vm.c` |
 | **Runtime** | Tagged terms, heaps, fragments, pattern matcher, process table, mailboxes | `lib/value.c`, `lib/alloc.c`, `lib/pattern.c`, `lib/process.c` |
 | **Collector** | Per-process Cheney copier, inline or off-process | `lib/gc.c`, `lib/sched.c` |
-| **Scheduler** | N scheduler procs under one runtime lock; per-scheduler FIFO run queues, ownership and stealing, idle/wake protocol, termination, deadlines, collection triggers, host callbacks (`print`, `eprint`, process intrinsics) | `lib/sched.c`, `lib/process.c` |
+| **Scheduler** | N scheduler procs with owner-local shards and an all-shard structural gate; per-owner FIFO and indexed deadline queues, stealing, idle/wake protocol, termination, collection triggers, host callbacks (`print`, `eprint`, process intrinsics) | `lib/sched.c`, `lib/process.c` |
 | **CLI** | `nervous(1)`: format, compile, run from source (`-r`) or saved bytecode (`-X`) | `cmd/nervous/main.c`, `man/1/nervous` |
 
 ### Data Flow
@@ -37,7 +37,7 @@ Everything that crosses between schedulers is in shared memory: the process tabl
 4. **Asynchronous messaging.** Send never blocks; selective receive scans the mailbox oldest-first (D035).
 5. **Process-local heaps.** No pointer crosses from one heap into another, so each heap is collected independently (D008, D063, D064).
 6. **Portable bytecode.** The instruction set exposes no host C structs, pointers, or Plan 9 descriptors (D010).
-7. **Simple synchronization.** Semaphores (`tsemacquire`/`semrelease`) for wakeup (D011, D085), a spinlock `Lock` for one-word heap-owner transitions (D074), and one global `QLock` for every runtime mutation, released for the whole of a quantum (D081 stage 1). Splitting that lock, and anything lock-free, waits for the D088 counters to show contention.
+7. **Simple synchronization.** Semaphores (`tsemacquire`/`semrelease`) for wakeup (D011, D085), a spinlock `Lock` for one-word heap-owner transitions (D074), and owner-local `QLock` shards for local scheduling/receive/GC, with a machine gate plus all shards for structural/cross-owner operations (retained T04a first slice). Runtime locks are released across interpretation. Further narrowing or lock-free structures require measurement and a routing/lifetime proof; see `sharding.md`.
 
 ## Term Representation (D061, D062, D076)
 
@@ -53,11 +53,11 @@ Terms are immutable, so copying a term inside a process copies one word. Equalit
 - **Machine and schedulers.** `NvScheduler` is the shared machine (runtime, module, host table, clock, I/O, the global lock, idle mask, root tracking) and `NvSched` is one scheduler proc's state (run queue, semaphore, GC bookkeeping, D088 counters). `nvschedstep` is the N=1 facade the deterministic tests drive; `nvmachinerun` forks `sched[1..N-1]` and runs the same `step` in every proc (D087).
 - **Ownership.** Every process has an owner scheduler, set at spawn to the spawner's and changed only by a steal. A wake from another scheduler enqueues on the owner's queue and kicks the owner; it never migrates the process. An idle scheduler steals the head of the most loaded other queue, but only from a backlog of `NvStealmin` (2) or more -- a lone runnable is run by its owner (D083).
 - **Wake deferral.** A receive marks its process `waiting` a few instructions before the quantum ends. A sender on another scheduler that sees `waiting` while the process is still on a CPU (`NvProcess.oncpu`) records `pendingwake` instead of enqueueing; the owner performs the enqueue at quantum end (`nvprocoffcpu`). This is the RUNNING/ACTIVE split BEAM uses, in two ints (D081, M10-T01).
-- **Global lock.** One `QLock`, held for every runtime mutation and table scan, released across `nvexecrun`, the clock wait, every `tsemacquire`, `rfork`, and an inline collection. Not taken at N=1 (`NvScheduler.locking`), so single-scheduler cost is unchanged (D081).
+- **Runtime locking.** Local dispatch/receive/timers/GC use the owner's shard. Structural/cross-owner operations take the machine gate then all shards ascending, release reverse. Never upgrade a held local shard. No runtime lock across interpretation, blocking waits, rfork or a collection body. N=1 skips locking unless forced; sharded=0 provides the single-global-lock diagnostic control. This does not guarantee unchanged N=1 performance; see `../bench/T02-results.md`.
 - **FIFO run queues,** one per scheduler. Dispatch takes the head of its own queue, and every transition into `runnable` appends at the owner's tail (D059, D083).
 - **Process states:** `runnable`, `running`, `waiting`, `exited`, `retired` (D041).
 - **Idle and termination.** Before sleeping a scheduler re-checks its own queue, tries to steal, sets its idle bit, and `tsemacquire`s bounded by its nearest deadline or the collector wait; a waker that sees the bit `semrelease`s. The scheduler whose idle transition makes every scheduler idle with nothing runnable, no collector outstanding and no deadline armed declares deadlock; `nlive == 0` declares completion (D085).
-- **Deadlines** live in process slots. With nothing runnable, a scheduler sleeps until the nearest deadline it owns (D050); the per-scheduler deadline heap and per-dispatch check are M10-T02 (D084), not yet landed.
+- **Deadlines (D084, accepted T02).** Absolute receive deadlines live in process slots; an indexed min-heap on each runtime-owned NvRunq holds its armed waiting processes. Expiry is checked before every dispatch, not only at idle. Wake removes the index, retains the deadline for message-first rescan; a later wait indexes the current owner. Idle sleeps to the heap minimum, termination checks heap emptiness. Runtime maxduration is authoritative. This guarantees scheduling-boundary eligibility, not hard wall-time execution of a timeout body.
 - **Output** takes a separate `iolock` per line and is never held with the runtime lock (D086).
 - **Off-process collection.** A heap at or above the `gcoffload` threshold is collected by a forked proc while other processes run. The scheduler skips that process until it folds the completion. The default threshold is 0, which means never (D074, D075).
 
@@ -92,7 +92,7 @@ See `distribution.md` for the rationale.
 
 ## Not Yet Implemented
 
-- **Multicore, remaining parts** (milestone 10): the per-scheduler deadline heap and per-dispatch deadline check (D084, T02), the `-p` measurement rows and the stage-2 lock split if measurement justifies it (D088, T03/T04), the `tests/multicore/` stress fixtures, and the R4 review.
+- **Multicore, remaining parts** (milestone 10): controlled investigation of the post-T02 timing increase; deterministic idle-window wake coverage, exit-traffic fragment accounting and interactive interrupt/no-orphans; full T04 and mandatory R4. T02, the source multicore fixtures and -p measurement rows already exist and have passed reviewed runs. The project is paused; see `../RESUME.md`.
 - **Lists, maps/records, floats, `@` whole-value binding.** D020 reserves their delimiters (`[...]`, `#{...}`), but none of them has an implementation.
 - **Links, monitors, catch.** A fault ends only the faulting process.
 - **Module/name system.** There is one flat function namespace.

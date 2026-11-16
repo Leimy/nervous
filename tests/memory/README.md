@@ -43,10 +43,10 @@ Seven groups, ending with `all memory collector tests passed`:
 
 ## autotest: reservation and hosts (M08-T04b/T04p)
 
-Six groups, ending with `all automatic inline collector tests passed`:
+Eight groups, ending with `all automatic inline collector tests passed`:
 
-- T04p table growth: 200 appends require five capacity allocations and
-  zero live-prefix slot probes; mailboxes and FIFO links survive growth,
+- Table growth (updated by D082): 200 appends require one 1024-slot chunk
+  and zero live-prefix slot probes; mailboxes and FIFO links survive growth,
   spare capacity does not bypass maxprocess, reuse is lowest-slot-first,
   and retirement can require new slots beyond the live-process limit.
 - Atomic NvCollect requests: unchanged pc/root/reductions, repeat calls
@@ -72,10 +72,15 @@ Six groups, ending with `all automatic inline collector tests passed`:
   messages/Refs, detecting duplicated side effects on retries. Timing is
   enabled for the 1000-quantum cases and must not affect these assertions.
 
-## offloadtest: off-process collection lifecycle (M08-T04c, D074)
+- Spawn argument-copy exhaustion faults the spawning process and frees the
+  failed child's slot/exec/heap without a live-process leak.
+- A fixed live set repeatedly churning garbage reaches stable heap capacity
+  across many collections, retaining its exact result.
 
-Eight groups, ending with `all off-process lifecycle tests passed`. Every
-scenario uses `nvschedgchold` (a test-only hook, a no-op in production)
+## offloadtest: off-process collection lifecycle (D074, T02)
+
+Nine groups, ending with `all off-process lifecycle tests passed`. Hold-based
+scenarios use `nvschedgchold` (a test-only hook, a no-op in production)
 to park a launched off-process collector deterministically just before
 it publishes completion, instead of racing real scheduling timing. The
 concurrency underneath is real -- genuine `rfork(RFPROC|RFMEM)` collector
@@ -95,6 +100,11 @@ observation happens, not the mechanism itself.
   process's collector remains outstanding and held indefinitely,
   including the "already expired" fast path that never needs to wait
   on the completion semaphore at all.
+- T02: a deadline wakes the collecting process itself exactly once, removes
+  its timer entry without dispatching its heap, and a subsequently queued
+  message wins on the rescan after collection completes.
+- A permanently waiting process's completed idle collection is folded even
+  without a message or dispatch, so deadlock is eventually reported correctly.
 - `nvschedfree` drains an outstanding collector (released just before
   teardown, so the drain resolves in real but very short time) before
   freeing runtime memory.
@@ -120,21 +130,22 @@ observation happens, not the mechanism itself.
 
 ## Limits of the evidence
 
-T04p's reported passes establish normal-suite and explicit C stress evidence.
-Correction: the old runners used `rfork E`, discarding inherited CLI stress;
-the environment-prefixed run did not establish full CLI-stress coverage.
-T04e now uses `rfork e`, fixes empty-environment CLI startup, and adds a
-collection-count canary in `tests/cli/run.rc`. `mk tests` passed; fresh normal
-and CLI-stress runtime checks are pending. Feature work remains paused.
-See STATUS for the bounded repair and verification handoff.
+Latest evidence: checkpoint-779643's normal, stress-inline and stress-offload
+logs were inspected and all pass, including the new collecting-owner deadline
+test. Earlier checkpoint-20674 also passed, before T02. C fixtures keep their
+own explicit GC settings; suite environment variants primarily change CLI
+execution. T04e fixed the historical `rfork E` inheritance defect using
+`rfork e` and a CLI collection-count canary; that repair is accepted, not
+awaiting a first run. The current user pause is recorded in ../../RESUME.md.
 
 gctest/autotest are inline-only tests. offloadtest (M08-T04c, D074) is
 the off-process ownership/wakeup/teardown correctness suite; it does not
-select a `gcoffload` default or measure a threshold -- that is T04d's
-measurement work. No multicore behavior or milestone-08 acceptance is
-claimed by any of these suites. Run `rc bench/run.rc` separately to
-measure the working-tree binary; benchmarks are not pass/fail
-regressions.
+select a `gcoffload` default or measure a threshold -- T04d/D075 settled
+that default at 0 from separate measurements. These tests alone do not close
+R4. For future changes the user can run the single ../../tests/checkpoint.rc
+command documented in ../README.md, combining regression checks and benchmark
+captures. Timing flags require separate review; correctness passes do not
+establish unchanged performance.
 
 Host malloc failure paths are reviewed but not deterministically injected.
 Malformed-object checks cover owned headers, not arbitrary untrusted C

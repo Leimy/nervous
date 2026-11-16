@@ -2,7 +2,8 @@
 
 Implementation is user-observed correctness-green and retained after the
 complete same-build benchmark capture: `bench/shards-results.md`. The user
-reports requested tests passed; suite logs were not independently inspected.
+reports requested tests passed; the later checkpoint-20674 suite logs were
+also directly inspected (bench/checkpoint-results.md).
 This is a first-slice checkpoint, NOT full T04 or R4 acceptance. User
 authorized trying sharded blocking locks after rejecting QLock retries. No
 libthread conversion, lock-free queue, heap-sizing or language change is
@@ -23,7 +24,8 @@ owner/publication operation; collector children never take a runtime lock.
 |---|---|
 | Local dispatch/pop, offcpu/pendingwake, yield/requeue | Owner's shard |
 | Receive begin/advance/need/take/wait/deadline callbacks | Owner's shard; process cannot migrate on CPU |
-| Local GC mark/launch/fold, owned deadline/idle scans | Owner's shard; heap Lock for child publication |
+| Local GC mark/launch/fold, owned idle scans | Owner's shard; heap Lock for child publication |
+| D084 deadline heap arm/block/remove/fire, pre-dispatch check | Owner's shard; remote wake/reap take all shards |
 | Directory growth, slot allocation/reuse, spawn + exec publication | Machine gate + all shards |
 | Process reap, nlive/freehint, result/root/completion aggregates | Machine gate + all shards |
 | Send/copy/append/wake, ref sequence | Machine gate + all shards (NOT yet narrowed) |
@@ -154,5 +156,12 @@ or stealing, measure message-heavy workloads and choose an explicit slot
 lifetime/routing protocol with destination/pair locks or owner-local inbound
 queues. Do not simply remove the all-shard gate: it
 currently supplies stable table routing, ownership-change exclusion,
-publication ordering and the exact termination snapshot. Deadline-heap work
-(D084/T02) remains separate; deadlines still fire only on the idle path.
+publication ordering and the exact termination snapshot. D084/T02 passed
+checkpoint-779643 functionally; its performance follow-up remains open
+(bench/T02-results.md). Deadlines are checked before dispatch, not only at idle. The heap lives with each runtime-owned queue; wake removes its
+entry under the same protection as the lifecycle transition, even when the
+oncpu wake is deferred. A runnable steal has no heap entry to transfer; its
+absolute receive deadline survives and a subsequent wait indexes the new
+owner. machineidle reads actual heap emptiness under all shards, and idle
+refreshes its cached sleep deadline there. No local-to-global upgrade was
+introduced. See milestones/10-multicore.md's T02 section for tests/limits.

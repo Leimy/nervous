@@ -1,5 +1,14 @@
 # Milestone 10 - Multicore Runtime
 
+## Current pause
+
+User stopped after the reviewed checkpoint-779643. T02 is functionally
+accepted; performance follow-up remains open. No active task assignment;
+obtain user go-ahead before continuing. Start with `../RESUME.md` and
+`../bench/T02-results.md`, not the historical design/landing journal below.
+The sections from "Coordinator design review" onward preserve original plans
+and round-by-round history; their pending-run text is not current task state.
+
 ## Dependency gates
 
 Milestones 05, 06, 08, and 09 and Review R3 must complete before multicore integration begins. (Milestone 07, Basic I/O, is not a dependency; it does not touch process ownership, scheduling, or heap representation.) Review R4 is part of milestone 10 acceptance and must complete before milestone 10 can be marked complete.
@@ -31,6 +40,60 @@ Consult the runtime sections of `../nervous_design.md` for the original synchron
 ## Central invariant
 
 At every instant exactly one scheduler owns and may execute or mutate a Nervous process. A running process never migrates; only a suspended process changes ownership.
+
+## M10-T02 -- functional checkpoint accepted; performance follow-up open
+
+User-run `checkpoint-779643` passes all three full regression modes, including
+the new T02 tests, and all eight shard smoke cases. Raw results were inspected.
+Accept D084/R2-F16 functional coverage, NOT unchanged performance or R4.
+Small timings are +6.3..9.5% versus pre-T02; all nine multi medians are
++4.1..10.0%. See `../bench/T02-results.md` for evidence and the recommended
+controlled performance investigation. No runtime change on results review.
+
+User authorized T02 after the reviewed `checkpoint-20674` run. Build:
+`mk nervous tests benchmarks`. Run everything with
+`rc /usr/dave/work/nervous/tests/checkpoint.rc` (no extra command list).
+
+- Each runtime-owned `NvRunq` has the owner's indexed deadline min-heap;
+  `NvSched.runq` aliases it. Key is (absolute deadline, slot), with generation
+  checked before firing and a reverse `NvProcess.timerindex`.
+- Only waiting, armed, not-pendingwake slots are indexed. Arm while running
+  records time; block inserts. Wake removes the entry but retains the original
+  deadline for message-first rescanning. Take/plain wait/infinity/expiry
+  consumption/exit cancel. A runnable steal carries the deadline, not an index;
+  a later block indexes the new owner. No stale entries accumulate on re-arm.
+- Heap allocation occurs before the state transition, with checked growth;
+  failure is `system_limit`, leaving old receive/lifecycle/deadline state
+  untouched. Retained capacity is included in `NvMemstats.timerbytes`.
+- `step` drains due owned timers before selecting work, under its local shard.
+  Empty heaps need no clock read. Idle uses the heap minimum; the all-shard
+  idle transaction refreshes the sleep hint and checks actual heap emptiness
+  for termination. N=1 re-reads the clock after wait, so an early return cannot
+  falsely fire a deadline. GC fold/credit/lifetime rules are unchanged.
+- `maxduration` is validated as 1..NvMaxduration and enforced at arm. The
+  missing initialization in schedtest was fixed; other construction sites
+  were checked. No CLI knob or compiler duration-domain change.
+
+New tests in existing suite executables (mkfile/runner integration unchanged):
+`ptest` checks 33-entry growth, both re-arm directions, full heap/index
+invariants, minimum against a slot-scan oracle, exit/reuse, 1000 re-arms,
+configured limits/overflow, both timer/send orders in the oncpu window, and
+wake/steal/reblock on a second owner. Its old timeout fixture no longer writes
+state directly to fake a wake. `schedtest` checks exact tie order, timer-memory
+accounting, a permanently runnable peer at quanta 1/10 in both lock modes,
+and real scheduler procs with a shared logical clock at N=1/2/4 in both modes.
+`offloadtest` checks that expiry wakes a collecting owner without executing
+it and that a message still wins after collection. Its existing unrelated
+collector/deadline check tolerates the newly earlier dispatch.
+
+Read-only Sonnet runtime and fixture reviews found no concrete new bug;
+coordinator review fixed a draft reuse-test cleanup error before handoff.
+This is source review, not execution. Allocation-failure injection for the
+new heap is not present; rollback has source review only. The real multicore
+test uses semaphore waits and is not a watchdog for a broken scheduler.
+D084 guarantees wake eligibility at an owner scheduling boundary, not a hard
+wall-time bound on executing a timeout body. Full T04/R4, deterministic
+idle-window testing and interactive interrupt/no-orphans remain open.
 
 ## Current lock-split experiment (M10-T04a)
 

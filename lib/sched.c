@@ -522,6 +522,8 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 
 	memset(m, 0, sizeof *m);
 	m->tablebytes = (uvlong)s->runtime.nchunk*NvProcchunk*sizeof(NvProcess);
+	for(i = 0; i < s->runtime.nrunq; i++)
+		m->timerbytes += (uvlong)s->runtime.runq[i]->captimer*sizeof(NvDeadline);
 	for(i = 0; i < s->runtime.nslot; i++){
 		p = nvprocat(&s->runtime, i);
 		for(f = p->head; f != nil; f = f->next){
@@ -558,7 +560,7 @@ nvschedmemory(NvScheduler *s, NvMemstats *m)
 		m->reportbytes += fragmentbytes(e->result) + fragmentbytes(e->exitreason);
 	}
 	m->reportbytes += fragmentbytes(s->rootvalue) + fragmentbytes(s->lastexit);
-	m->totalbytes = m->tablebytes + m->execbytes + m->heapbytes + m->stackbytes +
+	m->totalbytes = m->tablebytes + m->timerbytes + m->execbytes + m->heapbytes + m->stackbytes +
 		m->adoptedbytes + m->mailboxbytes + m->reportbytes;
 }
 
@@ -967,6 +969,29 @@ deadlinems(NvScheduler *s, uvlong earliest)
 	return (ulong)ms;
 }
 
+/* Owner shard held. The empty-heap path reads no clock. Expiry queues a
+ * waiter, never selects its timeout branch: the interpreter still rescans
+ * messages first. A collecting waiter may wake, but cannot execute yet. */
+static int
+firedeadlines(NvScheduler *s, NvSched *sc, char *err, int nerr)
+{
+	int n;
+
+	if(sc->runq->ntimer == 0)
+		return 0;
+	if(s->clock.now == nil){
+		snprint(err, nerr, "scheduler has an armed deadline but no clock installed");
+		return -1;
+	}
+	n = nvprocfiredeadlines(&s->runtime, sc->index, s->clock.now(s->clock.aux));
+	if(n < 0){
+		snprint(err, nerr, "invalid indexed deadline");
+		return -1;
+	}
+	sc->timerwakes += n;
+	return n;
+}
+
 /* Enter with local shard; every return releases it. N=1 preserves clock.wait
  * and GC semaphore behavior. N>1 returns a sleep bound, never blocks here.
  * No foreign state/exec read in these walks; table/owner changes hold all shards. */
@@ -976,9 +1001,9 @@ idlestep(NvScheduler *s, NvSched *sc, char *err, int nerr)
 	NvRuntime *r;
 	NvProcess *p;
 	NvExec *e;
-	ulong i, nwake, sweeplaunched;
-	uvlong earliest, now;
-	int multi, havedeadline, allow;
+	ulong i, sweeplaunched, ms;
+	uvlong earliest;
+	int multi, havedeadline, allow, fired;
 
 	r = &s->runtime;
 	multi = s->nsched > 1;
@@ -999,7 +1024,6 @@ idlestep(NvScheduler *s, NvSched *sc, char *err, int nerr)
 		if(p->owner != sc->index)
 			continue;
 		e = p->exec;
-		/* offlaunched, not unlocked heap.owner, prevents double launch. */
 		if(p->state == Prwaiting && e != nil && !e->offlaunched &&
 		   e->heap.cur != nil && e->heap.words > e->livewords && e->heap.words > e->heap.cur->cap/2){
 			allow = sweeplaunched < NvGcsweepcap;
@@ -1008,112 +1032,61 @@ idlestep(NvScheduler *s, NvSched *sc, char *err, int nerr)
 			collect(s, sc, e, 0, allow);
 		}
 	}
-	havedeadline = 0;
+	/* Collection may have taken time or dropped the shard for a remote
+	 * send. Recheck the current heap, not an earlier cached sleep bound. */
+	fired = firedeadlines(s, sc, err, nerr);
+	if(fired < 0){
+		unlocklocal(s, sc);
+		return NvSchedError;
+	}
+	gcfoldall(s, sc);
+	if(fired > 0 || (sc->gcoutstanding == 0 && sc->runq->nrunnable != 0)){
+		unlocklocal(s, sc);
+		return NvSchedProgress;
+	}
 	earliest = 0;
-	for(i = 0; i < r->nslot; i++){
-		p = nvprocat(r, i);
-		if(p->owner != sc->index || p->state != Prwaiting || !p->hasdeadline)
-			continue;
-		if(!havedeadline || p->deadline < earliest){
-			earliest = p->deadline;
-			havedeadline = 1;
-		}
+	havedeadline = nvprocnextdeadline(r, sc->index, &earliest);
+	if(sc->gcoutstanding == 0 && !havedeadline){
+		unlocklocal(s, sc);
+		return NvSchedIdle;
 	}
-	gcfoldall(s, sc);
-	if(sc->gcoutstanding == 0){
-		/* A queue just freed from collection is progress, not false idle. */
-		if(sc->runq->nrunnable != 0){
+	if(sc->gcoutstanding != 0){
+		/* Credits are sleep hints, not per-exec completion counts. */
+		while(gcwait(sc, 0) > 0)
+			;
+		gcfoldall(s, sc);
+		if(sc->gcoutstanding == 0){
 			unlocklocal(s, sc);
 			return NvSchedProgress;
 		}
-		if(!havedeadline){
-			unlocklocal(s, sc);
-			return NvSchedIdle;
-		}
-		if(s->clock.now == nil || s->clock.wait == nil){
-			unlocklocal(s, sc);
-			snprint(err, nerr, "scheduler has an armed deadline but no clock installed");
-			return NvSchedError;
-		}
-		if(multi){
-			now = s->clock.now(s->clock.aux);
-			if(now < earliest){
-				sc->wakeat = earliest;
-				sc->wakeatvalid = 1;
-				unlocklocal(s, sc);
-				return NvSchedIdle;
-			}
-		}else{
-			unlocklocal(s, sc);
-			s->clock.wait(s->clock.aux, earliest);
-			locklocal(s, sc);
-			now = earliest;
-		}
-		nwake = 0;
-		for(i = 0; i < r->nslot; i++){
-			p = nvprocat(r, i);
-			if(p->owner == sc->index && p->state == Prwaiting && p->hasdeadline && p->deadline <= now){
-				if(nvprocwakefrom(r, sc->index, i) < 0){
-					unlocklocal(s, sc);
-					snprint(err, nerr, "deadline wake of a non-waiting process");
-					return NvSchedError;
-				}
-				nwake++;
-			}
-		}
-		if(nwake == 0){
-			unlocklocal(s, sc);
-			snprint(err, nerr, "clock did not advance past the earliest deadline");
-			return NvSchedError;
-		}
-		sc->timerwakes += nwake;
+	}
+	if(multi){
+		sc->wakeat = earliest;
+		sc->wakeatvalid = havedeadline;
 		unlocklocal(s, sc);
+		return NvSchedIdle;
+	}
+	if(sc->gcoutstanding != 0){
+		ms = havedeadline ? deadlinems(s, earliest) : NvGcwaitms;
+		if(ms > NvGcwaitms)
+			ms = NvGcwaitms;
+		unlocklocal(s, sc);
+		gcwait(sc, ms);
 		return NvSchedProgress;
 	}
-	/* Drain stale credits and re-fold before sleeping: credits are fungible,
-	 * not per-exec completions. Never spin on a credit left by dispatch fold. */
-	while(gcwait(sc, 0) > 0)
-		;
-	gcfoldall(s, sc);
-	if(sc->gcoutstanding == 0){
+	if(s->clock.wait == nil){
 		unlocklocal(s, sc);
-		return NvSchedProgress;
-	}
-	if(havedeadline && s->clock.now != nil){
-		now = s->clock.now(s->clock.aux);
-		if(now >= earliest){
-			nwake = 0;
-			for(i = 0; i < r->nslot; i++){
-				p = nvprocat(r, i);
-				if(p->owner == sc->index && p->state == Prwaiting && p->hasdeadline && p->deadline <= now){
-					if(nvprocwakefrom(r, sc->index, i) < 0){
-						unlocklocal(s, sc);
-						snprint(err, nerr, "deadline wake of a non-waiting process");
-						return NvSchedError;
-					}
-					nwake++;
-				}
-			}
-			if(nwake != 0)
-				sc->timerwakes += nwake;
-			unlocklocal(s, sc);
-			return NvSchedProgress;
-		}
-		if(multi){
-			sc->wakeat = earliest;
-			sc->wakeatvalid = 1;
-			unlocklocal(s, sc);
-			return NvSchedIdle;
-		}
-		unlocklocal(s, sc);
-		gcwait(sc, deadlinems(s, earliest));
-		return NvSchedProgress;
+		snprint(err, nerr, "scheduler has an armed deadline but no clock installed");
+		return NvSchedError;
 	}
 	unlocklocal(s, sc);
-	if(multi)
-		return NvSchedIdle;
-	gcwait(sc, NvGcwaitms);
-	return NvSchedProgress;
+	s->clock.wait(s->clock.aux, earliest);
+	locklocal(s, sc);
+	/* A production wait may return early on a note. Read the clock;
+	 * never manufacture expiry by assuming the requested time elapsed. */
+	fired = firedeadlines(s, sc, err, nerr);
+	unlocklocal(s, sc);
+	return fired < 0 ? NvSchedError : NvSchedProgress;
 }
 
 /* All-shard gate held: wake one idle potential thief, once per sleep. */
@@ -1154,6 +1127,13 @@ step(NvScheduler *s, NvSched *sc, char *err, int nerr)
 	if(r->nslot == 0){
 		unlocklocal(s, sc);
 		snprint(err, nerr, "scheduler has live processes but no slots");
+		return NvSchedError;
+	}
+	/* D084: check before EVERY dispatch, not only when queues empty.
+	 * This queues expired waiters within one owner scheduling boundary;
+	 * FIFO, scans, collection and host scheduling still govern execution. */
+	if(firedeadlines(s, sc, err, nerr) < 0){
+		unlocklocal(s, sc);
 		return NvSchedError;
 	}
 	if(!finddispatchable(s, sc, &slot))
@@ -1356,7 +1336,7 @@ machineidle(NvScheduler *s)
 		return 0;
 	for(i = 0; i < s->nsched; i++){
 		sc = s->sched[i];
-		if(sc->gcoutstanding != 0 || sc->wakeatvalid || sc->runq->nrunnable != 0)
+		if(sc->gcoutstanding != 0 || sc->runq->ntimer != 0 || sc->runq->nrunnable != 0)
 			return 0;
 	}
 	return 1;
@@ -1377,6 +1357,9 @@ idle(NvScheduler *s, NvSched *sc)
 		unlockrt(s);
 		return;
 	}
+	/* Re-read behind the all-shard gate: a remote wake can remove a
+	 * timer between idlestep and here. Termination uses the heap itself. */
+	sc->wakeatvalid = nvprocnextdeadline(&s->runtime, sc->index, &sc->wakeat);
 	while(tsemacquire(sc->sem, 0) > 0)
 		;
 	s->idlemask |= bit;

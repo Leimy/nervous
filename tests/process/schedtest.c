@@ -271,6 +271,142 @@ tcwait(void *aux, uvlong deadline)
 		tc->now = deadline;
 }
 
+/* D084: a permanently runnable peer must not starve a waiting deadline.
+ * Fake time crosses expiry between dispatches, never through clock.wait.
+ * Test both lock domains and both small/large quanta without host sleeps. */
+static void
+deadlineunderload(NvModule *m, NvLimits *limits, NvTerm arg)
+{
+	NvScheduler s;
+	NvClock clock;
+	Testclock tc;
+	NvProcess *p;
+	NvTerm waiter, spinner;
+	NvMemstats mem;
+	char err[128];
+	int mode, q, i;
+
+	clock.aux = &tc;
+	clock.now = tcnow;
+	clock.wait = tcwait;
+	for(mode = 0; mode <= 1; mode++)
+		for(q = 1; q <= 10; q += 9){
+			tc.now = 1000;
+			check(nvschedinit(&s, m, limits, 70, q, err, sizeof err) == 0, err);
+			nvschedsetlocking(&s, 1);
+			s.sharded = mode;
+			nvschedsetclock(&s, &clock);
+			check(nvschedspawnroot(&s, "timedreceiver", arg, &waiter, err, sizeof err) == 0, err);
+			p = nvprocat(&s.runtime, nvpidslot(waiter));
+			for(i = 0; i < 20 && p->state != Prwaiting; i++)
+				check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, err);
+			check(p->state == Prwaiting && s.sched[0]->runq->ntimer == 1, "load waiter indexed");
+			nvschedmemory(&s, &mem);
+			check(mem.timerbytes == (uvlong)s.sched[0]->runq->captimer*sizeof(NvDeadline) &&
+				mem.timerbytes > 0, "snapshot includes timer capacity");
+			check(nvschedspawn(&s, "loop", arg, &spinner, err, sizeof err) == 0, err);
+			tc.now = 1004;
+			check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && p->state == Prwaiting &&
+				s.sched[0]->timerwakes == 0 && tc.now == 1004, "busy timer never wakes early");
+			tc.now = 1005;
+			check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && p->state == Prrunnable &&
+				p->timerindex == NvNoslot && s.sched[0]->runq->ntimer == 0 &&
+				s.sched[0]->timerwakes == 1, "busy expiry enqueues at next dispatch boundary");
+			check(s.sched[0]->runq->head == nvpidslot(waiter) && s.sched[0]->runq->nrunnable == 2,
+				"expired waiter retains FIFO order, no duplicate enqueue");
+			for(i = 0; i < 32 && s.rootstate == NvRootRunning; i++)
+				check(nvschedstep(&s, err, sizeof err) == NvSchedProgress, err);
+			check(s.rootstate == NvRootDone && s.rootvalue != nil &&
+				nvtermkind(s.rootvalue->root) == Vatom &&
+				strcmp(nvtermatom(s.rootvalue->root), "timedout") == 0 &&
+				s.sched[0]->timerwakes == 1 && tc.now == 1005 &&
+				nvprocalive(&s.runtime, spinner), "timeout completes with spinner still runnable");
+			nvschedfree(&s);
+		}
+	print("ok - deadlines wake under continuous runnable load at the next dispatch boundary in both lock modes\n");
+}
+
+/* Real scheduler procs with a shared, monotonic logical clock. Every read
+ * advances one tick; this tests per-owner idle timer heaps and termination
+ * without asserting a host-time latency bound. The clock and machine live
+ * on the heap, never on a forked proc's private stack. */
+typedef struct Multiclock Multiclock;
+struct Multiclock {
+	Lock lock;
+	uvlong now;
+};
+
+static uvlong
+mcnow(void *aux)
+{
+	Multiclock *c;
+	uvlong now;
+
+	c = aux;
+	lock(&c->lock);
+	now = ++c->now;
+	unlock(&c->lock);
+	return now;
+}
+
+static void
+mcwait(void *aux, uvlong when)
+{
+	Multiclock *c;
+
+	c = aux;
+	lock(&c->lock);
+	if(c->now < when)
+		c->now = when;
+	unlock(&c->lock);
+}
+
+static void
+multideadlines(NvModule *m, NvLimits *limits, NvTerm arg)
+{
+	NvScheduler *s;
+	Multiclock *c;
+	NvClock clock;
+	NvTerm pid;
+	char err[128];
+	int mode, ns, i, owner;
+
+	for(mode = 0; mode <= 1; mode++)
+		for(ns = 1; ns <= 4; ns *= 2){
+			s = mallocz(sizeof *s, 1);
+			c = mallocz(sizeof *c, 1);
+			check(s != nil && c != nil, "multicore timer allocation");
+			check(nvschedinit(s, m, limits, 80, 10, err, sizeof err) == 0, err);
+			check(nvschedsetnsched(s, ns, err, sizeof err) == 0, err);
+			nvschedsetlocking(s, 1);
+			s->sharded = mode;
+			clock.aux = c;
+			clock.now = mcnow;
+			clock.wait = mcwait;
+			nvschedsetclock(s, &clock);
+			check(nvschedspawnroot(s, "timedreceiver", arg, &pid, err, sizeof err) == 0, err);
+			for(i = 0; i < 8; i++){
+				check(nvschedspawn(s, "timedreceiver", arg, &pid, err, sizeof err) == 0, err);
+				owner = i%ns;
+				if(owner != 0)
+					check(nvprocsteal(&s->runtime, nvpidslot(pid), owner) == 0, "place timed receiver");
+			}
+			check(nvmachinerun(s, err, sizeof err) == NvSchedDone, err);
+			check(s->completed == 9 && s->faulted == 0 && s->runtime.nlive == 0 &&
+				s->rootstate == NvRootDone && s->rootvalue != nil &&
+				nvtermkind(s->rootvalue->root) == Vatom &&
+				strcmp(nvtermatom(s->rootvalue->root), "timedout") == 0,
+				"multicore timer completion and root result");
+			for(i = 0; i < ns; i++)
+				check(s->sched[i]->runq->ntimer == 0 && s->sched[i]->runq->nrunnable == 0,
+					"multicore timers and queues drained");
+			nvschedfree(s);
+			free(s);
+			free(c);
+		}
+	print("ok - per-owner deadlines complete with real scheduler procs in both lock modes at N=1/2/4\n");
+}
+
 /* Heap placed: the probe proc must not touch its parent's private stack. */
 typedef struct Shardprobe Shardprobe;
 struct Shardprobe {
@@ -312,6 +448,7 @@ main(void)
 	limits.maxmessage = 1024;
 	limits.maxframe = 64;
 	limits.maxtermdepth = NvMaxtermdepth;
+	limits.maxduration = NvMaxduration;
 	limits.maxheap = 0;
 	limits.gcstress = 0;
 	limits.maxatom = 65536;
@@ -510,6 +647,9 @@ main(void)
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedProgress &&
 		nvprocat(&sched.runtime, nvpidslot(p1))->state == Prrunnable && nvprocat(&sched.runtime, nvpidslot(p2))->state == Prrunnable,
 		"one idle advance wakes both tied deadlines together");
+	check(sched.sched[0]->runq->head == nvpidslot(p1) &&
+		nvprocat(&sched.runtime, nvpidslot(p1))->runnext == nvpidslot(p2) &&
+		sched.sched[0]->runq->ntimer == 0, "equal deadline wakes ordered by ascending slot");
 	state = NvSchedProgress;
 	for(i = 0; i < 16 && state == NvSchedProgress; i++)
 		state = nvschedstep(&sched, err, sizeof err);
@@ -587,6 +727,9 @@ main(void)
 	check(nvschedstep(&sched, err, sizeof err) == NvSchedDone, "bad-duration scheduler done");
 	nvschedfree(&sched);
 	print("ok - a runtime duration outside the accepted domain faults bad_timeout\n");
+
+	deadlineunderload(&module, &limits, arg);
+	multideadlines(&module, &limits, arg);
 
 	/* A bounded cross-proc probe: scheduler 0 must dispatch/yield while
 	 * both the machine gate and scheduler 1's shard are held. Fork BEFORE

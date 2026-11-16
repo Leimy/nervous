@@ -2,6 +2,13 @@
 
 Nervous is an experimental concurrent language and portable 64-bit virtual machine for 9front.
 
+## Restart after the current pause
+
+Read **RESUME.md**, then **bench/T02-results.md**. That is the short handoff
+for checkpoint-779643: T02 functionally accepted, performance follow-up open,
+no active assignments. The long STATUS implementation journal is history,
+not a required context packet. Obtain user go-ahead before new work.
+
 ## How to read this repository
 
 Minimum context for making progress, in order:
@@ -66,13 +73,26 @@ Milestones 00-08 and reviews R1-R2 are complete. Milestone 08 (process-local hea
 
 Milestones 00-09 and reviews R1-R3 are complete. R3 (memory and representation) closed with six findings, all fixed with regressions: D080 charges term-traversal work (`==`, `print`, boundary copies) to reductions at 8 visits each, with an optional `-w` ceiling, so no instruction holds the scheduler for free; the closing suite run under `nervous_gcstress=1 nervous_gcoffload=1` exposed that off-process idle-sweep collections had never collected anything (R3-F05, D074 amendment), fixed alongside a teardown use-after-free of the completion semaphore (R3-F06). The three `run.rc` invocations under "Inline garbage collection" are the regression bar. `milestones/R3-memory-review.md` carries the coverage map and the properties R4 inherits.
 
-Milestone 10 (Multicore) is in progress. Its design is recorded as D081-D090; T00a (segmented process table), T00b (machine/scheduler split, ownership, counters) and T01 (N scheduler procs under one global lock, wake-to-home, stealing, the idle/wake/termination protocol, line-atomic output) have landed, so `nervous -p N` runs a program on N `rfork` schedulers sharing memory, with the three regression suites passing unchanged at N=1 and the ring, sieve and CPU-bound shapes correct at `-p 2` and `-p 4`. Still to come in M10: the per-scheduler deadline heap (T02, D084), the `-p` measurement rows (T03, D088) and any lock split they justify (T04), the `tests/multicore/` stress fixtures, and the mandatory R4 review. `STATUS.md` is authoritative for current assignments and resumption.
+Milestone 10 (Multicore) is in progress. Its design is recorded as D081-D090; T00a (segmented process table), T00b (machine/scheduler split, ownership, counters) and T01 (N scheduler procs under one global lock, wake-to-home, stealing, the idle/wake/termination protocol, line-atomic output) have landed, so `nervous -p N` runs a program on N `rfork` schedulers sharing memory, with the three regression suites passing unchanged at N=1 and the ring, sieve and CPU-bound shapes correct at `-p 2` and `-p 4`. The first sharded-lock slice is retained with measured CPU/GC scaling and reviewed regression logs (`bench/checkpoint-results.md`); message-heavy workloads still do not scale. The per-owner deadline heap and per-dispatch expiry checks (T02, D084) passed checkpoint-779643, including the new deterministic and real-proc tests. Functional acceptance is recorded; consistently slower timings require a controlled performance follow-up (`bench/T02-results.md`). Full T04, remaining deterministic wake/interrupt coverage and the mandatory R4 review are still open. `STATUS.md` is authoritative for current assignments and resumption.
 
 ## New-coordinator handoff
 
-Read `STATUS.md`, `milestones/10-multicore.md` (its "M10-T01 -- landed" section says what differs from the spec), and `docs/questions.md` ("Milestone 10") before continuing. D081-D090 are the multicore design; D068/D074 (heap ownership and the collector protocol, including the shared-memory placement rule) and D070 are what it builds on; D061-D079 the memory and binary designs beneath them. All completed-task write sets are released. Obtain user go-ahead and assign exact paths before starting implementation. Confirm source-control state with the user; a supplied commit message does not prove a commit. R2-F16 is resolved by D084 when T02 lands.
+Start with `RESUME.md` and `bench/T02-results.md`; load only task-adjacent
+source and decisions after the user chooses the next task. For scheduler
+changes, `docs/sharding.md` describes the current lock protocol and the T02
+section of `milestones/10-multicore.md` describes deadlines. D081-D090 remain
+the design record; D074 governs GC lifetime and shared-memory placement.
+All write sets are released. Confirm source-control state with the user;
+a supplied commit message does not prove a commit. R2-F16 is closed by the
+accepted T02 runtime maxduration enforcement.
 
 ## Try it
+
+For the current M10 build/regression/measurement checkpoint, run
+`rc /usr/dave/work/nervous/tests/checkpoint.rc`. It builds the working tree,
+runs all three regression modes and the checkpoint benchmarks, and saves
+labeled logs in a new results directory. See `tests/README.md` for scope and
+remaining manual checks.
 
 Build the command and test programs with `mk tests` (object files and binaries are ignored by git; `mk clean` removes them). Format a source example with `./nervous -f examples/arithmetic.nv`, compile it to verified symbolic bytecode with `./nervous -c examples/arithmetic.nv`, or execute it with `./nervous -r examples/arithmetic.nv main`. `-c`'s output is a module in the "Symbolic Bytecode v0" text format (`docs/bytecode.md`) and can be saved to a file; `./nervous -X saved.nvbc main ...` loads and verifies that file and runs it under the same process scheduler as `-r`, letting a compile step be timed once and separately from any number of subsequent runs. This differs from `-b`/`-x`/`-t`, which also load a saved bytecode file but run it through the standalone single-process executor with no host callback table installed, so a program that spawns, sends, receives or does I/O (anything using processes, like the ring/waiters/sieve examples below) faults `bad_process_context` under `-x`/`-t` and must use `-X` instead. The process example `examples/pingpong.nv` demonstrates `self`, `spawn`, `!` (copied send), selective receive, and `exit` at source level; run it through the cooperative scheduler with `./nervous -r examples/pingpong.nv main`. `./nervous -r examples/rpc.nv main` adds Ref-correlated request/reply and preservation of an earlier unmatched response. `./nervous -r examples/hello.nv main` demonstrates milestone 07's host output: it prints `'hello_world` during execution, then `'ok` as the final root value. `examples/sieve.nv` uses `if`, processes-as-data, and tail-recursive message loops; calls in tail position replace their frame (D047, `docs/semantics.md`), which is what lets a receive loop run indefinitely under the frame limit. `examples/ring.nv` (message passing around a ring), `examples/isolation.nv` (a child faults; siblings and root continue, and `after` detects the lost reply), and `examples/ioserver.nv` (I/O as a Ref-correlated message exchange with a device process) each demonstrate one runtime goal; see `examples/README.md`.
 
@@ -100,7 +120,7 @@ Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also 
 
 ## Multicore
 
-`-p N` (D081-D089; 1 through 64, default 1) runs the scheduler on N Plan 9 procs created with `rfork(RFPROC|RFMEM)`. They share the process table, run queues, mailboxes and atom table; a message between processes on different schedulers is the same single copy into a malloc'd fragment it always was, appended under one global runtime lock, and the receiver reads it in place. Each process is owned by one scheduler at a time: a new process starts on its spawner's scheduler, a wake goes to the owner's queue, and an idle scheduler steals from another's backlog. Language semantics do not change with N (`docs/semantics.md`, "Processes and messages"); the one visible difference is that output lines from processes on different schedulers have no defined relative order (D086). `-p` applies to `-r`/`-X` only, like `-o` and `-w`. With `-s`, one `stats: sched N:` row per scheduler follows the totals, with the D088 counters: dispatches, own and remote enqueues, steals taken and given, wakes sent and received, sleeps and sleep time, deadline fires, lock acquisitions and wait time. For example:
+`-p N` (D081-D089; 1 through 64, default 1) runs the scheduler on N Plan 9 procs created with `rfork(RFPROC|RFMEM)`. They share the process table, run queues, mailboxes and atom table; a message between processes on different schedulers is the same single copy into a malloc'd fragment it always was, appended under the machine gate plus all owner shards, and the receiver reads it in place. Each process is owned by one scheduler at a time: a new process starts on its spawner's scheduler, a wake goes to the owner's queue, and an idle scheduler steals from another's backlog. Language semantics do not change with N (`docs/semantics.md`, "Processes and messages"); the one visible difference is that output lines from processes on different schedulers have no defined relative order (D086). `-p` applies to `-r`/`-X` only, like `-o` and `-w`. With `-s`, one `stats: sched N:` row per scheduler follows the totals, with the D088 counters: dispatches, own and remote enqueues, steals taken and given, wakes sent and received, sleeps and sleep time, deadline fires, lock acquisitions and wait time. For example:
 
 ```rc
 ./nervous -s -p 4 -r examples/sieve.nv main 5000
@@ -108,7 +128,14 @@ Missing, empty or `0` means normal execution; `1` enables stress, and `-G` also 
 ./nervous -s -p 4 -r bench/cpubound.nv main
 ```
 
-The global lock is not taken at N=1, so single-scheduler cost is unchanged (`bench/benchcmp` shows every shape within noise of the pre-multicore capture). At N>1 message-bound shapes are currently slower than N=1 -- the lock costs about eight acquisitions per ring hop -- which is the measurement the stage-2 lock split (D081, D088) is gated on. A change to `lib/sched.c` or `lib/process.c` should be checked with the three suite lines above and the three `-p` runs here.
+N=1 skips runtime locking by default, but this does NOT imply unchanged
+single-scheduler cost: the latest T02 capture is slower than the immediate
+pre-T02 checkpoint and needs controlled investigation (`bench/T02-results.md`).
+At N>1, local scheduling/receive/GC use owner shards; send/ref/steal/idle still
+use the machine gate plus all shards (`docs/sharding.md`). CPU/GC scales in
+the retained first slice; message-bound workloads still do not. Validate future
+runtime changes with the one-command checkpoint above and review its timing
+flags separately from correctness.
 
 `-w visits` (D080) caps the node visits one traversing instruction (`==`, `print`/`eprint`, the root `return`/`exit` copy, `spawn`'s argument copy) may make; a traversal beyond it faults that process with `system_limit`, the same way the depth ceiling does. `0` (the default) is no cap. Independently of the cap, those instructions always charge one reduction per 8 visits, so `nervous -s` reduction totals for programs heavy in `==` are slightly higher than before D080. Like `-o`, this applies to `-r`/`-X` only.
 

@@ -707,11 +707,30 @@ Rationale: the milestone's central invariant -- exactly one scheduler owns and m
 
 Each scheduler keeps a binary min-heap of (deadline, slot, generation) for the waiting processes it owns, with a heap index stored in the process slot so arming, re-arming and clearing are O(log n) and the heap holds at most one entry per waiting process (an `after` loop does not accumulate stale entries). Firing re-validates state `waiting`, generation and `hasdeadline`, so D050's guarantees -- a deadline cannot outlive its slot, fire twice, or wake a reused generation -- are unchanged. The heap top is peeked once per dispatch as well as at idle.
 
-This changes a pre-existing property of the single-scheduler runtime: until now a deadline was examined only when the run queue was empty, so `receive ... after N` never expired while any process was runnable -- a spinning peer made every timeout in the system infinite. D050's "with nothing runnable, sleep until the nearest deadline" still describes the idle case; the busy case now guarantees expiry is observed within one quantum. The deterministic timeout suites are unaffected (their test clocks advance only in `wait`), and any fixture that depended on the old starvation is a fixture defect.
+This changes a pre-existing property of the single-scheduler runtime: until now a deadline was examined only when the run queue was empty, so `receive ... after N` never expired while any process was runnable -- a spinning peer made every timeout in the system infinite. D050's "with nothing runnable, sleep until the nearest deadline" still describes the idle case; the busy case now checks expiry at the next owner dispatch boundary, even with a nonempty queue. This is eligibility for the FIFO, not execution of the timeout body within a quantum of wall time; host I/O, collection, OS scheduling, FIFO backlog and message-first scanning remain possible delays. The deterministic timeout suites are unaffected (their test clocks advance only in `wait`), and any fixture that depended on the old starvation is a fixture defect.
 
 R2-F16 is resolved here: `NvLimits.maxduration` becomes authoritative, validated by `nvruntimeinit` to `1..NvMaxduration` and checked by `nvprocarmdeadline` in place of the compile-time ceiling, so a runtime may accept a narrower duration domain than D049's literal maximum.
 
-Rationale: the idle-time table scan was already O(live processes) per idle step and, under N schedulers each scanning for their own waiting processes, would be N times worse; the heap makes both the idle bound and the per-dispatch check O(log n) and O(1). The per-dispatch check is the correct contract for timeouts and costs a pointer compare.
+Rationale: the idle-time table scan was already O(live processes) per idle step and, under N schedulers each scanning for their own waiting processes, would be N times worse; the heap makes both the idle bound and the per-dispatch check O(log n) and O(1). The per-dispatch check is the correct contract for timeouts. An empty heap needs no clock read; a nonempty heap reads the installed clock once before dispatch and drains due entries.
+
+T02 implementation detail: the owner heap is stored with `NvRuntime.runq[i]`
+(and reached by `NvSched.runq`), so bare-runtime lifecycle calls maintain the
+same invariants without a scheduler callback. It contains only waiting slots
+with an armed deadline and no pending wake. Arming while running records the
+absolute deadline; entering timed wait reserves heap capacity before changing
+state and indexes it. A message or timer wake removes the index immediately,
+including the on-CPU deferred-wake window, but retains the absolute deadline
+for the rescan. Taking a message, plain wait, infinity, timeout consumption
+and exit cancel it. A runnable steal therefore transfers no heap entry; if
+the rescan blocks, the original deadline is indexed on the new owner.
+Re-arming a waiting slot updates its one entry. Keys order by deadline then
+slot, preserving D050 ties within an owner (no cross-scheduler execution order
+is promised). Growth failure reports `system_limit` without changing the old
+receive/lifecycle/deadline state. Capacity is retained until runtime teardown
+and is included as `NvMemstats.timerbytes` in requested-storage snapshots.
+The owner's shard protects the heap; remote wake/exit/steal use the existing
+all-shard gate. Idle refreshes its sleep hint under that gate and termination
+checks actual heap emptiness.
 
 ## D085 - Idle sleep, wakeup, termination, and shutdown under N schedulers
 

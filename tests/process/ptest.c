@@ -205,8 +205,10 @@ timeouts(void)
 	check(nvprocrecvbegin(&r, pid, &v, err, sizeof err) == 0, "empty scan begin");
 	check(nvprocrecvwaitdeadline(&r, pid, 1050, err, sizeof err) == 0 && p->state == Prwaiting, "not yet expired blocks");
 
-	/* A scheduler would make this runnable again on wakeup; simulate that directly. */
-	p->state = Prrunnable;
+	/* Use real lifecycle APIs: direct state writes bypass queue/timer
+	 * membership and the oncpu wake deferral. */
+	check(nvprocoffcpu(&r, pid) == 0, "leave CPU after timed wait");
+	check(nvprocwake(&r, nvpidslot(pid)) == 0, "wake timed waiter");
 	check(nvprocdispatch(&r, pid, err, sizeof err) == 0, "redispatch after not-yet-expired wait");
 	check(nvprocrecvbegin(&r, pid, &v, err, sizeof err) == 0, "second empty scan begin");
 	check(nvprocrecvwaitdeadline(&r, pid, 1100, err, sizeof err) == 1 && p->state == Prrunning && !p->hasdeadline,
@@ -246,6 +248,165 @@ timeouts(void)
 	print("ok - receive deadlines arm, expire, lose to queued messages, and reject bad durations\n");
 }
 
+/* Full invariant/oracle walk is test-only; production never scans timers. */
+static void
+checktimers(NvRuntime *r)
+{
+	NvRunq *q;
+	NvProcess *p;
+	NvDeadline *d, *up;
+	ulong i, j, n;
+	int owner;
+
+	for(owner = 0; owner < r->nrunq; owner++){
+		q = r->runq[owner];
+		n = 0;
+		check(q->ntimer <= q->captimer, "timer capacity bound");
+		for(i = 0; i < r->nslot; i++){
+			p = nvprocat(r, i);
+			if(p->owner != owner)
+				continue;
+			if(p->state == Prwaiting && p->hasdeadline && !p->pendingwake){
+				n++;
+				check(p->timerindex < q->ntimer, "waiting timer missing index");
+				check(q->timer[p->timerindex].slot == i, "timer index reverse mapping");
+			}else
+				check(p->timerindex == NvNoslot, "nonwaiting timer retained index");
+		}
+		check(n == q->ntimer, "timer count matches waiting set");
+		for(j = 0; j < q->ntimer; j++){
+			d = &q->timer[j];
+			p = nvprocat(r, d->slot);
+			check(p->owner == owner && p->generation == d->generation &&
+				p->timerindex == j && p->deadline == d->when, "timer identity/key");
+			if(j != 0){
+				up = &q->timer[(j-1)/2];
+				check(up->when < d->when || (up->when == d->when && up->slot < d->slot),
+					"timer heap ordering");
+			}
+		}
+	}
+}
+
+static void
+deadlineheap(void)
+{
+	enum { N = 33 };
+	NvLimits l;
+	NvRuntime r;
+	NvTerm pid[N], fresh, value, inf;
+	NvProcess *p;
+	NvFrag *msg;
+	uvlong when;
+	ulong i, j, cap, slot, best;
+	char err[128];
+
+	memset(&l, 0, sizeof l);
+	l.maxprocess = N;
+	l.maxmailbox = 4096;
+	l.maxmessage = 1024;
+	l.maxframe = 64;
+	l.maxtermdepth = NvMaxtermdepth;
+	l.maxatom = 65536;
+	l.maxduration = 0;
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) < 0, "zero maxduration refused");
+	l.maxduration = -1;
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) < 0, "negative maxduration refused");
+	l.maxduration = NvMaxduration+1;
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) < 0, "oversized maxduration refused");
+	l.maxduration = 100;
+	check(nvruntimeinit(&r, &l, 1, err, sizeof err) == 0, err);
+	check(nvruntimesetnrunq(&r, 2, err, sizeof err) == 0, err);
+	inf = nvatom("infinity");
+	for(i = 0; i < N; i++){
+		check(nvprocspawn(&r, &pid[i], err, sizeof err) == 0, err);
+		check(nvprocdispatch(&r, pid[i], err, sizeof err) == 0, err);
+		check(nvprocarmdeadline(&r, pid[i], integer((i*17)%N+1), 1000, err, sizeof err) == 0, err);
+		check(nvprocwait(&r, pid[i], err, sizeof err) == 0, err);
+		check(nvprocoffcpu(&r, pid[i]) == 0, "timer setup offcpu");
+		checktimers(&r);
+	}
+	check(r.runq[0]->ntimer == N && r.runq[0]->captimer == N, "heap grew past eight, bounded by live limit");
+	cap = r.runq[0]->captimer;
+	/* Both sift directions, arbitrary interior removal, and slot reuse. */
+	for(i = 0; i < N; i++){
+		check(nvprocarmdeadline(&r, pid[i], integer(N-i), 1000, err, sizeof err) == 0, err);
+		checktimers(&r);
+	}
+	for(i = 0; i < N; i += 3){
+		check(nvprocexit(&r, pid[i]) == 1, "exit indexed waiter");
+		checktimers(&r);
+		check(nvprocspawn(&r, &fresh, err, sizeof err) == 0 && nvpidslot(fresh) == i &&
+			!nvprocalive(&r, pid[i]), "indexed slot reuse");
+		checktimers(&r);
+		pid[i] = fresh;	/* occupy the slot until every reuse was checked */
+	}
+	for(i = 0; i < N; i += 3)
+		check(nvprocexit(&r, pid[i]) == 1, "reused slot cleanup");
+	/* Independent O(slots) oracle for every remaining minimum. */
+	while(nvprocnextdeadline(&r, 0, &when)){
+		best = NvNoslot;
+		for(j = 0; j < r.nslot; j++){
+			p = nvprocat(&r, j);
+			if(p->timerindex != NvNoslot && (best == NvNoslot ||
+			   p->deadline < nvprocat(&r, best)->deadline))
+				best = j;
+		}
+		check(best != NvNoslot && when == nvprocat(&r, best)->deadline, "minimum agrees with oracle");
+		check(nvprocfiredeadlines(&r, 0, when-1) == 0, "no early timer wake");
+		check(nvprocfiredeadlines(&r, 0, when) == 1, "exactly one distinct deadline fired");
+		check(nvprocrunhead(&r, 0, &slot) && slot == best, "wake order agrees with oracle");
+		checktimers(&r);
+		check(nvprocexit(&r, nvpid(best, nvprocat(&r, best)->generation)) == 1, "drain fired waiter");
+	}
+	check(nvprocspawn(&r, &fresh, err, sizeof err) == 0, err);
+	check(nvprocdispatch(&r, fresh, err, sizeof err) == 0, err);
+	check(nvprocarmdeadline(&r, fresh, integer(100), 0, err, sizeof err) == 0, "maxduration exact boundary");
+	check(nvprocarmdeadline(&r, fresh, integer(101), 0, err, sizeof err) < 0 &&
+		strcmp(err, "bad_timeout") == 0, "runtime maxduration enforced");
+	p = nvprocat(&r, nvpidslot(fresh));
+	check(p->deadline == 100 && p->hasdeadline, "bad duration leaves prior deadline intact");
+	check(nvprocarmdeadline(&r, fresh, integer(1), ~0ULL, err, sizeof err) < 0 &&
+		strcmp(err, "system_limit") == 0 && p->deadline == 100, "overflow leaves deadline intact");
+	check(nvprocwait(&r, fresh, err, sizeof err) == 0, err);
+	for(i = 0; i < 1000; i++)
+		check(nvprocarmdeadline(&r, fresh, integer(i%100), 200, err, sizeof err) == 0 &&
+			r.runq[0]->ntimer == 1 && r.runq[0]->captimer == cap, "rearm has no stale accumulation");
+	/* Timer first, then send, in the oncpu yield window: one deferred enqueue. */
+	check(nvprocfiredeadlines(&r, 0, 300) == 1 && p->pendingwake, "timer defers oncpu wake");
+	check(nvprocsend(&r, fresh, integer(7), err, sizeof err) == 1, "message after timer");
+	check(nvprocfiredeadlines(&r, 0, 300) == 0 && r.runq[0]->nrunnable == 0, "no duplicate timer wake");
+	checktimers(&r);
+	check(nvprocoffcpu(&r, fresh) == 1 && r.runq[0]->nrunnable == 1, "one deferred enqueue");
+	check(nvprocpop(&r, fresh, &msg, err, sizeof err) == 1, "drain wake message");
+	nvfragfree(msg);
+	/* Start a new receive, wake before expiry, then migrate its rescan. */
+	check(nvprocdispatch(&r, fresh, err, sizeof err) == 0, err);
+	check(nvprocarmdeadline(&r, fresh, integer(100), 400, err, sizeof err) == 0, err);
+	check(nvprocwait(&r, fresh, err, sizeof err) == 0 && nvprocoffcpu(&r, fresh) == 0, "block before migration");
+	check(nvprocwake(&r, nvpidslot(fresh)) == 0, "wake before deadline for migration");
+	check(nvprocsteal(&r, nvpidslot(fresh), 1) == 0 && p->deadline == 500, "steal retains absolute deadline");
+	check(nvprocdispatch(&r, fresh, err, sizeof err) == 0, err);
+	check(nvprocrecvbegin(&r, fresh, &value, err, sizeof err) == 0, err);
+	check(nvprocrecvwaitdeadline(&r, fresh, 450, err, sizeof err) == 0 &&
+		r.runq[0]->ntimer == 0 && r.runq[1]->ntimer == 1, "reblock indexes new owner");
+	/* Send first, then timer, still oncpu: again one deferred enqueue. */
+	check(nvprocsendfrom(&r, 0, fresh, integer(8), err, sizeof err) == 1, "message before timer");
+	check(nvprocfiredeadlines(&r, 1, 500) == 0, "send cancels timer membership");
+	check(nvprocoffcpu(&r, fresh) == 1 && r.runq[1]->nrunnable == 1, "message enqueues once at new owner");
+	check(nvprocdispatch(&r, fresh, err, sizeof err) == 0, err);
+	check(nvprocrecvbegin(&r, fresh, &value, err, sizeof err) == 1, err);
+	check(nvprocrecvtake(&r, fresh, &msg, err, sizeof err) == 0 && !p->hasdeadline, "take clears receive deadline");
+	nvfragfree(msg);
+	check(nvprocarmdeadline(&r, fresh, integer(0), 600, err, sizeof err) == 0, "zero duration legal");
+	check(nvprocwait(&r, fresh, err, sizeof err) == 0, err);
+	check(nvprocarmdeadline(&r, fresh, inf, 600, err, sizeof err) == 0 &&
+		r.runq[1]->ntimer == 0 && !p->hasdeadline, "infinity removes indexed deadline");
+	checktimers(&r);
+	nvruntimefree(&r);
+	print("ok - indexed deadline growth, rearm, removal, reuse, migration, wake ordering and duration limits\n");
+}
+
 void
 main(void)
 {
@@ -265,6 +426,7 @@ main(void)
 	mailboxlimits();
 	termdepth();
 	timeouts();
+	deadlineheap();
 
 	nvheapinit(&h, 0);
 

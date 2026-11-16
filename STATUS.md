@@ -2,7 +2,110 @@
 
 Operational source of truth. Settled design is in `docs/decisions.md`; benchmark evidence is in `bench/README.md`; regression coverage is in `tests/memory/README.md`. Older milestone history lives in `STATUS-archive.md` and the review archives.
 
+## Pause / fast restart
+
+USER STOPPING POINT: checkpoint-779643 reviewed; T02 functionally accepted,
+performance investigation recommended but NOT authorized or started. No
+active assignments or sub-agents; all write sets released. No runtime/test
+change since that run. Commit/push state unconfirmed; coordinator commits
+nothing. Read **RESUME.md**, then **bench/T02-results.md**, to rehydrate cheaply.
+The long historical sections below are NOT a task queue or current authority
+for requests to rerun/commit/implement already completed work.
+
 ## Checkpoint and authorization
+
+M10-T02 FUNCTIONAL CHECKPOINT ACCEPTED: user-run checkpoint-779643 reviewed.
+Build, all three full regression modes (including every new T02 test) and all
+eight shard smoke cases PASS. Raw multi results/accounting correct, zero
+faults/drops/failed GC. Performance is NOT cleared: small comparison has zero
+count changes but 12 timing flags (wall and ns/msg for all six shapes),
++13.3..20.0% wall versus T01 and +6.3..9.5% versus pre-T02 checkpoint-20674.
+Multi medians N=1/2/4: ring .980/1.149/1.197; sieve .157/.331/.355;
+CPU/GC .668/.381/.211. All nine are +4.1..10.0% above pre-T02 medians.
+CPU/GC still scales 1.75x/3.17x; all four CPU schedulers worked in every
+repeat. Message-heavy scaling remains poor. Highwater increments match
+8-byte slot-layout growth in 1024-slot chunks (+8192, or +81920 for ten).
+Full evidence, raw triplets, scope and next recommendation: bench/T02-results.md.
+Recommended next task is controlled pre/post performance investigation,
+not another lock split or a rollback of deadline semantics. Separate captures
+cannot identify the cause; do not dismiss the consistent increase as noise.
+Review changed documentation only, not runtime or tests. Original logs kept.
+T02 run/functional acceptance is closed; performance follow-up, idle-window
+fixture, DEL/no-orphans, exit-traffic fragment accounting and R4 remain open.
+The old runner's OPEN:T02 line is static pre-review text, not a failed test.
+
+M10-T02 IMPLEMENTATION RECORD (first-run pending at handoff; accepted above):
+D084 indexed per-owner deadline heaps now live with NvRuntime.runq[i], reached
+by NvSched.runq; reverse timerindex in each slot. Only armed waiting slots
+without pendingwake are indexed. Pre-dispatch expiry runs under the local
+shard even with runnable peers; no clock read on the empty-heap path. Wake
+removes the index, retains the absolute deadline for message-first rescan;
+reblock after a steal indexes the new owner. Take/plain wait/infinity/exit
+clear it. Allocation precedes state changes; failure is system_limit with
+old state intact. Idle uses/rechecks the heap minimum, termination reads
+actual heap emptiness, N=1 rechecks time after wait rather than assuming it
+elapsed. NvMemstats.timerbytes counts retained heap capacity. maxduration
+validated 1..NvMaxduration and enforced on arm (R2-F16); schedtest's missing
+initializer fixed. Compiler literal ceiling/CLI defaults unchanged.
+Changed runtime: include/nvproc.h, include/nvsched.h, lib/process.c, lib/sched.c.
+Changed tests: tests/process/ptest.c, tests/process/schedtest.c,
+tests/memory/offloadtest.c. Existing runners already execute all three;
+mkfile and rc scripts unchanged. New tests cover heap growth/rearm/oracle/
+reverse indices, cancellation/reuse/migration, both deferred timer/send
+orders, configured duration limits, continuous runnable load at quanta 1/10,
+both lock domains, real scheduler procs N=1/2/4 with a shared logical clock,
+and expiry while that same process is collecting. Source review caught and
+fixed a draft reuse-test cleanup mistake. Sonnet read-only runtime and
+fixture reviews found no concrete new defect; source review is NOT execution.
+Coordinator retains responsibility. Sub-agent hung up; all write sets released.
+`mk nervous tests benchmarks` clean. The subsequent user run and direct log
+review of checkpoint-779643 accepted T02 functionally; no T02 rerun is owed.
+For validation AFTER future changes, the user runs ONE command:
+  rc /usr/dave/work/nervous/tests/checkpoint.rc
+checkpoint-20674 is the pre-T02 baseline, not evidence for the new tests.
+See milestones/10-multicore.md's T02 section and tests/README.md. Runtime
+heap-allocation failure injection is not covered; rollback is source-reviewed.
+No hard wall-time timeout-body guarantee, no new lock split, no R4 closure.
+Remaining: performance follow-up, idle-window fixture, DEL/no-orphans,
+exit-traffic fragment accounting, full T04 and R4. Commit state unconfirmed; coordinator commits nothing.
+This entry supersedes older historical notes below saying T02 is unimplemented
+or deadlines are idle-only; the prior test/measurement checkpoint follows.
+
+### Historical pre-T02 checkpoint (superseded task recommendations)
+
+Test-driver addition at that checkpoint (runtime unchanged): `tests/checkpoint.rc` is a
+one-command, user-run M10 checkpoint: build working-tree CLI/tests/benchmarks;
+all three regression modes; shard smoke controls; small capture and T01
+count comparison; three multicore captures with tables. It retains per-step
+logs and a summary in a new `bench/runs/checkpoint-<pid>/` directory and stops
+on failure. `bench/run.rc` now propagates a failed timed invocation instead
+of masking it with the following echo, and rejects extra arguments.
+FIRST RUN COMPLETE: `bench/runs/checkpoint-20674/`, user-run and reviewed.
+Build, all three full regression logs and all eight shard smoke cases pass;
+the suite logs are now directly inspected rather than only user-reported.
+All three raw multicore captures have correct ring/CPU root values and stable
+spawned/completed/exited/sent counts, zero faults/drops/failed GC. Sieve stdout
+is discarded by the benchmark runner, so its prime output is not checked here.
+Medians N=1/2/4 (seconds): ring .891/1.083/1.126; sieve .146/.318/.341;
+CPU/GC .622/.354/.202 (1.76x/3.08x speedup). CPU N=4 repeat 3 takes .270 s
+with one scheduler doing zero dispatches: load balance remains imperfect.
+Small comparison: 6 shapes, 0 count changes, FOUR cost flags; all wall times
++3.5..10.7% versus historical T01. Do not call this unchanged N=1 performance
+or dismiss it as noise without paired repeats. Full analysis and scope:
+`bench/checkpoint-results.md`; runner usage: `tests/README.md`.
+This supersedes the older statements below that suite logs were not inspected
+and post-split message-heavy measurement was still missing. Keep T04a, not
+full T04/R4 acceptance. Suggested next implementation: D084/T02 deadlines,
+not a blind send-lock split. Interactive DEL/no-orphans, deterministic wake
+fixtures and R4 remain open. Only documentation changed on results review;
+no runtime source or mkfile changed. Commit state remains unconfirmed.
+
+### Historical implementation journal -- not current instructions
+
+Preserved for regression archaeology only. Pending runs, commit suggestions,
+"next" assignments and "not implemented" statements inside this journal are
+as-of their original entries, superseded by RESUME.md and the checkpoint
+above. Do not load this journal for ordinary resumption.
 
 ```text
 milestone: 08, 09, R3 COMPLETE; 10 - Multicore IN PROGRESS: T00a, T00b,
@@ -537,16 +640,20 @@ Milestone 08 (Memory) and CLI-T01 are complete and accepted; their full narrativ
 | 08 Memory | **complete** | R2, 05, 06 | none -- all tasks (T04a/b/p/e/c/r/d) accepted |
 | 09 Binaries | **complete** | 04, 08 | none -- T01-T05 done; T05 results in `bench/README.md` |
 | R3 Memory review | **complete** | 08, 09 | none -- six findings fixed with regressions; D080 |
-| 10 Multicore | **in progress** | R3, 05, 06, 08, 09 | T00a/T00b/T01 landed (`-p N` live). Open: T01 fixtures + `-p` bench rows + lock audit + note handler; T02 deadline heap (D084); T03 measurement; T04 lock split if justified; R4 |
+| 10 Multicore | **paused, in progress** | R3, 05, 06, 08, 09 | T00a/T00b/T01 and T02 functionally accepted; T04a first slice retained; measurement captures reviewed. Open: performance follow-up, deterministic idle-window fixture, interrupt/no-orphans, exit-traffic fragment accounting, full T04 and R4 |
 | R4 Multicore review | not-started | 10 | Mandatory multicore acceptance review |
 
 ## Task ledger
 
-The milestone-08 task ledger is archived in `STATUS-archive.md`. Still open from 08: M08-T04q (optional, deferred; see its section below). Milestone-09 tasks are under "M09-Tasks (in progress)".
+No active task assignment. The next proposed performance investigation needs
+user authorization and an identified pre-T02 control before implementation.
+The milestone-08 task ledger is archived in `STATUS-archive.md`. M08-T04q
+remains optional/deferred. The following M09 ledger is historical: M09 and R3
+are complete; its original waiting-for-run text is not a current obligation.
 
-## M09-Tasks (in progress)
+## M09-Tasks (historical, completed)
 
-### Progress (current)
+### Historical progress record
 
 - **M09-T01 Bbin runtime: done.** A first draft came from a long Qwen run. Claude's review fixed: word-vs-byte arithmetic in `nvbinapp` (heap corruption); no D067 reservation for the new opcodes in `lib/exec.c`; verifier dataflow and guard edges for them in `lib/verify.c`; 32-bit `1L` shifts; the signed range check; zero padding; `lib/pattern.c` length types; D079 fault names. Nine opcodes: `binalloc`, `binappint`, `binappbin`, `binappend`, `bintestbinary`, `binintget`, `binbinget`, `binremget`, `binend`. Tests: construction/encoding checks in `tests/process/ptest.c`; VM opcode cases A-F in `tests/process/exectest.c` (construction, append, match, mismatch-to-fail-target, faults, remainder). `docs/bytecode.md` documents the opcodes. User-confirmed passing.
 - **M09-T02 frontend: done.**
@@ -572,13 +679,22 @@ The original plan follows. Design settled in D076-D079 (representation, grammar/
 | M09-T02 Binary frontend | done | 08 (independent of T01; builds on the coordinator-settled `include/nvpat.h` `Pbin` interface) | `include/nervous.h`, `lib/parse.c`, `lib/lex.c`, `lib/ast.c`, `lib/patcompile.c` (AST->`NvPattern` conversion, `nvpatternfromexpr`), `lib/patbc.c` (pattern->bytecode lowering, `nvpatterncode`), `lib/format.c`, `docs/format.md`, `tests/frontend/*` (new fixtures only) | `<< ... >>` aggregate with the D076 segment grammar (integer segments with literal widths {8,16,32,64} and `/signed`/`/unsigned`/`/big`/`/little` modifiers; `:size / binary` and `/binary` segments; final unsized remainder); `Ebinagg`/`Ebinseg` AST nodes (parser does not validate forward/backward references or pattern-mode legality; the compiler and pattern checker do); `patternok` accepts binaries; `nvpatternfromexpr` converts `Ebinagg` to the `Pbin` `NvPattern`; `nvpatterncode` lowers binary patterns to `binalloc`/`binbinget`/`binremget` with a byte-position register; guard check rejects binaries (D079); canonical formatting for the aggregate (D021, `docs/format.md`); lexer/AST plumbing (a `Tbinopen`/`Tbinclose` token pair is expected -- the exact token names are an implementer detail to report, as with any new token). |
 | M09-T03 Binary compiler lowering | done | T01, T02 | `lib/compile.c`, `docs/decisions.md` (only if an implementation-level refinement is needed; report it) | Lower `Ebinagg` construction to `binalloc` (D077: evaluate operands left to right, compute total, single allocation, fill left to right) and the D079 construction faults (`bad_binary`, `overflow`, `badarith`); wire `is_binary` into `typetest` and the D060 guard/type-test surface; forward-reference size validation in patterns is already the pattern checker's (T02) -- this task is construction side and the intrinsic wiring only. |
 | M09-T04 Tests + exit-criterion example | done | T03 | `tests/bytecode/*`, `tests/pattern/*`, `tests/vm/*`, `tests/process/*`, `tests/run.rc`, `examples/README.md`, new `examples/protocol.nv` (the milestone exit-criterion example: a small length-prefixed protocol), `milestones/09-binaries.md` (implementation-state section only) | Every "Required tests" item from `milestones/09-binaries.md`: exact match + trailing-byte rejection, empty/nonempty remainders, length-prefixed payload, endian + signed decoding, invalid forward size reference rejected by the frontend, late failure rolling back earlier segment bindings, allocation/size-limit failures controlled. Golden tests in the existing suites; the example demonstrates the exit criterion (length-prefixed protocol over process-heap-owned binaries). |
-| M09-T05 Latency-isolation measurement (R3 prep) | built; awaiting user run of `rc bench/latency.rc` | 08 | `bench/latency.c` (new), `bench/latency.rc` (new), `bench/README.md`, `mkfile` (only the new target + `benchmarks`/`clean` entries, as T04r did) | First numbers for REVIEW-impressions.md's third isolation leg (now in R3's scope): structural equality and print cost on independently built shared graphs (`${x,x}` chains at increasing depth), copy of shared deep terms, and small-message hop latency measured with an expensive-term peer running concurrently on the same scheduler. Measurement only -- no mechanism changes (work-sensitive charging, resumable traversals, bounded exports, or I/O offloading are named there as possible later mechanisms; this task measures, it does not choose). |
+| M09-T05 Latency-isolation measurement (R3 prep) | done; results recorded and R3 closed | 08 | `bench/latency.c` (new), `bench/latency.rc` (new), `bench/README.md`, `mkfile` (only the new target + `benchmarks`/`clean` entries, as T04r did) | First numbers for REVIEW-impressions.md's third isolation leg (now in R3's scope): structural equality and print cost on independently built shared graphs (`${x,x}` chains at increasing depth), copy of shared deep terms, and small-message hop latency measured with an expensive-term peer running concurrently on the same scheduler. Measurement only -- no mechanism changes (work-sensitive charging, resumable traversals, bounded exports, or I/O offloading are named there as possible later mechanisms; this task measures, it does not choose). |
 
 Notes on the write sets. The three pattern files do different things and are split to keep T01/T02 disjoint: `lib/patcompile.c` is the AST-to-`NvPattern` conversion (`nvpatternfromexpr`, T02), `lib/patbc.c` is the pattern-to-bytecode lowering (`nvpatterncode`, T02), and `lib/pattern.c` is the runtime matcher (`nvpatternmatch`, T01) that both the pattern harness and the source path use, where a `Pbin` pattern matches a `Bbin` term. The one genuinely shared surface, `include/nvpat.h` (the `Pbin` kind and `NvBinseg` struct), is settled centrally in `milestones/09-binaries.md`'s "Settled interfaces" section before either task starts, so T01 owns it and T02 builds to it without editing it -- this is the coordinator-settles-the-interface rule from COORDINATION.md's parallelism policy, not an exception. If a task finds it needs a file outside its set, it reports a blocker, it does not expand scope. `include/nvproc.h` is in no M09 set (no `NvLimits` field is added: D078/D079 deliberately reuse the heap word budget rather than a new binary byte limit, so there is no `.gcoffload`-style field to thread through the construction sites). The `mkfile` change in T05 follows the T04r precedent (new build target only, no behavior change to existing targets).
 
 ## Recommended next sequence
 
-**Milestones 08 and 09 and R3 are complete.** R3 closed with six findings fixed with regressions (D080 work charging; R3-F05/F06 in the off-process collector), and the three suite invocations are the regression bar. **Milestone 10 (Multicore) is in progress**: design recorded as D081-D090; T00a (segmented table), T00b (machine/scheduler split) and T01 (N procs under the global lock) are landed and accepted -- `nervous -p N` works, N=1 cost is unchanged. The recommended order from here: (1) commit T01 (message in the checkpoint block); (2) finish T01's open items -- `tests/multicore/` fixtures (sub-agent candidates: disjoint new files), `bench/run.rc` `-p` rows, the note handler, and the read-only lock-discipline audit of `lib/sched.c`; (3) T02, the per-scheduler deadline heap and per-dispatch deadline check (D084, resolves R2-F16 and the "timers starve under load" finding); (4) T03 measurement, which first needs a `cpubound.nv` that does not collect on every dispatch; (5) T04 only if T03's numbers say so; (6) R4.
+Paused by the user; nothing starts automatically. On resumption, read
+RESUME.md and bench/T02-results.md. Confirm source-control state and preserve
+the accepted checkpoint. Proposed next: a bounded, controlled pre/post-T02
+performance investigation, starting at N=1, with matched binaries and repeated
+alternating runs. Identify the old source/binary before promising an A/B test.
+Do not weaken deadline semantics or broaden the lock split without evidence.
+Then address the deterministic idle-window/exit-traffic coverage and manual
+interrupt check, and complete R4 before declaring M10 complete. T02, the
+source multicore fixtures, -p measurement rows, note handler and first-slice
+lock review already exist; do not reassign them as unwritten work.
 
 ## T04q duplicate interpreter work (planned, optional, deferred; not a T04c dependency)
 
@@ -599,7 +715,8 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Scheduler: `include/nvsched.h`, `lib/sched.c`. `NvScheduler` is the shared machine (runtime, module, host table, clock, io, root, `QLock lock`/`iolock`, idle mask, stop state, `sched[]`); `NvSched` is one scheduler proc's state (run queue, `sem`, GC bookkeeping, D088 counters). `nvschedstep` is the N=1 facade over `step(s, sc)`; `nvmachinerun` rforks `sched[1..N-1]` and runs `schedproc` (step / idle / stopmachine) in every proc. M10-T04a local shard protects dispatch/yield/receive/GC; machine gate + all shards protects structural/cross-owner operations. Runtime locks are released across `nvexecrun`, blocking waits, `rfork` and inline collection; not taken at N=1 unless forced (`locking`). See docs/sharding.md for the map and same-build global control. Wake-to-home, `trysteal` at `NvStealmin = 2`, `kickidle`, `idle()` with own-queue re-check, `machineidle` termination, `gcdrain` per proc. Inline demand/idle collection, explicit storage snapshots and opt-in profiling, plus (M08-T04c, D074) off-process collection: a heap owner state and `Lock`, `rfork(RFPROC|RFMEM|RFNOWAIT)` collector procs restricted to a bare `NvExec*`/semaphore argument list, a locked completion fold, never-spin/never-false-idle scheduler waiting on a malloc'd completion semaphore bounded by the nearest deadline, a capped idle-sweep launch burst, and a bounded teardown drain. Default dispatch still has neither snapshot scans nor profiling clock reads on the no-collector path.
 - Binaries (M09, D076-D079): `Bbin` terms in `include/nvvm.h`/`lib/value.c` (`nvbin`, `nvbinapp`); runtime matching in `lib/pattern.c`; nine `bin*` opcodes in `lib/exec.c`, verified in `lib/verify.c`; frontend in `lib/lex.c`, `lib/parse.c`, `lib/patcompile.c`, `lib/patbc.c`, `lib/compile.c`, `lib/format.c`.
 - CLI: `-H` word budget, `-G` stress, `-o words` off-process threshold (M08-T04d), `-w visits` traversal ceiling (D080), `-p schedulers` (M10-T01; `runscheduled` mallocs the machine and both Biobufs and runs `nvmachinerun` for every N), `-s` statistics with one `sched N:` row per scheduler. `nervous_gcstress=1`/`nervous_gcoffload=words` set the matching CLI defaults; `-o`/`$nervous_gcoffload` apply only to `-r`/`-X` (the standalone `-x`/`-t` executor has no scheduler). Default is 0 (never off-process, D075, measurement-confirmed) -- unaffected by every test/benchmark's own independent `NvLimits.gcoffload = 0` construction.
-- Tests: `tests/memory/gctest.c` (seven groups), `autotest.c` (six groups), and `offloadtest.c` (eight off-process lifecycle groups, M08-T04c/T04d), included by `tests/run.rc`. Build-only benchmark target: `mk benchmarks` produces `bench/perftest`, `bench/largelive` and `bench/latency` (M09-T05).
+- Deadlines: `lib/process.c` timerreserve/timerfix/timerrm/timerset maintain the owner heap and reverse indices; nvprocnextdeadline/nvprocfiredeadlines are used by `lib/sched.c` firedeadlines/step/idlestep/idle. Scalar deadline/slot/generation keys, no exec pointers. NvMemstats.timerbytes accounts retained timer capacity.
+- Tests: memory gctest (seven groups), autotest (eight), offloadtest (nine, including T02 collecting-owner expiry); process ptest/schedtest cover timer heap/limits, busy expiry and real scheduler procs at N=1/2/4. All included by tests/run.rc and reviewed in checkpoint-779643. Build-only `mk benchmarks` includes perftest, largelive, latency, benchcmp and scale.
 
 ## Remaining cautions
 
@@ -607,15 +724,29 @@ Source inspection found arithmetic results and call-target resolution computed d
 - Collector cost includes classification/freeing of adopted fragments and scratch/trial work, not just copying live words. Transient old/new/scratch space is not the retained-data maxheap budget.
 - Host malloc failure paths have source review but no deterministic injection coverage. Root descriptors, C pointers and custom host callback contracts are trusted; verifier guarantees apply to bytecode, not arbitrary host metadata.
 - Atom synchronization is settled by D090 (no interpreter path writes the table; host `nvatom` calls must not overlap a running machine). Multi-scheduler ownership is live (D083): the invariant "exactly one owner at every instant" now rests on the owner shard/all-shard transfer gate plus `oncpu`/`pendingwake`. M10-T04a source review and user-observed tests are green; required deterministic idle/wake race fixtures and R4 remain open.
-- `RFMEM` shares data, bss and heap, not stacks: anything a forked scheduler or collector touches must be malloc'd. `nvmachineinterrupt` is wired to the CLI note handler; the interactive interrupt check and lock-free stop-word review remain acceptance/R4 work. Deadlines are still slot-scanned at idle only (D084/T02 not landed), so `after` still cannot expire while anything is runnable, at every N.
-- Message-bound shapes were slower at N>1 under stage 1 (~8 global sections per hop; one idle/kick/sleep cycle per cross-owner hop). They have not been remeasured under the retained first-slice split. The CPU/GC win is not a message-heavy scaling claim.
-- post-R2-F01 is closed with D071 evidence. R2-F16 is resolved by D084 when T02 lands. `REVIEW-impressions.md` is not declared wholly resolved; R3 remains a mandatory future gate.
+- `RFMEM` shares data, bss and heap, not stacks: anything a forked scheduler or collector touches must be malloc'd. `nvmachineinterrupt` is wired to the CLI note handler; the interactive interrupt check and lock-free stop-word review remain acceptance/R4 work. D084/T02 is functionally accepted from checkpoint-779643, with per-owner indexed deadlines checked before dispatch under load. This grants FIFO eligibility, not a hard wall-time bound on the timeout body.
+- Message-bound shapes have been remeasured under the retained split in checkpoint-20674 and checkpoint-779643 and remain slower at N>1. CPU/GC scales, but post-T02 absolute timings rose across all tested shapes. Controlled attribution remains open; see bench/T02-results.md.
+- post-R2-F01 is closed with D071 evidence; R2-F16 is closed with accepted D084/T02. R3 is complete. R4 is the outstanding mandatory gate; REVIEW-impressions.md is not declared wholly resolved.
 
 ## Resumption checklist
 
-1. M10 is in progress: read the checkpoint block (its head, then "ROUND 3 RUN RESULTS" and "T01 STILL OPEN"), "Recommended next sequence", then `milestones/10-multicore.md` ("M10-T01 -- landed" for what differs from the spec, then the T02 spec under "Staging"), and D081-D090. `bench/README.md` "M10-T01" has the first `-p` numbers. Milestone 09's task detail under "M09-Tasks" and the R3 material are history now. If instead resuming T04q (still optional, still deferred) or anything not scoped above, fall back to the fuller read list in step 3.
-2. Confirm actual source-control state with the user; preserve the accepted checkpoint before new edits. A commit message is not evidence of a commit. As of the M09-T04 checkpoint, the user reports committing and pushing (see "source control" in the checkpoint block).
-3. (Only if step 1's fast path doesn't apply) Read README, this status, `docs/semantics.md` (the normative contract; the `docs/` design-rationale files split from `nervous_design.md` are not), `milestones/09-binaries.md` and D076-D079 for milestone 09; for R3 preparation, `milestones/R3-memory-review.md` and D061-D075 (D074 especially, including its coordinator-review amendments) and the task's adjacent source/tests. Read COORDINATION before assigning workers.
-4. Assign exact exclusive canonical paths; keep shared headers/build/docs coordinator-owned unless explicitly transferred. Every milestone-08 task (T04a-T04d), CLI-T01, and M09-T01..T04 are done, with their write sets released. M09-T05's row in "M09-Tasks (in progress)" has its exact write set; assign it and start.
-5. Build with mk after edits. User runs behavioral tests/benchmarks; never execute scripts, cleaning, installation or source-control commands through the compilation-only mk tool.
-6. Sub-agents: read `/usr/dave/local_models.md` "Economic Review" first -- the current policy is cloud Sonnet (`claude-sonnet-5`) for bounded read-only audits with a numbered deliverable and mandatory source quotes (the R3-F02 audit is the template: seven files in order, seven questions, ~35 calls, `maxrounds 40`), the coordinator for every edit, and local models only for second-opinion review or doc summaries. If working with a sub-agent again: raise `maxrounds`/`autocontinue` with two SEPARATE ctl writes, not combined with a `model` write in the same call -- combining them was observed this session to silently reset both back to their defaults (20/0), costing a wasted round-capped exchange before it was caught. Verify by reading `ctl` back before sending the task prompt.
+1. Read RESUME.md and bench/T02-results.md only first. No raw-log reread or
+   historical design reload is needed merely to summarize this checkpoint.
+2. Ask what the user wants next. The proposed performance investigation is
+   not assigned or authorized. T02 is accepted functionally, not still awaiting
+   its first run; R3 is closed, R4 is open.
+3. Confirm source-control state and preserve the accepted tree and raw captures.
+   A supplied commit message is not proof of a commit. Identify an exact
+   pre-T02 control before designing a paired benchmark; old logs are not binaries.
+4. For implementation, read docs/sharding.md, the current T02 milestone section
+   and adjacent source/tests. Assign bounded exclusive canonical paths; keep
+   shared integration files coordinator-owned. Do not reopen completed M09 work.
+5. Compile with `mk nervous tests benchmarks` after source edits. Behavioral
+   tests/measurements are user-run via `rc tests/checkpoint.rc` from the root
+   (absolute command in RESUME.md). Never use the mk tool for scripts, tests,
+   cleaning, install or source-control commands. Nothing needs rerunning just
+   because this documentation-only stopping-point cleanup occurred.
+6. Before delegation, read COORDINATION.md, the loaded sub-agent skill and
+   /usr/dave/local_models.md. Prefer bounded read-only audits where useful;
+   verify configuration and actual files independently. No sub-agent remains
+   active from this checkpoint.

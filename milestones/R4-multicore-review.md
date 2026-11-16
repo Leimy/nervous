@@ -1,5 +1,16 @@
 # Review R4 - Multicore Adversarial Review
 
+## Status at the checkpoint-779643 pause
+
+Not started as a formal gate; NOT closed by the green checkpoint. T02's
+functional run is accepted, but idle-window wake coverage, interrupt/no-orphans
+and stop-word behavior, exit-traffic fragment accounting and the full
+ownership/locking review below remain. T04a is only the retained first slice.
+Evidence already available: `../bench/T02-results.md`, `../docs/sharding.md`,
+and T02's deterministic/real-proc tests in process/ and memory/. Do not ask
+for T02's first run again. See `../RESUME.md` for the proposed performance
+follow-up; no new assignment is active during the user pause.
+
 ## Purpose
 
 Treat milestone 10 as a semantics-preservation exercise, not merely a parallelism feature. Challenge ownership, wakeup, migration, and shutdown before multicore completion is accepted.

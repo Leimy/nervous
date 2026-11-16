@@ -276,7 +276,8 @@ holddeadline(void)
 		"holder's held collector was disturbed by an unrelated deadline");
 	check(s.sched[0]->timerwakes >= 1, "deadline did not wake through the collector-outstanding path");
 
-	/* One more step dispatches the now-runnable waiter to completion. */
+	/* D084 may already dispatch the waiter on the expiry-check step.
+	 * Otherwise the next step runs it; the held collector is untouched. */
 	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && s.rootstate == NvRootDone &&
 		s.rootvalue != nil && nvtermkind(s.rootvalue->root) == Vatom &&
 		strcmp(nvtermatom(s.rootvalue->root), "timedout") == 0,
@@ -290,6 +291,63 @@ holddeadline(void)
 	nvschedfree(&s);
 	nvmodulefree(m);
 	print("ok - a deadline fires for an unrelated process while another process's collector remains outstanding and held\n");
+}
+
+/* D084/D074: this time the deadline belongs to the collecting process
+ * itself. Waking it must remove the timer but must not dispatch its heap
+ * until publication. A message after expiry still wins on the rescan. */
+static void
+holdcollectingtimer(void)
+{
+	char *src =
+		"fn dirtytimer() {\n"
+		" x = ${1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,\n"
+		"       1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};\n"
+		" receive { 'go => 'done; after 5 => 'timedout; }\n"
+		"}\n";
+	NvModule *m;
+	NvLimits l;
+	NvScheduler s;
+	NvTerm pid;
+	NvProcess *p;
+	NvExec *e;
+	NvClock clock;
+	Testclock tc;
+	char err[256];
+	uvlong reductions;
+
+	m = compile("holdcollectingtimer", src);
+	limits(&l, 1);
+	tc.now = 1000;
+	clock.aux = &tc;
+	clock.now = tcnow;
+	clock.wait = tcwait;
+	check(nvschedinit(&s, m, &l, 1, 1000, err, sizeof err) == 0, err);
+	nvschedsetclock(&s, &clock);
+	check(nvschedspawnroot(&s, "dirtytimer", nvtuple(&hostheap, nil, 0), &pid, err, sizeof err) == 0, err);
+	p = nvprocat(&s.runtime, nvpidslot(pid));
+	e = p->exec;
+	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && p->state == Prwaiting &&
+		s.sched[0]->runq->ntimer == 1, "dirty timer waiter indexed");
+	reductions = e->reductions;
+	nvschedgchold(&s, 1);
+	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && e->offlaunched &&
+		e->heap.owner == NvHeapCollecting, "timer waiter's idle collector launched");
+	tc.now = 1005;
+	check(nvschedstep(&s, err, sizeof err) == NvSchedProgress && p->state == Prrunnable &&
+		s.sched[0]->timerwakes == 1 && s.sched[0]->runq->ntimer == 0 &&
+		e->reductions == reductions && e->offlaunched && e->heap.owner == NvHeapCollecting,
+		"timer woke collecting owner without executing it");
+	check(nvprocsend(&s.runtime, pid, nvatom("go"), err, sizeof err) == 1 &&
+		s.sched[0]->runq->nrunnable == 1, "post-expiry send does not duplicate queue entry");
+	nvschedgchold(&s, 0);
+	check(drive(&s, err, sizeof err) == NvSchedDone && s.rootstate == NvRootDone &&
+		s.rootvalue != nil && nvtermkind(s.rootvalue->root) == Vatom &&
+		strcmp(nvtermatom(s.rootvalue->root), "done") == 0 && s.sched[0]->timerwakes == 1,
+		"message wins after collecting timer owner's wake");
+	nvschedfree(&s);
+	nvmodulefree(m);
+	print("ok - deadline wakes its collecting owner once, dispatch waits for GC, queued message wins\n");
 }
 
 /*
@@ -784,6 +842,7 @@ main(void)
 	nvheapinit(&hostheap, 0);
 	holdbasic();
 	holddeadline();
+	holdcollectingtimer();
 	holdteardown();
 	holdall();
 	holdsweepcap();

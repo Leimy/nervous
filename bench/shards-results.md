@@ -1,5 +1,10 @@
 # M10-T04a first sharded-lock results
 
+Follow-up: `checkpoint-results.md` records the later one-command checkpoint,
+including directly inspected full regression logs and three post-split
+ring/sieve/CPU captures. It supersedes this first-run note's pending suite-log
+inspection and message-heavy measurement, not its same-build data below.
+
 Evidence: user-run `bench/runs/shards-first.txt`, read by the coordinator.
 The capture has all three unprofiled repeats (mode order reversed on repeat
 2), four separate profiled controls, and ends `shards: all cases passed`.

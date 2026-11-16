@@ -70,6 +70,18 @@ Selective receive is written `receive { pattern => body; ... }`. It scans messag
 
 A receive may end with one `after duration => body` clause (D048-D051). The duration is an integer count of nanoseconds (0 through `NvMaxduration`) or `'infinity`. Any other value faults `bad_timeout`, and an out-of-range literal is a compile error. Duration literals such as `5s` are not implemented yet. The deadline is computed once, on entry. The timeout body runs only after a complete scan finds nothing, so a timeout is a lower bound on waiting and never fires while an acceptable message is queued. `after 0` is a single nonblocking scan.
 
+D084: each scheduler checks its waiting processes' indexed deadlines before
+every dispatch, including while other processes remain runnable. Expiry makes
+a waiting process eligible on its owner's FIFO; it does not bypass the queue,
+execute a timeout body directly, or take precedence over an acceptable
+message. This is a scheduling-boundary guarantee, not a wall-clock latency
+bound: a quantum, host I/O, collection, OS scheduling and the receiver's scan
+may delay execution. Idle waits are bounded by the heap's earliest deadline.
+A host runtime may narrow the duration ceiling with `NvLimits.maxduration`
+(valid configuration: 1 through `NvMaxduration`); larger runtime durations
+fault `bad_timeout`, including literals otherwise accepted by the compiler.
+Zero and `'infinity` remain legal at every configured ceiling.
+
 ## Binaries
 
 A binary is an immutable, self-contained byte string (D076). It is never a view into another binary. Equality compares bytes exactly, and a binary prints as `<<b0, b1, ...>>`. The aggregate `<< segment, ... >>` has three segment forms:

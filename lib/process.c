@@ -31,7 +31,8 @@ nvruntimeinit(NvRuntime *r, NvLimits *limits, uvlong incarnation, char *err, int
 	memset(r, 0, sizeof *r);
 	if(limits == nil || limits->maxprocess == 0 || limits->maxmailbox == 0 || limits->maxmessage == 0 ||
 	   limits->maxframe == 0 || limits->maxtermdepth == 0 || limits->maxtermdepth > NvMaxtermdepth ||
-	   limits->maxatom == 0 || (limits->gcstress != 0 && limits->gcstress != 1)){
+	   limits->maxatom == 0 || limits->maxduration < 1 || limits->maxduration > NvMaxduration ||
+	   (limits->gcstress != 0 && limits->gcstress != 1)){
 		snprint(err, nerr, "bad process limits");
 		return -1;
 	}
@@ -163,6 +164,168 @@ nvprocrunhead(NvRuntime *r, int sched, ulong *slot)
 	return 1;
 }
 
+/* D084: indexed heap maintenance, always under the owner's protection.
+ * Reserve before changing lifecycle/receive state; failure leaves the old
+ * deadline/index intact. Wake/removal never allocates. Capacity is retained
+ * at the high-water waiting set, not grown by re-arms or expired entries. */
+static int
+timerless(NvDeadline a, NvDeadline b)
+{
+	return a.when < b.when || (a.when == b.when && a.slot < b.slot);
+}
+
+static void
+timerput(NvRuntime *r, NvRunq *q, ulong i, NvDeadline d)
+{
+	q->timer[i] = d;
+	nvprocat(r, d.slot)->timerindex = i;
+}
+
+static void
+timerfix(NvRuntime *r, NvRunq *q, ulong i)
+{
+	NvDeadline d;
+	ulong parent, child;
+
+	d = q->timer[i];
+	if(i > 0 && timerless(d, q->timer[(i-1)/2])){
+		do{
+			parent = (i-1)/2;
+			if(!timerless(d, q->timer[parent]))
+				break;
+			timerput(r, q, i, q->timer[parent]);
+			i = parent;
+		}while(i > 0);
+	}else{
+		while(i < q->ntimer/2){
+			child = 2*i+1;
+			if(child+1 < q->ntimer && timerless(q->timer[child+1], q->timer[child]))
+				child++;
+			if(!timerless(q->timer[child], d))
+				break;
+			timerput(r, q, i, q->timer[child]);
+			i = child;
+		}
+	}
+	timerput(r, q, i, d);
+}
+
+static int
+timerreserve(NvRuntime *r, NvProcess *p, char *err, int nerr)
+{
+	NvRunq *q;
+	NvDeadline *a;
+	ulong cap, max;
+
+	q = runqof(r, p);
+	if(p->timerindex != NvNoslot || q->ntimer < q->captimer)
+		return 0;
+	max = (~0UL)/sizeof *a;
+	cap = q->captimer;
+	if(cap >= max){
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	cap = cap == 0 ? 8 : cap > max/2 ? max : cap*2;
+	if(cap > r->limits.maxprocess)
+		cap = r->limits.maxprocess;
+	if(cap <= q->ntimer){
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	a = realloc(q->timer, cap*sizeof *a);
+	if(a == nil){
+		snprint(err, nerr, "system_limit");
+		return -1;
+	}
+	q->timer = a;
+	q->captimer = cap;
+	return 0;
+}
+
+static void
+timerrm(NvRuntime *r, NvProcess *p)
+{
+	NvRunq *q;
+	ulong i;
+
+	i = p->timerindex;
+	if(i == NvNoslot)
+		return;
+	q = runqof(r, p);
+	q->ntimer--;
+	if(i != q->ntimer){
+		timerput(r, q, i, q->timer[q->ntimer]);
+		timerfix(r, q, i);
+	}
+	p->timerindex = NvNoslot;
+}
+
+/* Capacity reserved by caller; also updates an existing waiting deadline. */
+static void
+timerset(NvRuntime *r, NvProcess *p, ulong slot)
+{
+	NvRunq *q;
+	NvDeadline d;
+	ulong i;
+
+	q = runqof(r, p);
+	i = p->timerindex;
+	if(i == NvNoslot)
+		i = q->ntimer++;
+	d.when = p->deadline;
+	d.slot = slot;
+	d.generation = p->generation;
+	timerput(r, q, i, d);
+	timerfix(r, q, i);
+}
+
+static void
+timerclear(NvRuntime *r, NvProcess *p)
+{
+	timerrm(r, p);
+	p->hasdeadline = 0;
+	p->deadline = 0;
+}
+
+int
+nvprocnextdeadline(NvRuntime *r, int owner, uvlong *when)
+{
+	NvRunq *q;
+
+	q = r->runq[owner];
+	if(q->ntimer == 0)
+		return 0;
+	*when = q->timer[0].when;
+	return 1;
+}
+
+int
+nvprocfiredeadlines(NvRuntime *r, int owner, uvlong now)
+{
+	NvRunq *q;
+	NvDeadline d;
+	NvProcess *p;
+	int n;
+
+	q = r->runq[owner];
+	n = 0;
+	while(q->ntimer != 0 && q->timer[0].when <= now){
+		d = q->timer[0];
+		if(d.slot >= r->nslot)
+			return -1;
+		p = nvprocat(r, d.slot);
+		if(p->owner != owner || p->generation != d.generation ||
+		   p->state != Prwaiting || !p->hasdeadline || p->pendingwake ||
+		   p->timerindex != 0 || p->deadline != d.when)
+			return -1;
+		if(nvprocwakefrom(r, owner, d.slot) < 0)
+			return -1;
+		n++;
+	}
+	return n;
+}
+
 int
 nvprocwakefrom(NvRuntime *r, int from, ulong slot)
 {
@@ -173,6 +336,9 @@ nvprocwakefrom(NvRuntime *r, int from, ulong slot)
 	p = nvprocat(r, slot);
 	if(p->state != Prwaiting)
 		return -1;
+	/* A message or timer wake removes the index exactly once, including
+	 * the oncpu window. Keep the absolute deadline for the rescan. */
+	timerrm(r, p);
 	/*
 	 * Still inside its quantum on some scheduler (see NvProcess.oncpu):
 	 * enqueueing now would put a running process on a run queue. Defer;
@@ -299,8 +465,10 @@ nvruntimefree(NvRuntime *r)
 	for(i = 0; i < r->nchunk; i++)
 		free(r->chunk[i]);
 	free(r->chunk);
-	for(i = 0; i < r->nrunq; i++)
+	for(i = 0; i < r->nrunq; i++){
+		free(r->runq[i]->timer);
 		free(r->runq[i]);
+	}
 	free(r->runq);
 	memset(r, 0, sizeof *r);
 }
@@ -394,6 +562,7 @@ nvprocspawnon(NvRuntime *r, int owner, NvTerm *pid, char *err, int nerr)
 		p->oncpu = 0;
 		p->pendingwake = 0;
 	}
+	p->timerindex = NvNoslot;
 	r->freehint = slot+1;
 	p->generation++;
 	if(p->generation == 0)
@@ -445,7 +614,11 @@ nvprocwait(NvRuntime *r, NvTerm pid, char *err, int nerr)
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err, nerr, "bad_pid"); return -1; }
 	if(p->state != Prrunning){ snprint(err, nerr, "bad_state"); return -1; }
+	if(p->hasdeadline && timerreserve(r, p, err, nerr) < 0)
+		return -1;
 	p->state = Prwaiting;
+	if(p->hasdeadline)
+		timerset(r, p, nvpidslot(pid));
 	return 0;
 }
 
@@ -457,6 +630,7 @@ nvprocexit(NvRuntime *r, NvTerm pid)
 	p = lookup(r, pid);
 	if(p == nil)
 		return 0;
+	timerrm(r, p);
 	/* D059: a process that dies before its first (or next) dispatch is still queued. */
 	if(p->state == Prrunnable)
 		runrm(r, nvpidslot(pid));
@@ -687,6 +861,7 @@ nvprocrecvtake(NvRuntime *r, NvTerm pid, NvFrag **taken, char *err, int nerr)
 	if(p->tail == f)
 		p->tail = p->scanprev;
 	p->mailboxwords -= nvfragwords(f);
+	timerclear(r, p);
 	p->scanprev = p->scan = nil;
 	p->scanning = 0;
 	f->next = nil;
@@ -709,7 +884,7 @@ nvprocrecvwait(NvRuntime *r, NvTerm pid, char *err, int nerr)
 	 * matched a message instead of timing out, can never leak into an
 	 * unrelated later plain receive and wake it early.
 	 */
-	p->hasdeadline = 0;
+	timerclear(r, p);
 	/* A send may append after this scan exhausted but before recvwait runs. */
 	if(p->scanprev == nil ? p->head != nil : p->scanprev->next != nil){
 		p->scanprev = nil;
@@ -726,9 +901,9 @@ nvprocrecvwait(NvRuntime *r, NvTerm pid, char *err, int nerr)
  * D049/D050: validate and arm one absolute deadline for a receive's
  * `after` clause. An `'infinity` duration arms nothing, matching an
  * ordinary unbounded receive. Any other non-integer term, or an integer
- * outside 0..NvMaxduration, faults `bad_timeout`. The checked add keeps
- * deadline arithmetic total; NvMaxduration is chosen so this can only
- * fail if `now` itself is already corrupt.
+ * outside 0..limits.maxduration, faults `bad_timeout` (D084). The
+ * compiler still uses NvMaxduration for literals. The checked add keeps
+ * deadline arithmetic total even for a host-supplied near-overflow now.
  */
 int
 nvprocarmdeadline(NvRuntime *r, NvTerm pid, NvTerm duration, uvlong now, char *err, int nerr)
@@ -744,8 +919,7 @@ nvprocarmdeadline(NvRuntime *r, NvTerm pid, NvTerm duration, uvlong now, char *e
 			snprint(err,nerr,"bad_timeout");
 			return -1;
 		}
-		p->hasdeadline = 0;
-		p->deadline = 0;
+		timerclear(r, p);
 		return 0;
 	}
 	if(nvtermkind(duration) != Vint){
@@ -753,7 +927,7 @@ nvprocarmdeadline(NvRuntime *r, NvTerm pid, NvTerm duration, uvlong now, char *e
 		return -1;
 	}
 	ival = nvtermint(duration);
-	if(ival < 0 || ival > NvMaxduration){
+	if(ival < 0 || ival > r->limits.maxduration){
 		snprint(err,nerr,"bad_timeout");
 		return -1;
 	}
@@ -762,8 +936,12 @@ nvprocarmdeadline(NvRuntime *r, NvTerm pid, NvTerm duration, uvlong now, char *e
 		snprint(err,nerr,"system_limit");
 		return -1;
 	}
+	if(p->state == Prwaiting && !p->pendingwake && timerreserve(r, p, err, nerr) < 0)
+		return -1;
 	p->hasdeadline = 1;
 	p->deadline = deadline;
+	if(p->state == Prwaiting && !p->pendingwake)
+		timerset(r, p, nvpidslot(pid));
 	return 0;
 }
 
@@ -789,14 +967,17 @@ nvprocrecvwaitdeadline(NvRuntime *r, NvTerm pid, uvlong now, char *err, int nerr
 		p->scanning = 0;
 		return 0;
 	}
+	if(p->hasdeadline && now < p->deadline && timerreserve(r, p, err, nerr) < 0)
+		return -1;
 	p->scanprev = nil;
 	p->scanning = 0;
 	if(p->hasdeadline && now >= p->deadline){
-		p->hasdeadline = 0;
-		p->deadline = 0;
+		timerclear(r, p);
 		return 1;
 	}
 	p->state = Prwaiting;
+	if(p->hasdeadline)
+		timerset(r, p, nvpidslot(pid));
 	return 0;
 }
 
@@ -810,6 +991,8 @@ nvprocreceive(NvRuntime *r, NvHeap *h, NvTerm pid, NvPatClause *clause, int ncla
 	p = lookup(r, pid);
 	if(p == nil){ snprint(err,nerr,"bad_pid"); return -1; }
 	if(p->state != Prrunning || p->scanning){ snprint(err,nerr,"bad_state"); return -1; }
+	/* The host pattern receive is untimed. */
+	timerclear(r, p);
 	prev = nil;
 	for(f = p->head; f != nil; prev = f, f = f->next){
 		rc = nvclauseselect(h, clause, nclause, f->root, bindings, &selected, err, nerr);

@@ -35,6 +35,10 @@ if(! test -x $bin){
 }
 
 size=small
+if(! ~ $#* 0 1){
+	echo usage: $0 '[small|large|multi]' >[1=2]
+	exit usage
+}
 if(~ $#* 1)
 	size=$1
 
@@ -43,7 +47,7 @@ if(~ $#* 1)
 # /dev/null without losing its numbers.
 fn bench {
 	echo '==' $* >[1=2]
-	time $bin -s -r $*
+	time $bin -s -r $* || exit benchmark
 	echo >[1=2]
 }
 
@@ -52,7 +56,7 @@ fn benchp {
 	p=$1
 	shift
 	echo '==' $* -p $p >[1=2]
-	time $bin -s -p $p -r $*
+	time $bin -s -p $p -r $* || exit benchmark
 	echo >[1=2]
 }
 
@@ -70,6 +74,9 @@ case large
 	bench $benchdir/waiters.nv main 32768 1000000
 	bench $root/examples/sieve.nv main 20000 >/dev/null
 case multi
+	# T03 measurement: ring, sieve, cpubound at -p 1, 2, 4
+	# The benchp function adds -p N to the label, so benchcmp can
+	# distinguish these from small/large rows.
 	for(p in 1 2 4){
 		benchp $p $root/examples/ring.nv main 1000 2000
 		benchp $p $root/examples/sieve.nv main 5000 >/dev/null
@@ -79,3 +86,4 @@ case *
 	echo usage: $0 '[small|large|multi]' >[1=2]
 	exit usage
 }
+exit ''

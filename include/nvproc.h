@@ -3,6 +3,7 @@ typedef struct NvBindings NvBindings;
 typedef struct NvLimits NvLimits;
 typedef struct NvProcess NvProcess;
 typedef struct NvRunq NvRunq;
+typedef struct NvDeadline NvDeadline;
 typedef struct NvRuntime NvRuntime;
 typedef struct NvExec NvExec;
 
@@ -21,17 +22,8 @@ struct NvLimits {
 	int gcstress;		/* force one collection at every allocating instruction */
 	ulong maxframe;
 	ulong maxtermdepth;
-	/*
-	 * R2-F16 (deferred to milestone 10, see docs/questions.md): this field
-	 * is currently advisory only. nvruntimeinit does not validate it and
-	 * nvprocarmdeadline checks the compile-time NvMaxduration ceiling
-	 * (D049) unconditionally, not this per-runtime value. Making it
-	 * authoritative is a real semantic decision -- it would let a runtime
-	 * accept a narrower duration domain than D049's literal -- and is
-	 * left to whichever later milestone first needs a per-runtime bound
-	 * tighter than the compile-time one, rather than being decided as a
-	 * drive-by fix inside the R2 review.
-	 */
+	/* D084/R2-F16: authoritative duration ceiling, 1..NvMaxduration.
+	 * Zero-duration receives and 'infinity remain legal at every ceiling. */
 	vlong maxduration;
 	/*
 	 * D062: the interned atom table's maximum size, installed into the
@@ -87,13 +79,14 @@ struct NvProcess {
 	int scanning;
 	uvlong mailboxwords;
 	/*
-	 * D050: a waiting process owns its own deadline. There is no timer
-	 * object, queue, or token, so a deadline cannot outlive its slot,
-	 * fire twice, or wake a reused generation. An `'infinity` timeout
-	 * leaves hasdeadline zero.
+	 * D050/D084: the receive retains its absolute deadline across wakes
+	 * and scans. Only a waiting slot with no pending wake is indexed in
+	 * its owner's deadline heap; timerindex is NvNoslot otherwise.
+	 * Wake removes the index, not the deadline (messages still win).
 	 */
 	uvlong deadline;
 	int hasdeadline;
+	ulong timerindex;
 	/*
 	 * D059: intrusive FIFO run-queue links, as slot indices so they
 	 * survive process-table realloc. Meaningful only while state is
@@ -106,7 +99,7 @@ struct NvProcess {
 	 * queue it is enqueued on when runnable, and the scheduler that
 	 * owns its deadline while waiting. Always defined for a live slot:
 	 * set by nvprocspawnon, changed only by a steal (M10-T01), 0 at
-	 * N=1. Read today by the run-queue functions only.
+	 * N=1. Queue and deadline-heap operations both route through it.
 	 */
 	int owner;
 	/*
@@ -136,7 +129,21 @@ struct NvProcess {
  * never indexes. nvruntimeinit creates one; nvruntimesetnrunq grows
  * the set before any process is spawned on a higher index.
  */
+/* Scalar identity only: no exec/heap pointers survive a timer operation. */
+struct NvDeadline {
+	uvlong when;
+	ulong slot;
+	ulong generation;
+};
+
 struct NvRunq {
+	/* D084: owner-local indexed min-heap, ordered by (when, slot).
+	 * Stored with the runtime-owned queue so bare runtime APIs maintain
+	 * it too. NvSched.runq reaches the same storage. Owner shard protects
+	 * it; remote wake/exit/transfer require the all-shard gate. */
+	NvDeadline *timer;
+	ulong ntimer;
+	ulong captimer;
 	ulong head;
 	ulong tail;
 	ulong nrunnable;
@@ -249,6 +256,12 @@ int nvprocwake(NvRuntime *, ulong);
  * nvprocwake is nvprocwakefrom with from == -1 (a host caller).
  */
 int nvprocwakefrom(NvRuntime *, int from, ulong);
+/* D084: caller holds owner shard (or all shards / exclusive host access).
+ * Peek is O(1), returns 0 if empty. Fire validates indexed identities and
+ * wakes all due slots in deadline/slot order; returns wake count or -1 on
+ * invariant failure. Neither operation allocates or touches an exec. */
+int nvprocnextdeadline(NvRuntime *, int owner, uvlong *);
+int nvprocfiredeadlines(NvRuntime *, int owner, uvlong now);
 /*
  * D083 (M10-T01): move a Prrunnable slot from its owner's queue to the
  * tail of scheduler newowner's, changing nothing but owner and queue
