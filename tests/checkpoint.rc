@@ -1,0 +1,92 @@
+#!/bin/rc
+# One user-run checkpoint. This script runs programs; mk only builds them.
+# usage: rc tests/checkpoint.rc [new-results-directory]
+rfork e
+
+if(! ~ $#* 0 1){
+	echo usage: $0 '[new-results-directory]' >[1=2]
+	exit usage
+}
+script=$0
+switch($script){
+case /*
+	;
+case *
+	script=`{pwd}^/^$script
+}
+testdir=`{basename -d $script}
+root=`{basename -d $testdir}
+results=$root/bench/runs/checkpoint-$pid
+if(~ $#* 1){
+	results=$1
+	switch($results){
+	case /*
+		;
+	case *
+		results=`{pwd}^/^$results
+	}
+}
+# mkdir deliberately refuses an existing directory: never overwrite evidence.
+mkdir $results || exit results-directory
+cd $root || exit project-directory
+
+fn record {
+	echo $*
+	echo $* >>$results/summary.txt || exit log-write
+}
+fn run {
+	step=$1
+	shift
+	record RUN $step - $results/$step.log
+	echo command: $* >>$results/summary.txt || exit log-write
+	# No tee pipeline: preserve the command's exit status, including mk's.
+	$* >$results/$step.log >[2=1]
+	result=$status
+	if(! ~ $"result ''){
+		record FAIL $step - $"result
+		echo 'Failure output follows; all logs retained in' $results >[1=2]
+		cat $results/$step.log >[1=2]
+		exit checkpoint
+	}
+	record PASS $step
+}
+
+record 'Nervous M10 checkpoint; working tree:' $root
+record 'Results:' $results
+date >$results/started.txt
+# Explicit settings, independent of the invoking shell. Child suites copy
+# them with rfork e. Bench runners start a fresh environment themselves.
+nervous_gcstress=0
+nervous_gcoffload=0
+run build mk nervous tests benchmarks
+run normal rc $testdir/run.rc
+nervous_gcstress=1
+run stress-inline rc $testdir/run.rc
+nervous_gcoffload=1
+run stress-offload rc $testdir/run.rc
+nervous_gcstress=0
+nervous_gcoffload=0
+
+run shards-smoke rc $root/bench/shards.rc smoke
+run small rc $root/bench/run.rc small
+run small-table $root/bench/benchcmp $results/small.log
+baseline=$root/bench/runs/T01-small.txt
+if(test -f $baseline){
+	# Count differences fail; cost flags are informational, not a speed gate.
+	run small-compare $root/bench/benchcmp $baseline $results/small.log
+}
+if not
+	record SKIP small-compare - missing $baseline
+
+# Three sequential captures, not competing benchmark processes. Keep every
+# per-scheduler -s row for reviewing lock, wake and steal behavior. Multicore
+# counts depend on scheduling: do not use benchcmp's exact-count exit status
+# as a correctness gate against the historical T01-multi.txt capture.
+for(rep in 1 2 3){
+	run multi-$rep rc $root/bench/run.rc multi
+	run multi-$rep-table $root/bench/benchcmp $results/multi-$rep.log
+}
+record 'PASS automated checkpoint; timings and cost flags still need review.'
+record 'OPEN: interactive DEL/no-orphans, deterministic wakeup fixtures, T02 and R4.'
+record 'Send this results directory for review:' $results
+exit ''

@@ -4,10 +4,11 @@ Nervous is an experimental concurrent language and portable 64-bit virtual machi
 
 ## Restart after the current pause
 
-Read **RESUME.md**, then **bench/T02-results.md**. That is the short handoff
-for checkpoint-779643: T02 functionally accepted, performance follow-up open,
-no active assignments. The long STATUS implementation journal is history,
-not a required context packet. Obtain user go-ahead before new work.
+Read **docs/CURRENT-STATE.md** (minimal context for current pause state),
+then **RESUME.md**, then **bench/T02-results.md** (performance evidence).
+That is the short handoff for checkpoint-779643: T02 functionally accepted,
+performance follow-up open, no active assignments. Obtain user go-ahead
+before new work.
 
 ## How to read this repository
 
@@ -15,12 +16,12 @@ Minimum context for making progress, in order:
 
 1. `README.md` (this file).
 2. `STATUS.md`: current state, task ledger, and resumption checklist.
-3. `docs/architecture.md`: how the components fit together (overview, not normative).
-4. `docs/semantics.md`: the normative language contract.
-5. `docs/bytecode.md`: instruction set and verification rules.
-6. `docs/questions.md`: unresolved semantic questions by owning milestone.
-7. The active milestone file under `milestones/`, and the `docs/decisions.md` records it cites.
-8. `docs/format.md` if touching the parser or formatter.
+3. `docs/CURRENT-STATE.md`: minimal context for current pause state and next steps.
+4. `docs/README.md`: documentation structure and quick start guide.
+5. `docs/architecture.md`: how the components fit together (overview, not normative).
+6. `docs/semantics.md`: the normative language contract.
+7. `docs/bytecode.md`: instruction set and verification rules.
+8. `docs/decisions.md`: settled design decisions D001-D090.
 
 `docs/README.md` indexes every file in `docs/`. The design-rationale files (`docs/language-semantics.md`, `runtime.md`, `distribution.md`, `language-philosophy.md`, `future-work.md`) explain why the language is shaped as it is. They are split from the deprecated `nervous_design.md` and still use superseded syntax, so read them for motivation, not for rules.
 
